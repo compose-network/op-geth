@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	timeFormat        = "2006-01-02T15:04:05-0700"
+	timeFormat        = "2006-01-02T15:04:05.000-07:00"
 	floatFormat       = 'f'
 	termMsgJust       = 40
 	termCtxMaxPadding = 40
