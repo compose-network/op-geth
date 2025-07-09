@@ -231,8 +231,12 @@ func Setup(ctx *cli.Context) error {
 		handler = log.JSONHandler(output)
 	case logFmtFlag == "json":
 		handler = log.JSONHandler(output)
+	case logFmtFlag == "jsonms":
+		handler = log.JSONMsHandler(output)
 	case logFmtFlag == "logfmt":
 		handler = log.LogfmtHandler(output)
+	case logFmtFlag == "logfmtms":
+		handler = log.LogfmtMsHandler(output)
 	case logFmtFlag == "", logFmtFlag == "terminal":
 		useColor := (isatty.IsTerminal(os.Stderr.Fd()) || isatty.IsCygwinTerminal(os.Stderr.Fd())) && os.Getenv("TERM") != "dumb"
 		if useColor {
