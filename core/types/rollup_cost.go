@@ -77,6 +77,7 @@ var (
 	// attributes
 	OperatorFeeParamsSlot = common.BigToHash(big.NewInt(8))
 
+	oneThousand    = big.NewInt(1_000)
 	oneMillion     = big.NewInt(1_000_000)
 	ecotoneDivisor = big.NewInt(1_000_000 * 16)
 	fjordDivisor   = big.NewInt(1_000_000_000_000)
@@ -243,12 +244,12 @@ func newOperatorCostFunc(operatorFeeScalar *big.Int, operatorFeeConstant *big.In
 	return func(gas uint64) *uint256.Int {
 		fee := new(big.Int).SetUint64(gas)
 		fee = fee.Mul(fee, operatorFeeScalar)
-		fee = fee.Div(fee, oneMillion)
+		fee = fee.Mul(fee, oneThousand)
 		fee = fee.Add(fee, operatorFeeConstant)
 
 		feeU256, overflow := uint256.FromBig(fee)
 		if overflow {
-			// This should never happen, as (u64.max * u32.max / 1e6) + u64.max is an int of bit length 77
+			// This should never happen, as (u64.max * u32.max * 1e3) + u64.max is an int of bit length 106
 			panic("overflow in operator cost calculation")
 		}
 
