@@ -363,6 +363,10 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 	log.Info(strings.Repeat("-", 153))
 	log.Info("")
 
+	if chainConfig.IsOptimism() && chainConfig.RegolithTime == nil {
+		log.Warn("Optimism RegolithTime has not been set")
+	}
+
 	bc := &BlockChain{
 		chainConfig:   chainConfig,
 		cfg:           cfg,
@@ -484,10 +488,6 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 			}
 		}
 	}
-	// The first thing the node will do is reconstruct the verification data for
-	// the head block (ethash cache or clique voting snapshot). Might as well do
-	// it in advance.
-	bc.engine.VerifyHeader(bc, bc.CurrentHeader())
 
 	if bc.logger != nil && bc.logger.OnBlockchainInit != nil {
 		bc.logger.OnBlockchainInit(chainConfig)
@@ -516,6 +516,8 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 		}
 		rawdb.WriteChainConfig(db, genesisHash, chainConfig)
 	}
+
+	bc.engine.VerifyHeader(bc, bc.CurrentHeader())
 
 	// Start tx indexer if it's enabled.
 	if bc.cfg.TxLookupLimit >= 0 {
