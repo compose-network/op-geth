@@ -89,6 +89,8 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		ProcessParentBlockHash(block.ParentHash(), evm)
 	}
 
+	var calldataFootprint uint64
+
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
 		msg, err := TransactionToMessage(tx, signer, header.BaseFee)
@@ -103,6 +105,10 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		}
 		receipts = append(receipts, receipt)
 		allLogs = append(allLogs, receipt.Logs...)
+
+		if p.config.IsJovian(block.Time()) {
+			calldataFootprint += tx.RollupCostData().EstimatedDASize().Uint64()
+		}
 	}
 
 	isIsthmus := p.config.IsIsthmus(block.Time())
@@ -127,6 +133,10 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 
 	if isIsthmus {
 		requests = [][]byte{}
+	}
+
+	if p.config.IsJovian(block.Time()) && *usedGas < calldataFootprint {
+		*usedGas = calldataFootprint
 	}
 
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
