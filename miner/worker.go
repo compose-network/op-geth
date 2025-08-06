@@ -73,6 +73,9 @@ type environment struct {
 	coinbase common.Address
 	evm      *vm.EVM
 
+	// OP-Stack addition: calldata footprint
+	calldataFootprint uint64
+
 	header   *types.Header
 	txs      []*types.Transaction
 	receipts []*types.Receipt
@@ -173,6 +176,10 @@ func (miner *Miner) generateWork(params *generateParams, witness bool) *newPaylo
 		} else if errors.Is(err, errBlockInterruptedByResolve) {
 			log.Info("Block building got interrupted by payload resolution")
 		}
+	}
+	// OP-Stack addition: Jovian maxes the block.gasUsed with the calldata footprint	
+	if miner.chainConfig.IsJovian(work.header.Time) && work.calldataFootprint > work.header.GasUsed {
+		work.header.GasUsed = work.calldataFootprint
 	}
 	if intr := params.interrupt; intr != nil && params.isUpdate && intr.Load() != commitInterruptNone {
 		return &newPayloadResult{err: errInterruptedUpdate}
@@ -451,12 +458,15 @@ func (miner *Miner) applyTransaction(env *environment, tx *types.Transaction) (*
 	return receipt, err
 }
 
+const calldataFootprintCost = 400
+
 func (miner *Miner) commitTransactions(env *environment, plainTxs, blobTxs *transactionsByPriceAndNonce, interrupt *atomic.Int32) error {
 	gasLimit := env.header.GasLimit
 	if env.gasPool == nil {
 		env.gasPool = new(core.GasPool).AddGas(gasLimit)
 	}
 	blockDABytes := new(big.Int)
+	blockDALeft := big.NewInt(int64(gasLimit)/calldataFootprintCost) // calldata footprint scaled down to DA bytes
 	for {
 		// Check interruption signal and abort building if it's fired.
 		if interrupt != nil {
@@ -467,6 +477,11 @@ func (miner *Miner) commitTransactions(env *environment, plainTxs, blobTxs *tran
 		// If we don't have enough gas for any further transactions then we're done.
 		if env.gasPool.Gas() < params.TxGas {
 			log.Trace("Not enough gas for further transactions", "have", env.gasPool, "want", params.TxGas)
+			break
+		}
+		// If we don't have enough calldata space for any further transactions then we're done.
+		if miner.chainConfig.IsJovian(env.header.Time) && blockDALeft.Cmp(types.MinTransactionSize) < 0 {
+			log.Debug("Not enough calldata space for further transactions", "have", blockDALeft, "want", types.MinTransactionSize)
 			break
 		}
 		// If we don't have enough blob space for any further blob transactions,
@@ -516,6 +531,13 @@ func (miner *Miner) commitTransactions(env *environment, plainTxs, blobTxs *tran
 				txs.Pop()
 				continue
 			}
+		}
+
+		// OP-Stack addition: calldata footprint limit
+		if miner.chainConfig.IsJovian(env.header.Time) && blockDALeft.Cmp(ltx.DABytes) < 0 {
+			log.Debug("Not enough calldata space left for transaction", "hash", ltx.Hash, "left", blockDALeft, "needed", ltx.DABytes)
+			txs.Pop()
+			continue
 		}
 
 		// OP-Stack addition: sequencer throttling
@@ -585,6 +607,8 @@ func (miner *Miner) commitTransactions(env *environment, plainTxs, blobTxs *tran
 		case errors.Is(err, nil):
 			// Everything ok, collect the logs and shift in the next transaction from the same account
 			blockDABytes = daBytesAfter
+			blockDALeft = blockDALeft.Sub(blockDALeft, ltx.DABytes)
+			env.calldataFootprint += ltx.DABytes.Uint64() * calldataFootprintCost
 			txs.Shift()
 
 		default:
