@@ -27,7 +27,14 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
+)
+
+const (
+	// calldataFootprintCost is the gas cost per byte of estimated DA size for calldata footprint calculations.
+	// This must match the constant used in the miner to ensure consistent gas calculations.
+	calldataFootprintCost = 400
 )
 
 // StateProcessor is a basic Processor, which takes care of transitioning
@@ -107,7 +114,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		allLogs = append(allLogs, receipt.Logs...)
 
 		if p.config.IsJovian(block.Time()) {
-			calldataFootprint += tx.RollupCostData().EstimatedDASize().Uint64()
+			calldataFootprint += tx.RollupCostData().EstimatedDASize().Uint64() * calldataFootprintCost
 		}
 	}
 
@@ -136,6 +143,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	}
 
 	if p.config.IsJovian(block.Time()) && *usedGas < calldataFootprint {
+		log.Debug("Jovian gas adjustment", "originalGas", *usedGas, "calldataFootprint", calldataFootprint, "finalGas", calldataFootprint)
 		*usedGas = calldataFootprint
 	}
 
