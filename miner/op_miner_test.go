@@ -150,4 +150,28 @@ func TestCallDataFootprint(t *testing.T) {
 
 	require.Greater(t, jovianResult.block.GasUsed(), nonJovianResult.block.GasUsed())
 
+	// 2. Process block (simulating validation behavior)
+	processor := core.NewStateProcessor(jovianMiner.chainConfig, jovianMiner.chain.HeaderChain())
+	parent := jovianMiner.chain.CurrentBlock()
+	statedb, err := jovianMiner.chain.StateAt(parent.Root)
+	if err != nil {
+		t.Fatalf("Failed to get state: %v", err)
+	}
+
+	_, err = processor.Process(jovianResult.block, statedb, vm.Config{})
+	if err != nil {
+		t.Fatalf("Failed to process block: %v", err)
+	}
+
+	nonJovianProcessor := core.NewStateProcessor(nonJovianMiner.chainConfig, nonJovianMiner.chain.HeaderChain())
+	parent = nonJovianMiner.chain.CurrentBlock()
+	nonJovianStatedb, err := nonJovianMiner.chain.StateAt(parent.Root)
+	if err != nil {
+		t.Fatalf("Failed to get state: %v", err)
+	}
+	_, err = nonJovianProcessor.Process(nonJovianResult.block, nonJovianStatedb, vm.Config{})
+	if err != nil {
+		t.Fatalf("Failed to process block: %v", err)
+	}
+
 }
