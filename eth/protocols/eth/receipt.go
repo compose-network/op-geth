@@ -36,6 +36,10 @@ type Receipt struct {
 	PostStateOrStatus []byte
 	GasUsed           uint64
 	Logs              rlp.RawValue
+
+	// OP-Stack additions for deposit receipts
+	DepositNonce          *uint64
+	DepositReceiptVersion *uint64
 }
 
 func newReceipt(tr *types.Receipt) Receipt {
@@ -117,7 +121,41 @@ func (r *Receipt) decodeInnerList(s *rlp.Stream, readTxType, readBloom bool) err
 	if err != nil {
 		return fmt.Errorf("invalid logs: %w", err)
 	}
+
+	// OP-Stack addition: read the deposit nonce and version, if present.
+	if r.TxType == types.DepositTxType && s.MoreDataInList() {
+		dn, err := s.Uint64()
+		if err != nil {
+			return fmt.Errorf("invalid deposit nonce: %w", err)
+		}
+		r.DepositNonce = &dn
+
+		if s.MoreDataInList() {
+			drv, err := s.Uint64()
+			if err != nil {
+				return fmt.Errorf("invalid deposit receipt version: %w", err)
+			}
+			r.DepositReceiptVersion = &drv
+		}
+	}
+
 	return s.ListEnd()
+}
+
+// OP-Stack addition for deposit receipts
+func (r *Receipt) maybeWriteDepositFields(w *rlp.EncoderBuffer, onlyWithVersion bool) {
+	// post-Regolith+pre-Canyon receipt hashes didn't include the deposit nonce, so we
+	// need the onlyWithVersion variant for [encodeForHash].
+	if onlyWithVersion && r.DepositReceiptVersion == nil {
+		return
+	}
+
+	if r.DepositNonce != nil {
+		w.WriteUint64(*r.DepositNonce)
+		if r.DepositReceiptVersion != nil {
+			w.WriteUint64(*r.DepositReceiptVersion)
+		}
+	}
 }
 
 // encodeForStorage produces the the storage encoding, i.e. the result matches
@@ -127,6 +165,7 @@ func (r *Receipt) encodeForStorage(w *rlp.EncoderBuffer) {
 	w.WriteBytes(r.PostStateOrStatus)
 	w.WriteUint64(r.GasUsed)
 	w.Write(r.Logs)
+	r.maybeWriteDepositFields(w, false)
 	w.ListEnd(list)
 }
 
@@ -140,6 +179,7 @@ func (r *Receipt) encodeForNetwork68(buf *receiptListBuffers, w *rlp.EncoderBuff
 		bloom := r.bloom(&buf.bloom)
 		w.WriteBytes(bloom[:])
 		w.Write(r.Logs)
+		r.maybeWriteDepositFields(w, false)
 		w.ListEnd(list)
 	}
 
@@ -162,6 +202,7 @@ func (r *Receipt) encodeForNetwork69(w *rlp.EncoderBuffer) {
 	w.WriteBytes(r.PostStateOrStatus)
 	w.WriteUint64(r.GasUsed)
 	w.Write(r.Logs)
+	r.maybeWriteDepositFields(w, false)
 	w.ListEnd(list)
 }
 
@@ -180,6 +221,7 @@ func (r *Receipt) encodeForHash(buf *receiptListBuffers, out *bytes.Buffer) {
 	bloom := r.bloom(&buf.bloom)
 	w.WriteBytes(bloom[:])
 	w.Write(r.Logs)
+	r.maybeWriteDepositFields(w, true)
 	w.ListEnd(l)
 	w.Flush()
 }
