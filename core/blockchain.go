@@ -115,9 +115,7 @@ var (
 	errInvalidNewChain      = errors.New("invalid new chain")
 )
 
-var (
-	forkReadyInterval = 3 * time.Minute
-)
+var forkReadyInterval = 3 * time.Minute
 
 const (
 	bodyCacheLimit     = 256
@@ -2053,6 +2051,14 @@ func (bc *BlockChain) processBlock(parentRoot common.Hash, block *types.Block, s
 	}
 	ptime := time.Since(pstart)
 
+	// OP-Stack: DA usage logging
+	if res.EstDAUsage > 0 {
+		log.Info("Block processed with OP-Stack DA usage estimate",
+			"number", block.Number(), "hash", block.Hash(),
+			"da_usage", res.EstDAUsage, "tx_count", len(block.Transactions()),
+		)
+	}
+
 	vstart := time.Now()
 	if err := bc.validator.ValidateState(block, statedb, res, false); err != nil {
 		bc.reportBlock(block, res, err)
@@ -2153,7 +2159,7 @@ func (bc *BlockChain) processBlock(parentRoot common.Hash, block *types.Block, s
 // switch over to the new chain if the TD exceeded the current chain.
 // insertSideChain is only used pre-merge.
 func (bc *BlockChain) insertSideChain(block *types.Block, it *insertIterator, makeWitness bool) (*stateless.Witness, int, error) {
-	var current = bc.CurrentBlock()
+	current := bc.CurrentBlock()
 
 	// The first sidechain block error is already verified to be ErrPrunedAncestor.
 	// Since we don't import them here, we expect ErrUnknownAncestor for the remaining

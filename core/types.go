@@ -57,4 +57,7 @@ type ProcessResult struct {
 	Requests [][]byte
 	Logs     []*types.Log
 	GasUsed  uint64
+
+	// OP-Stack: DA usage logging
+	EstDAUsage uint64
 }

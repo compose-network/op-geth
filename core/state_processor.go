@@ -63,6 +63,9 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		blockNumber = block.Number()
 		allLogs     []*types.Log
 		gp          = new(GasPool).AddGas(block.GasLimit())
+
+		// OP-Stack: DA usage logging
+		estDAUsage uint64
 	)
 
 	// Mutate the block and state according to any hard-fork specs
@@ -103,6 +106,10 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		}
 		receipts = append(receipts, receipt)
 		allLogs = append(allLogs, receipt.Logs...)
+
+		if tx.Type() != types.DepositTxType {
+			estDAUsage += tx.RollupCostData().EstimatedDASize().Uint64()
+		}
 	}
 
 	isIsthmus := p.config.IsIsthmus(block.Time())
@@ -137,6 +144,8 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		Requests: requests,
 		Logs:     allLogs,
 		GasUsed:  *usedGas,
+
+		EstDAUsage: estDAUsage,
 	}, nil
 }
 
