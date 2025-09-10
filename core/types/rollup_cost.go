@@ -77,6 +77,9 @@ var (
 	// attributes
 	OperatorFeeParamsSlot = common.BigToHash(big.NewInt(8))
 
+	// DAFootprintGasScalarSlot stores the daFootprintGasScalar attribute from the Jovian upgrade.
+	DAFootprintGasScalarSlot = common.BigToHash(big.NewInt(9))
+
 	oneMillion     = big.NewInt(1_000_000)
 	ecotoneDivisor = big.NewInt(1_000_000 * 16)
 	fjordDivisor   = big.NewInt(1_000_000_000_000)

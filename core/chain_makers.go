@@ -421,6 +421,8 @@ func GenerateChain(config *params.ChainConfig, parent *types.Block, engine conse
 			b.header.RequestsHash = &reqHash
 		}
 
+		b.header.GasUsed = CalculateGasUsed(b.header, b.txs, b.header.GasUsed, b.cm.config, b.parent.Header())
+
 		body := types.Body{Transactions: b.txs, Uncles: b.uncles, Withdrawals: b.withdrawals}
 		block, err := b.engine.FinalizeAndAssemble(cm, b.header, statedb, &body, b.receipts)
 		if err != nil {

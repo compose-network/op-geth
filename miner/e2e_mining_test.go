@@ -1,6 +1,7 @@
 package miner
 
 import (
+	"encoding/binary"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -12,6 +13,8 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/stretchr/testify/require"
 )
+
+var daFootprintGasScalar uint16 = 200
 
 // TestEndToEndMiningAndExecution builds a block via the miner from txpool
 // transactions and then imports the block into the chain, asserting that
@@ -36,7 +39,7 @@ func TestEndToEndMiningAndExecution(t *testing.T) {
 			if txs[i].IsDepositTx() {
 				continue
 			}
-			daFootprint += txs[i].RollupCostData().EstimatedDASize().Uint64() * params.DAFootprintGasScalar
+			daFootprint += txs[i].RollupCostData().EstimatedDASize().Uint64() * uint64(daFootprintGasScalar)
 		}
 		require.Less(t, txGas, block.GasUsed(), "total tx gas used must be smaller than block gas used")
 		require.Equal(t, daFootprint, block.GasUsed(), "total DA footprint used should be equal to block gas used")
@@ -67,13 +70,18 @@ func testMineAndExecute(t *testing.T, numTxs uint64, cfg *params.ChainConfig, as
 		}
 	}
 
+	data := make([]byte, 178)
+	binary.BigEndian.PutUint16(data[176:178], daFootprintGasScalar)
+
 	genParams := &generateParams{
-		parentHash:    b.chain.CurrentBlock().Hash(),
-		timestamp:     b.chain.CurrentBlock().Time + 12,
-		withdrawals:   types.Withdrawals{},
-		beaconRoot:    new(common.Hash),
-		gasLimit:      ptr(uint64(1e6)), // Small gas limit to easily fill block
-		eip1559Params: eip1559.EncodeHolocene1559Params(250, 6),
+		parentHash:           b.chain.CurrentBlock().Hash(),
+		timestamp:            b.chain.CurrentBlock().Time + 12,
+		withdrawals:          types.Withdrawals{},
+		beaconRoot:           new(common.Hash),
+		gasLimit:             ptr(uint64(1e6)), // Small gas limit to easily fill block
+		eip1559Params:        eip1559.EncodeHolocene1559Params(250, 6),
+		daFootprintGasScalar: &daFootprintGasScalar,
+		txs:                  types.Transactions{types.NewTx(&types.DepositTx{Data: data})},
 	}
 	if cfg.IsJovian(b.chain.CurrentBlock().Time) {
 		genParams.minBaseFee = new(uint64)
@@ -85,7 +93,7 @@ func testMineAndExecute(t *testing.T, numTxs uint64, cfg *params.ChainConfig, as
 	assertFn(t, r.block, r.receipts)
 
 	// We expect all our transactions to be included.
-	totalExpected := len(pendingTxs) + len(txs)
+	totalExpected := 1 + len(pendingTxs) + len(txs)
 	require.Equal(t, totalExpected, len(r.block.Transactions()), "unexpected tx count in block")
 
 	// Import the block into the chain, which executes it via StateProcessor.

@@ -77,6 +77,7 @@ const (
 
 var (
 	zero               = uint64(0)
+	zeroUint16         = uint16(0)
 	validEIP1559Params = eip1559.EncodeHolocene1559Params(250, 6)
 )
 
@@ -223,16 +224,18 @@ func jovianConfig() *params.ChainConfig {
 }
 
 // newPayloadArgs returns a BuildPaylooadArgs with the given parentHash, eip-1559 params,
-// minBaseFee, testTimestamp for Timestamp, and testRecipient for recipient. NoTxPool is set to true.
-func newPayloadArgs(parentHash common.Hash, params1559 []byte, minBaseFee *uint64) *BuildPayloadArgs {
+// minBaseFee, daFootprintGasScalar, testTimestamp for Timestamp, and testRecipient for recipient.
+// NoTxPool is set to true.
+func newPayloadArgs(parentHash common.Hash, params1559 []byte, minBaseFee *uint64, daFootprintGasScalar *uint16) *BuildPayloadArgs {
 	return &BuildPayloadArgs{
-		Parent:        parentHash,
-		Timestamp:     testTimestamp,
-		FeeRecipient:  testRecipient,
-		Withdrawals:   types.Withdrawals{},
-		NoTxPool:      true,
-		EIP1559Params: params1559,
-		MinBaseFee:    minBaseFee,
+		Parent:               parentHash,
+		Timestamp:            testTimestamp,
+		FeeRecipient:         testRecipient,
+		Withdrawals:          types.Withdrawals{},
+		NoTxPool:             true,
+		EIP1559Params:        params1559,
+		MinBaseFee:           minBaseFee,
+		DAFootprintGasScalar: daFootprintGasScalar,
 	}
 }
 
@@ -241,9 +244,12 @@ func testBuildPayload(t *testing.T, noTxPool, interrupt bool, params1559 []byte,
 	db := rawdb.NewMemoryDatabase()
 
 	var minBaseFee *uint64
+	var daFootprintGasScalar *uint16
 	if config.IsOptimismJovian(testTimestamp) {
 		val := uint64(1e9)
 		minBaseFee = &val
+		val2 := uint16(1)
+		daFootprintGasScalar = &val2
 	}
 	w, b := newTestWorker(t, config, ethash.NewFaker(), db, 0)
 
@@ -256,7 +262,7 @@ func testBuildPayload(t *testing.T, noTxPool, interrupt bool, params1559 []byte,
 		b.txPool.Add(txs, false)
 	}
 
-	args := newPayloadArgs(b.chain.CurrentBlock().Hash(), params1559, minBaseFee)
+	args := newPayloadArgs(b.chain.CurrentBlock().Hash(), params1559, minBaseFee, daFootprintGasScalar)
 	args.NoTxPool = noTxPool
 
 	// payload resolution now interrupts block building, so we have to
@@ -375,7 +381,7 @@ func testDAFilters(t *testing.T, maxDATxSize, maxDABlockSize *big.Int, expectedT
 	txs := genTxs(1, numDAFilterTxs)
 	b.txPool.Add(txs, false)
 
-	args := newPayloadArgs(b.chain.CurrentBlock().Hash(), validEIP1559Params, &zero)
+	args := newPayloadArgs(b.chain.CurrentBlock().Hash(), validEIP1559Params, &zero, &zeroUint16)
 	args.NoTxPool = false
 
 	payload, err := w.buildPayload(args, false)
@@ -400,7 +406,7 @@ func testBuildPayloadWrongConfig(t *testing.T, params1559 []byte, config *params
 	}
 	w, b := newTestWorker(t, &wrongConfig, ethash.NewFaker(), db, 0)
 
-	args := newPayloadArgs(b.chain.CurrentBlock().Hash(), params1559, &zero)
+	args := newPayloadArgs(b.chain.CurrentBlock().Hash(), params1559, &zero, &zeroUint16)
 	payload, err := w.buildPayload(args, false)
 	if err == nil && (payload == nil || payload.err == nil) {
 		t.Fatalf("expected error, got none")
@@ -416,7 +422,7 @@ func TestBuildPayloadInvalidHoloceneParams(t *testing.T) {
 	// 0 denominators shouldn't be allowed
 	badParams := eip1559.EncodeHolocene1559Params(0, 6)
 
-	args := newPayloadArgs(b.chain.CurrentBlock().Hash(), badParams, &zero)
+	args := newPayloadArgs(b.chain.CurrentBlock().Hash(), badParams, &zero, &zeroUint16)
 	payload, err := w.buildPayload(args, false)
 	if err == nil && (payload == nil || payload.err == nil) {
 		t.Fatalf("expected error, got none")
@@ -432,14 +438,14 @@ func TestBuildPayloadInvalidJovianBuildPayloadArgs(t *testing.T) {
 	// 0 denominators shouldn't be allowed
 	badParams := eip1559.EncodeHolocene1559Params(0, 6)
 
-	args := newPayloadArgs(b.chain.CurrentBlock().Hash(), badParams, &zero)
+	args := newPayloadArgs(b.chain.CurrentBlock().Hash(), badParams, &zero, &zeroUint16)
 	payload, err := w.buildPayload(args, false)
 	if err == nil && (payload == nil || payload.err == nil) {
 		t.Fatalf("expected error, got none")
 	}
 
 	// missing minBaseFee is wrong input, panics
-	args = newPayloadArgs(b.chain.CurrentBlock().Hash(), validEIP1559Params, nil)
+	args = newPayloadArgs(b.chain.CurrentBlock().Hash(), validEIP1559Params, nil, &zeroUint16)
 	require.Panics(t, func() {
 		w.buildPayload(args, false)
 	})
@@ -539,11 +545,12 @@ func TestPayloadId(t *testing.T) {
 			},
 		},
 		{
-			Parent:       common.Hash{2},
-			Timestamp:    2,
-			Random:       common.Hash{0x2},
-			FeeRecipient: common.Address{0x2},
-			MinBaseFee:   &zero,
+			Parent:               common.Hash{2},
+			Timestamp:            2,
+			Random:               common.Hash{0x2},
+			FeeRecipient:         common.Address{0x2},
+			MinBaseFee:           &zero,
+			DAFootprintGasScalar: &zeroUint16,
 		},
 	} {
 		id := tt.Id().String()
@@ -557,13 +564,15 @@ func TestPayloadId(t *testing.T) {
 // OPStack addition
 func TestDeterministicPayloadId(t *testing.T) {
 	makeArgs := func() *BuildPayloadArgs {
-		val := uint64(5)
+		minBaseFee := uint64(5)
+		daFootprintGasScalar := uint16(1)
 		return &BuildPayloadArgs{
-			Parent:       common.Hash{2},
-			Timestamp:    2,
-			Random:       common.Hash{0x2},
-			FeeRecipient: common.Address{0x2},
-			MinBaseFee:   &val,
+			Parent:               common.Hash{2},
+			Timestamp:            2,
+			Random:               common.Hash{0x2},
+			FeeRecipient:         common.Address{0x2},
+			MinBaseFee:           &minBaseFee,
+			DAFootprintGasScalar: &daFootprintGasScalar,
 		}
 	}
 

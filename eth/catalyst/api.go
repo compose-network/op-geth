@@ -20,6 +20,7 @@ package catalyst
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"strconv"
@@ -405,19 +406,26 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 			}
 			transactions = append(transactions, &tx)
 		}
+		var daFootprintGasScalar *uint16
+		if api.eth.BlockChain().Config().IsOptimismJovian(payloadAttributes.Timestamp) {
+			x := transactions[0].Data()
+			scalar := binary.BigEndian.Uint16(x[176:178])
+			daFootprintGasScalar = &scalar
+		}
 		args := &miner.BuildPayloadArgs{
-			Parent:        update.HeadBlockHash,
-			Timestamp:     payloadAttributes.Timestamp,
-			FeeRecipient:  payloadAttributes.SuggestedFeeRecipient,
-			Random:        payloadAttributes.Random,
-			Withdrawals:   payloadAttributes.Withdrawals,
-			BeaconRoot:    payloadAttributes.BeaconRoot,
-			NoTxPool:      payloadAttributes.NoTxPool,
-			Transactions:  transactions,
-			GasLimit:      payloadAttributes.GasLimit,
-			Version:       payloadVersion,
-			EIP1559Params: eip1559Params,
-			MinBaseFee:    payloadAttributes.MinBaseFee,
+			Parent:               update.HeadBlockHash,
+			Timestamp:            payloadAttributes.Timestamp,
+			FeeRecipient:         payloadAttributes.SuggestedFeeRecipient,
+			Random:               payloadAttributes.Random,
+			Withdrawals:          payloadAttributes.Withdrawals,
+			BeaconRoot:           payloadAttributes.BeaconRoot,
+			NoTxPool:             payloadAttributes.NoTxPool,
+			Transactions:         transactions,
+			GasLimit:             payloadAttributes.GasLimit,
+			Version:              payloadVersion,
+			EIP1559Params:        eip1559Params,
+			MinBaseFee:           payloadAttributes.MinBaseFee,
+			DAFootprintGasScalar: daFootprintGasScalar,
 		}
 		id := args.Id()
 		// If we already are busy generating this work, then we do not need

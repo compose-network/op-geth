@@ -75,7 +75,8 @@ type environment struct {
 	evm      *vm.EVM
 
 	// OP-Stack addition: calldata footprint
-	daFootprint uint64
+	daFootprint          uint64
+	daFootprintGasScalar uint16
 
 	header   *types.Header
 	txs      []*types.Transaction
@@ -130,12 +131,13 @@ type generateParams struct {
 	beaconRoot  *common.Hash      // The beacon root (cancun field).
 	noTxs       bool              // Flag whether an empty block without any transaction is expected
 
-	txs           types.Transactions // Deposit transactions to include at the start of the block
-	gasLimit      *uint64            // Optional gas limit override
-	eip1559Params []byte             // Optional EIP-1559 parameters
-	interrupt     *atomic.Int32      // Optional interruption signal to pass down to worker.generateWork
-	isUpdate      bool               // Optional flag indicating that this is building a discardable update
-	minBaseFee    *uint64            // Optional minimum base fee
+	txs                  types.Transactions // Deposit transactions to include at the start of the block
+	gasLimit             *uint64            // Optional gas limit override
+	eip1559Params        []byte             // Optional EIP-1559 parameters
+	interrupt            *atomic.Int32      // Optional interruption signal to pass down to worker.generateWork
+	isUpdate             bool               // Optional flag indicating that this is building a discardable update
+	minBaseFee           *uint64            // Optional minimum base fee
+	daFootprintGasScalar *uint16            // Optional da footprint gas scalar. Always set after Jovian.
 
 	rpcCtx context.Context // context to control block-building RPC work. No RPC allowed if nil.
 }
@@ -357,6 +359,9 @@ func (miner *Miner) prepareWork(genParams *generateParams, witness bool) (*envir
 		return nil, err
 	}
 	env.noTxs = genParams.noTxs
+	if genParams.daFootprintGasScalar != nil {
+		env.daFootprintGasScalar = *genParams.daFootprintGasScalar
+	}
 	if header.ParentBeaconRoot != nil {
 		core.ProcessBeaconBlockRoot(*header.ParentBeaconRoot, env.evm)
 	}
@@ -488,8 +493,6 @@ func (miner *Miner) applyTransaction(env *environment, tx *types.Transaction) (*
 	return receipt, err
 }
 
-var minTransactionDAFootprint = new(big.Int).Mul(types.MinTransactionSize, big.NewInt(params.DAFootprintGasScalar))
-
 func (miner *Miner) commitTransactions(env *environment, plainTxs, blobTxs *transactionsByPriceAndNonce, interrupt *atomic.Int32) error {
 	var (
 		isOsaka  = miner.chainConfig.IsOsaka(env.header.Number, env.header.Time)
@@ -502,10 +505,10 @@ func (miner *Miner) commitTransactions(env *environment, plainTxs, blobTxs *tran
 
 	// OP-Stack additions: throttling and DA footprint limit
 	blockDABytes := new(big.Int)
-	daFootprintLeft := big.NewInt(int64(gasLimit))
 	isJovian := miner.chainConfig.IsJovian(env.header.Time)
 
 	for {
+		daFootprintLeft := gasLimit - env.daFootprint
 		// Check interruption signal and abort building if it's fired.
 		if interrupt != nil {
 			if signal := interrupt.Load(); signal != commitInterruptNone {
@@ -518,7 +521,8 @@ func (miner *Miner) commitTransactions(env *environment, plainTxs, blobTxs *tran
 			break
 		}
 		// If we don't have enough DA space for any further transactions then we're done.
-		if isJovian && daFootprintLeft.Cmp(minTransactionDAFootprint) < 0 {
+		var minTransactionDAFootprint = types.MinTransactionSize.Uint64() * uint64(env.daFootprintGasScalar)
+		if isJovian && daFootprintLeft < minTransactionDAFootprint {
 			log.Debug("Not enough DA space for further transactions", "have", daFootprintLeft, "want", minTransactionDAFootprint)
 			break
 		}
@@ -572,12 +576,12 @@ func (miner *Miner) commitTransactions(env *environment, plainTxs, blobTxs *tran
 		}
 
 		// OP-Stack addition: Jovian DA footprint limit
-		var txDAFootprint *big.Int
+		var txDAFootprint uint64
 		// Note that commitTransaction is only called after deposit transactions have already been committed,
 		// so we don't need to resolve the transaction here and exclude deposits.
 		if isJovian {
-			txDAFootprint = new(big.Int).Mul(ltx.DABytes, big.NewInt(params.DAFootprintGasScalar))
-			if daFootprintLeft.Cmp(txDAFootprint) < 0 {
+			txDAFootprint = ltx.DABytes.Uint64() * uint64(env.daFootprintGasScalar)
+			if daFootprintLeft < txDAFootprint {
 				log.Debug("Not enough DA space left for transaction", "hash", ltx.Hash, "left", daFootprintLeft, "needed", txDAFootprint)
 				txs.Pop()
 				continue
@@ -672,8 +676,7 @@ func (miner *Miner) commitTransactions(env *environment, plainTxs, blobTxs *tran
 			// Everything ok, collect the logs and shift in the next transaction from the same account
 			blockDABytes = daBytesAfter
 			if isJovian {
-				daFootprintLeft.Sub(daFootprintLeft, txDAFootprint)
-				env.daFootprint += txDAFootprint.Uint64() // note, it's guaranteed to not overflow because of the max calldata size
+				env.daFootprint += txDAFootprint
 			}
 			txs.Shift()
 
