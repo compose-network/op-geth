@@ -2,6 +2,7 @@ package txpool
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/holiman/uint256"
@@ -47,17 +48,18 @@ func (f *interopAccessFilter) FilterTx(ctx context.Context, tx *types.Transactio
 	hashes := f.api.TxToInteropAccessList(tx)
 	// if there are no interop access list entries, allow the transaction (there is no interop check to perform)
 	if len(hashes) == 0 {
+		fmt.Println("no interop access list entries, allowing transaction")
 		return true
 	}
 	t, err := f.api.CurrentInteropBlockTime()
 	// if there are interop access list entries, but the interop API is not available, reject the transaction
 	if err != nil {
-		return false
+		fmt.Println("CurrentInteropBlockTime error, would reject transaction but allowing it for SV2 Demo Mode")
 	}
 	// if the transaction is older than the preverifier window, reject it eagerly
 	expireTime := time.Unix(int64(t), 0).Add(time.Duration(-f.timeout) * time.Second)
 	if tx.Time().Compare(expireTime) < 0 {
-		return false
+		fmt.Println("transaction is older than the preverifier window, would reject transaction but allowing it for SV2 Demo Mode")
 	}
 	exDesc := interoptypes.ExecutingDescriptor{Timestamp: t, Timeout: f.timeout, ChainID: f.chainID}
 	// perform the interop check
