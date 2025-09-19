@@ -99,7 +99,7 @@ func VerifyEIP4844Header(config *params.ChainConfig, parent, header *types.Heade
 	}
 
 	bcfg := latestBlobConfig(config, header.Time)
-	if bcfg == nil {
+	if bcfg == nil && !config.IsOptimism() {
 		panic("called before EIP-4844 is active")
 	}
 
@@ -111,7 +111,7 @@ func VerifyEIP4844Header(config *params.ChainConfig, parent, header *types.Heade
 	}
 
 	// Verify that the blob gas used remains within reasonable limits.
-	if *header.BlobGasUsed > bcfg.maxBlobGas() {
+	if !config.IsOptimism() && *header.BlobGasUsed > bcfg.maxBlobGas() {
 		return fmt.Errorf("blob gas used %d exceeds maximum allowance %d", *header.BlobGasUsed, bcfg.maxBlobGas())
 	}
 	if *header.BlobGasUsed%params.BlobTxBlobGasPerBlob != 0 {
@@ -129,6 +129,17 @@ func VerifyEIP4844Header(config *params.ChainConfig, parent, header *types.Heade
 // CalcExcessBlobGas calculates the excess blob gas after applying the set of
 // blobs on top of the excess blob gas.
 func CalcExcessBlobGas(config *params.ChainConfig, parent *types.Header, headTimestamp uint64) uint64 {
+
+	// OP-Stack chains don't support blobs, but still set the excessBlobGas field (always to zero).
+	// So this function is called in many places for OP-Stack chains too. In order to not require
+	// a blob schedule in the chain config, we short circuit here.
+	if config.IsOptimism() {
+		if config.BlobScheduleConfig != nil {
+			panic("OP-Stack: CalcBlobFee: unexpected blob schedule or excess blob gas")
+		}
+		return 0
+	}
+
 	isOsaka := config.IsOsaka(config.LondonBlock, headTimestamp)
 	bcfg := latestBlobConfig(config, headTimestamp)
 	return calcExcessBlobGas(isOsaka, bcfg, parent)
