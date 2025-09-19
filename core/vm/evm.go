@@ -238,11 +238,6 @@ func (evm *EVM) Cancelled() bool {
 	return evm.abort.Load()
 }
 
-// Interpreter returns the current interpreter
-func (evm *EVM) Interpreter() *EVMInterpreter {
-	return evm.interpreter
-}
-
 // OP-Stack addition
 func (evm *EVM) maybeOverrideCaller(caller common.Address) common.Address {
 	if evm.Config.CallerOverride != nil {

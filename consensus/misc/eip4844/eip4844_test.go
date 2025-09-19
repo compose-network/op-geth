@@ -113,6 +113,8 @@ func TestCalcBlobFeeOPStack(t *testing.T) {
 	header.ExcessBlobGas = &zero
 	config.BlobScheduleConfig = params.DefaultBlobSchedule
 	reqPanic()
+}
+
 func TestCalcBlobFeePostOsaka(t *testing.T) {
 	zero := uint64(0)
 	bpo1 := uint64(1754836608)

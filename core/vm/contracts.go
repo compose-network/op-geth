@@ -819,6 +819,10 @@ func (c *bn256PairingGranite) Run(input []byte) ([]byte, error) {
 	return runBn256Pairing(input)
 }
 
+func (c *bn256PairingGranite) Name() string {
+	return "BN254_PAIRING"
+}
+
 // bn256PairingIstanbul implements a pairing pre-compile for the bn256 curve
 // conforming to Istanbul consensus rules.
 type bn256PairingIstanbul struct{}
@@ -978,6 +982,9 @@ func (c *bls12381G1MultiExpIsthmus) Run(input []byte) ([]byte, error) {
 
 	return new(bls12381G1MultiExp).Run(input)
 }
+func (c *bls12381G1MultiExpIsthmus) Name() string {
+	return "BLS12_G1MSM"
+}
 
 // bls12381G1MultiExp implements EIP-2537 G1MultiExp precompile for Prague (no size limits).
 func (c *bls12381G1Add) Name() string {
@@ -1098,6 +1105,12 @@ func (c *bls12381G2MultiExpIsthmus) Run(input []byte) ([]byte, error) {
 	}
 
 	return new(bls12381G2MultiExp).Run(input)
+}
+
+func (c *bls12381G2MultiExpIsthmus) Name() string {
+	return "BLS12_G2MSM"
+}
+
 func (c *bls12381G2Add) Name() string {
 	return "BLS12_G2ADD"
 }
@@ -1175,6 +1188,12 @@ func (c *bls12381PairingIsthmus) Run(input []byte) ([]byte, error) {
 	}
 
 	return new(bls12381Pairing).Run(input)
+}
+
+func (c *bls12381PairingIsthmus) Name() string {
+	return "BLS12_PAIRING_CHECK"
+}
+
 func (c *bls12381G2MultiExp) Name() string {
 	return "BLS12_G2MSM"
 }

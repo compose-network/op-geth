@@ -3357,21 +3357,6 @@ func TestRPCGetBlockOrHeader(t *testing.T) {
 		}
 		genBlocks = 10
 		signer    = types.HomesteadSigner{}
-		tx        = types.NewTx(&types.LegacyTx{
-			Nonce:    11,
-			GasPrice: big.NewInt(11111),
-			Gas:      1111,
-			To:       &acc2Addr,
-			Value:    big.NewInt(111),
-			Data:     []byte{0x11, 0x11, 0x11},
-		})
-		withdrawal = &types.Withdrawal{
-			Index:     0,
-			Validator: 1,
-			Address:   common.Address{0x12, 0x34},
-			Amount:    10,
-		}
-		pending = types.NewBlock(&types.Header{Number: big.NewInt(11), Time: 42}, &types.Body{Transactions: types.Transactions{tx}, Withdrawals: types.Withdrawals{withdrawal}}, nil, blocktest.NewHasher(), types.DefaultBlockConfig)
 	)
 	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
 		// Transfer from account[0] to account[1]
