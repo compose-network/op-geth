@@ -30,10 +30,9 @@
       "transactionIndex": "0x0",
       "value": "0x3e8",
       "type": "0x0",
-      "chainId": "0x1",
-      "v": "0x0",
-      "r": "0x0",
-      "s": "0x0"
+      "v": "0x1c",
+      "r": "0xfa029dacd66238d20cd649fe3b323bb458d2cfa4af7db0ff4f6b3e1039bc320a",
+      "s": "0x52fb4d45c1d623f2f05508bae063a4728761d762ae45b8b0908ffea546f3d95e"
     }
   ],
   "transactionsRoot": "0x59abb8ec0655f66e66450d1502618bc64022ae2d2950fa471eec6e8da2846264",
