@@ -129,7 +129,6 @@ func VerifyEIP4844Header(config *params.ChainConfig, parent, header *types.Heade
 // CalcExcessBlobGas calculates the excess blob gas after applying the set of
 // blobs on top of the excess blob gas.
 func CalcExcessBlobGas(config *params.ChainConfig, parent *types.Header, headTimestamp uint64) uint64 {
-
 	// OP-Stack chains don't support blobs, but still set the excessBlobGas field (always to zero).
 	// So this function is called in many places for OP-Stack chains too. In order to not require
 	// a blob schedule in the chain config, we short circuit here.
