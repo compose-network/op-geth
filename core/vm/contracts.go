@@ -1092,6 +1092,10 @@ func (c *bls12381G2Add) Run(input []byte) ([]byte, error) {
 	return encodePointG2(r), nil
 }
 
+func (c *bls12381G2Add) Name() string {
+	return "BLS12_G2ADD"
+}
+
 type bls12381G2MultiExpIsthmus struct {
 }
 
@@ -1109,10 +1113,6 @@ func (c *bls12381G2MultiExpIsthmus) Run(input []byte) ([]byte, error) {
 
 func (c *bls12381G2MultiExpIsthmus) Name() string {
 	return "BLS12_G2MSM"
-}
-
-func (c *bls12381G2Add) Name() string {
-	return "BLS12_G2ADD"
 }
 
 // bls12381G2MultiExp implements EIP-2537 G2MultiExp precompile.
@@ -1175,6 +1175,10 @@ func (c *bls12381G2MultiExp) Run(input []byte) ([]byte, error) {
 	return encodePointG2(r), nil
 }
 
+func (c *bls12381G2MultiExp) Name() string {
+	return "BLS12_G2MSM"
+}
+
 type bls12381PairingIsthmus struct {
 }
 
@@ -1192,10 +1196,6 @@ func (c *bls12381PairingIsthmus) Run(input []byte) ([]byte, error) {
 
 func (c *bls12381PairingIsthmus) Name() string {
 	return "BLS12_PAIRING_CHECK"
-}
-
-func (c *bls12381G2MultiExp) Name() string {
-	return "BLS12_G2MSM"
 }
 
 // bls12381Pairing implements EIP-2537 Pairing precompile.
