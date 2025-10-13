@@ -976,6 +976,10 @@ func (b *EthAPIBackend) clearAllSequencerTransactions() {
 	log.Info("[SSV] Cleared sequencer transactions",
 		"putInbox", putInboxCount,
 		"original", originalCount)
+
+	if miner := b.eth.miner; miner != nil && (putInboxCount > 0 || originalCount > 0) {
+		miner.InvalidatePendingCache()
+	}
 }
 
 // PrepareSequencerTransactionsForBlock prepares sequencer transactions for inclusion in a new block
@@ -1103,7 +1107,12 @@ func (b *EthAPIBackend) OnBlockBuildingComplete(
 	block *types.Block,
 	success, simulation bool,
 ) error {
-	if !success || block == nil || simulation {
+	if !success || block == nil {
+		log.Warn("[SSV] Block build failed, clearing sequencer transactions")
+		b.clearAllSequencerTransactions()
+		return nil
+	}
+	if simulation {
 		return nil
 	}
 

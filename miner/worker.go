@@ -905,6 +905,9 @@ func (miner *Miner) fillTransactionsWithSequencerOrdering(interrupt *atomic.Int3
 			} else if err := miner.applySequencerBundle(simEnv, orderedSequencerTxs); err != nil {
 				log.Error("[SSV] Sequencer transaction bundle rejected during simulation",
 					"err", err, "attempted", len(orderedSequencerTxs))
+				if notifyErr := backend.OnBlockBuildingComplete(env.rpcCtx, nil, false, false); notifyErr != nil {
+					log.Warn("[SSV] Failed to notify backend about bundle failure", "err", notifyErr)
+				}
 			} else {
 				miner.applySequencerSimulationResults(env, simEnv)
 				sequencerTxCount = len(simEnv.txs)
