@@ -1015,6 +1015,7 @@ func (miner *Miner) applySequencerBundle(simEnv *environment, txs types.Transact
 
 		simEnv.state.SetTxContext(tx.Hash(), simEnv.tcount)
 		if err := miner.commitTransaction(simEnv, tx); err != nil {
+			tx.SetRejected()
 			return fmt.Errorf("sequencer tx %d (%s) failed: %w", i, tx.Hash(), err)
 		}
 	}
