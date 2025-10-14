@@ -24,7 +24,7 @@ type composeUserOpsAPI struct {
 	b *EthAPIBackend
 }
 
-// Request JSON types
+// Request JSON types - supports both packed and unpacked formats
 type userOperationV07 struct {
 	Sender               common.Address `json:"sender"`
 	Nonce                *hexutil.Big   `json:"nonce"`
@@ -35,8 +35,17 @@ type userOperationV07 struct {
 	PreVerificationGas   *hexutil.Big   `json:"preVerificationGas"`
 	MaxFeePerGas         *hexutil.Big   `json:"maxFeePerGas"`
 	MaxPriorityFeePerGas *hexutil.Big   `json:"maxPriorityFeePerGas"`
-	PaymasterAndData     hexutil.Bytes  `json:"paymasterAndData"`
-	Signature            hexutil.Bytes  `json:"signature"`
+
+	// Packed format (EntryPoint v0.7 standard)
+	PaymasterAndData hexutil.Bytes `json:"paymasterAndData,omitempty"`
+
+	// Unpacked format
+	Paymaster                     *common.Address `json:"paymaster,omitempty"`
+	PaymasterVerificationGasLimit *hexutil.Big    `json:"paymasterVerificationGasLimit,omitempty"`
+	PaymasterPostOpGasLimit       *hexutil.Big    `json:"paymasterPostOpGasLimit,omitempty"`
+	PaymasterData                 hexutil.Bytes   `json:"paymasterData,omitempty"`
+
+	Signature hexutil.Bytes `json:"signature"`
 }
 
 type composeOpts struct {
@@ -169,7 +178,39 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 		var paymasterData []byte
 		var paymasterVerificationGas, paymasterPostOpGas *big.Int
 
-		if len(op.PaymasterAndData) > 0 {
+		// Check if unpacked format is provided
+		if op.Paymaster != nil && *op.Paymaster != (common.Address{}) {
+			// Use unpacked format
+			paymasterAddr = *op.Paymaster
+			paymasterVerificationGas = toBig(op.PaymasterVerificationGasLimit)
+			paymasterPostOpGas = toBig(op.PaymasterPostOpGasLimit)
+
+			log.Info("[SSV] Using unpacked paymaster format",
+				"opIndex", i,
+				"paymaster", paymasterAddr.Hex(),
+				"verificationGas", paymasterVerificationGas.String(),
+				"postOpGas", paymasterPostOpGas.String(),
+				"paymasterDataLen", len(op.PaymasterData))
+
+			// Pack into EntryPoint v0.7 format: address(20) + verificationGas(16) + postOpGas(16) + data
+			paymasterData = make([]byte, 0, 52+len(op.PaymasterData))
+			paymasterData = append(paymasterData, paymasterAddr.Bytes()...)
+
+			// Pack verification gas as 16-byte big-endian
+			verGasBytes := make([]byte, 16)
+			paymasterVerificationGas.FillBytes(verGasBytes)
+			paymasterData = append(paymasterData, verGasBytes...)
+
+			// Pack post-op gas as 16-byte big-endian
+			postOpGasBytes := make([]byte, 16)
+			paymasterPostOpGas.FillBytes(postOpGasBytes)
+			paymasterData = append(paymasterData, postOpGasBytes...)
+
+			// Append paymaster-specific data
+			paymasterData = append(paymasterData, op.PaymasterData...)
+
+		} else if len(op.PaymasterAndData) > 0 {
+			// Use packed format
 			if len(op.PaymasterAndData) < common.AddressLength {
 				return nil, &rpc.JsonError{
 					Code:    -32003,
@@ -202,10 +243,19 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 			paymasterVerificationGas = new(big.Int).SetBytes(op.PaymasterAndData[20:36])
 			paymasterPostOpGas = new(big.Int).SetBytes(op.PaymasterAndData[36:52])
 			paymasterData = op.PaymasterAndData
+
+			log.Info("[SSV] Using packed paymaster format",
+				"opIndex", i,
+				"paymaster", paymasterAddr.Hex(),
+				"verificationGas", paymasterVerificationGas.String(),
+				"postOpGas", paymasterPostOpGas.String(),
+				"paymasterAndDataLen", len(op.PaymasterAndData))
 		} else {
 			// No paymaster, set gas limits to zero
 			paymasterVerificationGas = big.NewInt(0)
 			paymasterPostOpGas = big.NewInt(0)
+
+			log.Info("[SSV] No paymaster specified", "opIndex", i)
 		}
 		// Merge fee fields with server policy
 		vgl := toBig(op.VerificationGasLimit)
