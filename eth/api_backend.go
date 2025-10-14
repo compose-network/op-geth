@@ -808,6 +808,36 @@ func (b *EthAPIBackend) SimulateTransaction(
 			)
 			stateDB.Finalise(true)
 		}
+
+		// Pre-apply pending original transactions to ensure correct nonce sequencing.
+		// Simulations must observe cumulative state from all pending transactions to prevent
+		// nonce validation errors when transactions with dependent nonces are submitted rapidly.
+		for _, staged := range b.GetPendingOriginalTxs() {
+			if staged == nil || staged.Hash() == tx.Hash() {
+				continue
+			}
+
+			stageMsg, err := core.TransactionToMessage(staged, signer, header.BaseFee)
+			if err != nil {
+				log.Warn("[SSV] Failed to build staged original message", "txHash", staged.Hash(), "err", err)
+				continue
+			}
+
+			stageGasPool := new(core.GasPool).AddGas(header.GasLimit)
+			stateDB.SetTxContext(staged.Hash(), stateDB.TxIndex()+1)
+			if wants := staged.Nonce(); stateDB.GetNonce(stageMsg.From) != wants {
+				stateDB.SetNonce(stageMsg.From, wants, tracing.NonceChangeUnspecified)
+			}
+			if _, err := core.ApplyMessage(evm, stageMsg, stageGasPool); err != nil {
+				log.Warn("[SSV] Failed to pre-apply original transaction", "txHash", staged.Hash(), "err", err)
+				continue
+			}
+			log.Info("[SSV] Pre-applied original tx for simulation",
+				"stagedHash", staged.Hash().Hex(),
+				"nonce", staged.Nonce(),
+			)
+			stateDB.Finalise(true)
+		}
 	}
 
 	stateDB.SetTxContext(tx.Hash(), stateDB.TxIndex()+1)
@@ -963,24 +993,39 @@ func (b *EthAPIBackend) ClearSequencerTransactionsAfterBlock() {
 // SSV
 func (b *EthAPIBackend) clearAllSequencerTransactions() {
 	b.sequencerTxMutex.Lock()
-	defer b.sequencerTxMutex.Unlock()
 
 	putInboxCount := 0
 	originalCount := 0
+	txHashesToReject := make([]common.Hash, 0, len(b.pendingXTEntries))
+
 	for _, entry := range b.pendingXTEntries {
 		if entry.kind == sequencerTxPutInbox {
 			putInboxCount++
 		} else {
 			originalCount++
 		}
+		txHashesToReject = append(txHashesToReject, entry.tx.Hash())
 	}
 
 	b.pendingXTEntries = nil
 	b.pendingByHash = make(map[common.Hash]int)
+	b.sequencerTxMutex.Unlock()
+
+	// Remove from Ethereum txpool to prevent inclusion in future blocks.
+	// Critical for transaction rejection scenarios: supervisor failsafe mode, conditional validation
+	// failures, or bundle simulation errors during block construction.
+	for _, hash := range txHashesToReject {
+		if tx := b.eth.txPool.Get(hash); tx != nil {
+			tx.SetRejected()
+			log.Debug("[SSV] Marked cleared tx as rejected in txpool",
+				"txHash", hash.Hex())
+		}
+	}
 
 	log.Info("[SSV] Cleared sequencer transactions",
 		"putInbox", putInboxCount,
-		"original", originalCount)
+		"original", originalCount,
+		"rejectedInPool", len(txHashesToReject))
 
 	if miner := b.eth.miner; miner != nil && (putInboxCount > 0 || originalCount > 0) {
 		miner.InvalidatePendingCache()
@@ -1333,6 +1378,16 @@ func (b *EthAPIBackend) poolPayloadTx(tx *types.Transaction) {
 	b.addSequencerEntryLocked(tx, sequencerTxOriginal)
 	b.sequencerTxMutex.Unlock()
 
+	// Add to Ethereum txpool for native nonce management.
+	// Transactions are filtered from block building via skip logic until SCP coordination completes,
+	// ensuring proper nonce sequencing while preventing premature inclusion.
+	if err := b.sendTx(context.Background(), tx); err != nil {
+		log.Warn("[SSV] Failed to add original tx to txpool for nonce management",
+			"txHash", tx.Hash().Hex(), "err", err)
+	} else {
+		log.Info("[SSV] Pooled original tx to txpool", "txHash", tx.Hash().Hex(), "nonce", tx.Nonce())
+	}
+
 	if miner := b.eth.miner; miner != nil {
 		miner.InvalidatePendingCache()
 	}
@@ -1388,7 +1443,7 @@ func (b *EthAPIBackend) listTransactionsByKind(kind sequencerTxKind) []*types.Tr
 	b.sequencerTxMutex.RLock()
 	defer b.sequencerTxMutex.RUnlock()
 
-	result := make([]*types.Transaction, 0)
+	result := make([]*types.Transaction, 0, len(b.pendingXTEntries)/2)
 	for _, entry := range b.pendingXTEntries {
 		if entry.kind == kind {
 			result = append(result, entry.tx)
@@ -1443,11 +1498,33 @@ func (b *EthAPIBackend) dropTransactionsForXtKey(key string) (int, int) {
 		return 0, 0
 	}
 
+	// First, collect transaction hashes that will be removed
 	b.sequencerTxMutex.Lock()
+	txHashesToRemove := make([]common.Hash, 0)
+	for _, entry := range b.pendingXTEntries {
+		if entry.xtID == key {
+			txHashesToRemove = append(txHashesToRemove, entry.tx.Hash())
+		}
+	}
+
 	removedPutInbox, removedOriginal := b.removeEntriesMatchingLocked(func(entry sequencerTxEntry) bool {
 		return entry.xtID == key
 	})
 	b.sequencerTxMutex.Unlock()
+
+	// Remove from Ethereum txpool to prevent nonce gaps and maintain sequence integrity.
+	// Marking as rejected triggers automatic removal of dependent transactions with higher nonces,
+	// preventing invalid transaction chains from persisting in the pool.
+	for _, hash := range txHashesToRemove {
+		if tx := b.eth.txPool.Get(hash); tx != nil {
+			// Mark as rejected so txpool removes it and any dependent transactions
+			tx.SetRejected()
+			log.Info("[SSV] Marked aborted tx as rejected in txpool",
+				"txHash", hash.Hex(),
+				"xtID", key,
+				"nonce", tx.Nonce())
+		}
+	}
 
 	if removedPutInbox+removedOriginal > 0 {
 		if miner := b.eth.miner; miner != nil {
