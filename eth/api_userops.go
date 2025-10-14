@@ -118,7 +118,7 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 		return nil, &rpc.JsonError{Code: -32001, Message: "wrongChainId", Data: map[string]any{"expected": chainID}}
 	}
 
-	// Always use the canonical v0.8 EntryPoint address.
+	// Always use the canonical v0.7 EntryPoint address.
 	ep := common.HexToAddress("0x0000000071727de22e5e9d8baf0edac6f37da032")
 
 	if len(userOps) == 0 {
@@ -167,6 +167,8 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 	for i, op := range userOps {
 		var paymasterAddr common.Address
 		var paymasterData []byte
+		var paymasterVerificationGas, paymasterPostOpGas *big.Int
+
 		if len(op.PaymasterAndData) > 0 {
 			if len(op.PaymasterAndData) < common.AddressLength {
 				return nil, &rpc.JsonError{
@@ -175,7 +177,19 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 					Data:    map[string]any{"opIndex": i, "reason": "paymasterAndData too short"},
 				}
 			}
-			paymasterAddr = common.BytesToAddress(op.PaymasterAndData[:common.AddressLength])
+
+			// EntryPoint v0.7 paymaster format: address(20) + verificationGas(16) + postOpGas(16) + data
+			const paymasterDataOffset = 52 // 20 + 16 + 16
+
+			if len(op.PaymasterAndData) < paymasterDataOffset {
+				return nil, &rpc.JsonError{
+					Code:    -32003,
+					Message: "invalidUserOperation",
+					Data:    map[string]any{"opIndex": i, "reason": "paymasterAndData too short for v0.7 format"},
+				}
+			}
+
+			paymasterAddr = common.BytesToAddress(op.PaymasterAndData[:20])
 			if paymasterAddr == (common.Address{}) {
 				return nil, &rpc.JsonError{
 					Code:    -32003,
@@ -183,7 +197,15 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 					Data:    map[string]any{"opIndex": i, "reason": "paymaster address cannot be zero"},
 				}
 			}
+
+			// Extract paymaster gas limits from bytes 20-35 and 36-51
+			paymasterVerificationGas = new(big.Int).SetBytes(op.PaymasterAndData[20:36])
+			paymasterPostOpGas = new(big.Int).SetBytes(op.PaymasterAndData[36:52])
 			paymasterData = op.PaymasterAndData
+		} else {
+			// No paymaster, set gas limits to zero
+			paymasterVerificationGas = big.NewInt(0)
+			paymasterPostOpGas = big.NewInt(0)
 		}
 		// Merge fee fields with server policy
 		vgl := toBig(op.VerificationGasLimit)
@@ -240,8 +262,12 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 			"initCodeLen", len(op.InitCode))
 
 		// Compute a conservative prefund bound; ensure deposit covers it
-		// bound = (callGas + verificationGas + preVerificationGas) * uFeeCap
-		gasSum := new(big.Int).Add(cgl, new(big.Int).Add(vgl, pvg))
+		// bound = (callGas + verificationGas + preVerificationGas + paymasterVerificationGas + paymasterPostOpGas) * uFeeCap
+		// This matches EntryPoint v0.7's _getRequiredPrefund calculation
+		gasSum := new(big.Int).Add(cgl, vgl)
+		gasSum.Add(gasSum, pvg)
+		gasSum.Add(gasSum, paymasterVerificationGas)
+		gasSum.Add(gasSum, paymasterPostOpGas)
 		prefundBound := new(big.Int).Mul(gasSum, uFeeCap)
 
 		// balanceOf(sender) or paymaster if sponsored
