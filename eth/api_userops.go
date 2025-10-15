@@ -393,22 +393,42 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 		api.b.RPCGasCap(),
 	)
 	if err != nil {
-		// If estimation reverted, check if we have a revertError with detailed data
-		type errorCoder interface {
-			ErrorCode() int
-			ErrorData() interface{}
-		}
 		errData := map[string]any{"reason": err.Error()}
 
-		if ec, ok := err.(errorCoder); ok {
-			revertDataHex, ok := ec.ErrorData().(string)
-			if ok && len(revertDataHex) > 2 {
-				errData["revertData"] = revertDataHex
-				if decoded := decodeEntryPointError(revertDataHex); decoded != nil {
-					errData["decoded"] = decoded
+		var codeCarrier interface {
+			ErrorCode() int
+		}
+		if errors.As(err, &codeCarrier) {
+			errData["errorCode"] = codeCarrier.ErrorCode()
+		}
+
+		var dataCarrier interface {
+			ErrorData() interface{}
+		}
+		if errors.As(err, &dataCarrier) {
+			switch payload := dataCarrier.ErrorData().(type) {
+			case string:
+				lower := strings.ToLower(payload)
+				if strings.HasPrefix(lower, "0x") {
+					enrichRevertData(errData, payload)
+				} else if payload != "" {
+					errData["detail"] = payload
 				}
+			case []byte:
+				if len(payload) > 0 {
+					enrichRevertData(errData, hexutil.Encode(payload))
+				}
+			case map[string]any:
+				for k, v := range payload {
+					errData[k] = v
+				}
+			case nil:
+				// Nothing to add.
+			default:
+				errData["errorData"] = payload
 			}
 		}
+
 		log.Warn("[SSV] handleOps simulation failed", "err", err, "callData", hexutil.Encode(callData))
 		return nil, &rpc.JsonError{
 			Code:    -32006,
@@ -581,6 +601,19 @@ func GetComposeUserOpsAPI(b *EthAPIBackend) rpc.API {
 	return rpc.API{
 		Namespace: "compose",
 		Service:   &composeUserOpsAPI{b: b},
+	}
+}
+
+// enrichRevertData records the raw revert payload and best-effort decoded information.
+func enrichRevertData(errData map[string]any, revertDataHex string) {
+	if len(revertDataHex) <= 2 {
+		return
+	}
+	errData["revertData"] = revertDataHex
+	if revertBytes, decodeErr := hexutil.Decode(revertDataHex); decodeErr == nil && len(revertBytes) > 0 {
+		if decoded := decodeRevertReason(revertBytes); decoded != nil {
+			errData["decoded"] = decoded
+		}
 	}
 }
 
