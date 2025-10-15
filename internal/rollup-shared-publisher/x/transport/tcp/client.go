@@ -71,6 +71,7 @@ type client struct {
 	pingRecv chan struct{}
 
 	// Shutdown management
+	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
@@ -122,8 +123,10 @@ func (c *client) Connect(ctx context.Context, addr string) error {
 		c.config.ServerAddr = addr
 	}
 
-	receiveCtx, cancel := context.WithCancel(context.Background())
-	c.cancel = cancel
+	if c.ctx == nil {
+		c.ctx, c.cancel = context.WithCancel(context.Background())
+	}
+	receiveCtx := c.ctx
 
 	connCtx, cancel := context.WithTimeout(ctx, c.config.ConnectTimeout)
 	defer cancel()
@@ -205,6 +208,8 @@ func (c *client) Disconnect(ctx context.Context) error {
 	// Signal shutdown
 	if c.cancel != nil {
 		c.cancel()
+		c.ctx = nil
+		c.cancel = nil
 	}
 
 	// Close connection
@@ -283,6 +288,8 @@ func (c *client) GetID() string {
 }
 
 // receiveLoop reads messages from the server
+//
+// //nolint:gocyclo // under development
 func (c *client) receiveLoop(ctx context.Context) {
 	defer c.wg.Done()
 
@@ -582,7 +589,9 @@ func (c *client) triggerReconnectNow() {
 		return
 	}
 
+	c.wg.Add(1)
 	go func() {
+		defer c.wg.Done()
 		defer c.reconnecting.Store(false)
 
 		delay := c.config.ReconnectDelay
@@ -592,17 +601,35 @@ func (c *client) triggerReconnectNow() {
 		const maxDelay = time.Minute
 
 		for c.autoReconnect.Load() {
-			if err := c.Connect(context.Background(), ""); err == nil {
+			c.mu.RLock()
+			ctx := c.ctx
+			c.mu.RUnlock()
+
+			if ctx == nil {
+				c.log.Debug().Msg("Client context is nil, stopping reconnect loop")
+				return
+			}
+
+			if err := c.Connect(ctx, ""); err == nil {
 				c.log.Info().Msg("Successfully reconnected to server")
 				return
 			} else {
+				if ctx.Err() != nil {
+					c.log.Debug().Err(ctx.Err()).Msg("Reconnect stopped due to shutdown")
+					return
+				}
 				c.log.Warn().
 					Err(err).
 					Dur("retry_in", delay).
 					Msg("Reconnect attempt failed")
 			}
 
-			time.Sleep(delay)
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				c.log.Debug().Msg("Reconnect loop stopped during sleep")
+				return
+			}
 
 			if delay < maxDelay {
 				delay *= 2
