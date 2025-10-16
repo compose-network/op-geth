@@ -757,7 +757,6 @@ func (sc *SequencerCoordinator) OnBlockBuildingComplete(ctx context.Context, blo
 // handleConsensusDecision is invoked by the consensus layer when the underlying 2PC (SCP)
 // reaches a final decision for the active StartSC. It updates the local SCP integration
 // and unblocks any queued StartSC messages.
-// TODO: check original transactions (clean up)
 func (sc *SequencerCoordinator) handleConsensusDecision(ctx context.Context, xtID *pb.XtID, decision bool) error {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
@@ -770,6 +769,16 @@ func (sc *SequencerCoordinator) handleConsensusDecision(ctx context.Context, xtI
 	if err := sc.scpIntegration.HandleDecision(xtID, decision); err != nil {
 		sc.log.Error().Err(err).Str("xt_id", xtID.Hex()).Msg("Failed to apply decision to SCP integration")
 		return err
+	}
+
+	// Notify host SDK about the decision for transaction cleanup (especially on abort)
+	if sc.callbacks.OnDecision != nil {
+		if err := sc.callbacks.OnDecision(ctx, xtID, decision); err != nil {
+			sc.log.Error().Err(err).
+				Str("xt_id", xtID.Hex()).
+				Bool("decision", decision).
+				Msg("OnDecision callback failed")
+		}
 	}
 
 	// If we returned to Building-Free and have queued StartSCs, process the next one
