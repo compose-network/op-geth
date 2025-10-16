@@ -183,6 +183,7 @@ var (
 		utils.CoordinatorKeyHex,
 		utils.MailboxAddrAFlag,
 		utils.MailboxAddrBFlag,
+		utils.RegistryPathFlag,
 	}, utils.NetworkFlags, utils.DatabaseFlags)
 
 	rpcFlags = []cli.Flag{

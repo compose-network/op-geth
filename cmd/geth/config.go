@@ -40,6 +40,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/catalyst"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/internal/flags"
+	"github.com/ethereum/go-ethereum/internal/registry_utils"
 	"github.com/ethereum/go-ethereum/internal/version"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
@@ -223,6 +224,53 @@ func constructDevModeBanner(ctx *cli.Context, cfg gethConfig) string {
 // makeFullNode loads geth configuration and creates the Ethereum backend.
 func makeFullNode(ctx *cli.Context) *node.Node {
 	stack, cfg := makeConfigNode(ctx)
+	{
+		// === Registry ===
+		regPath := cfg.Eth.RegistryPath
+		ru, err := registry_utils.New(regPath, "hoodi")
+		if err != nil {
+			utils.Fatalf("registry init: %v", err)
+		}
+		log.Info("Initialized registry", "path", regPath)
+
+		// === Mailboxes ===
+		// Overrides are: registry < config file < cli flags
+		// If no config file values are provided, fill with registry values
+		mailSource := "toml"
+		override_a := false
+		override_b := false
+		if cfg.Eth.Mailboxes == nil {
+			cfg.Eth.Mailboxes = make(map[uint64]string)
+		}
+		if len(cfg.Eth.Mailboxes) == 0 {
+			mailSource = "registry"
+			m, err := ru.Mailboxes()
+			if err != nil {
+				utils.Fatalf("registry mailboxes: %v", err)
+			}
+			cfg.Eth.Mailboxes = m
+		}
+		// If CLI overrides are provided, use them to override
+		// Todo: remove RollupAMailboxAddr and RollupBMailboxAddr cli flags
+		// and use Mailboxes flag instead to be more generic
+		if s := strings.TrimSpace(cfg.Eth.RollupAMailboxAddr); s != "" {
+			const RollupAChainID = 77777 // use same variable name to easily grep when we refactor
+			cfg.Eth.Mailboxes[RollupAChainID] = s
+			override_a = true
+		}
+		if s := strings.TrimSpace(cfg.Eth.RollupBMailboxAddr); s != "" {
+			const RollupBChainID = 88888 // use same variable name to easily grep when we refactor
+			cfg.Eth.Mailboxes[RollupBChainID] = s
+			override_b = true
+		}
+		log.Info("Mailboxes resolved",
+			"source", mailSource,
+			"override_a", override_a,
+			"override_b", override_b,
+			"count", len(cfg.Eth.Mailboxes),
+			"values", cfg.Eth.Mailboxes,
+		)
+	}
 	if ctx.IsSet(utils.OverrideOsaka.Name) {
 		v := ctx.Uint64(utils.OverrideOsaka.Name)
 		cfg.Eth.OverrideOsaka = &v
