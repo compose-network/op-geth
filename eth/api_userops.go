@@ -485,13 +485,23 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 			}
 		}
 
-		var revertData any
+		errData["callData"] = hexutil.Encode(callData)
+
+		var (
+			revertData any
+			decoded    any
+		)
 		if v, ok := errData["revertData"]; ok {
 			revertData = v
 		}
-		var decoded any
 		if v, ok := errData["decoded"]; ok {
 			decoded = v
+		}
+		if revertData != nil {
+			errData["revertData"] = revertData
+		}
+		if decoded != nil {
+			errData["decoded"] = decoded
 		}
 
 		log.Warn("[SSV] handleOps simulation failed",
@@ -677,7 +687,7 @@ func GetComposeUserOpsAPI(b *EthAPIBackend) rpc.API {
 
 // enrichRevertData records the raw revert payload and best-effort decoded information.
 func enrichRevertData(errData map[string]any, revertDataHex string) {
-	if len(revertDataHex) <= 2 {
+	if revertDataHex == "" {
 		return
 	}
 	errData["revertData"] = revertDataHex
@@ -745,21 +755,6 @@ func normalizeABIValue(value interface{}) any {
 		out := make([]any, 0, rv.Len())
 		for i := 0; i < rv.Len(); i++ {
 			out = append(out, normalizeABIValue(rv.Index(i).Interface()))
-		}
-		return out
-	case reflect.Struct:
-		out := map[string]any{}
-		rt := rv.Type()
-		for i := 0; i < rv.NumField(); i++ {
-			field := rt.Field(i)
-			if !field.IsExported() {
-				continue
-			}
-			name := field.Name
-			if name != "" {
-				name = strings.ToLower(name[:1]) + name[1:]
-			}
-			out[name] = normalizeABIValue(rv.Field(i).Interface())
 		}
 		return out
 	case reflect.Map:
