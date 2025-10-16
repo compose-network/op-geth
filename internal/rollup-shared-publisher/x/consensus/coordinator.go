@@ -250,10 +250,17 @@ func (c *coordinator) RecordDecision(xtID *pb.XtID, decision bool) error {
 		state.Timer.Stop()
 	}
 
+	duration := time.Since(state.StartTime)
+	c.metrics.RecordTransactionCompleted(state.GetDecision().String(), duration)
+
 	c.log.Info().
 		Str("xt_id", xtID.Hex()).
 		Bool("decision", decision).
+		Dur("duration", duration).
 		Msg("Recorded decision")
+
+	// Invoke decision callback so sequencer can transition state and process queued transactions
+	c.callbackMgr.InvokeDecision(xtID, decision, duration)
 
 	// Schedule cleanup
 	time.AfterFunc(5*time.Minute, func() {
