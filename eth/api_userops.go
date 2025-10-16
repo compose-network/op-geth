@@ -1,11 +1,13 @@
 package eth
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
+	"reflect"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -98,7 +100,61 @@ const entryPointV07ABI = `[
   {"type":"error","name":"FailedOp","inputs":[{"internalType":"uint256","name":"opIndex","type":"uint256"},{"internalType":"string","name":"reason","type":"string"}]},
   {"type":"error","name":"FailedOpWithRevert","inputs":[{"internalType":"uint256","name":"opIndex","type":"uint256"},{"internalType":"string","name":"reason","type":"string"},{"internalType":"bytes","name":"inner","type":"bytes"}]},
   {"type":"error","name":"SignatureValidationFailed","inputs":[{"internalType":"address","name":"aggregator","type":"address"}]},
-  {"type":"error","name":"PostOpReverted","inputs":[{"internalType":"bytes","name":"returnData","type":"bytes"}]}
+  {"type":"error","name":"PostOpReverted","inputs":[{"internalType":"bytes","name":"returnData","type":"bytes"}]},
+  {"type":"error","name":"ExecutionResult","inputs":[{"internalType":"uint256","name":"preOpGas","type":"uint256"},{"internalType":"uint256","name":"paid","type":"uint256"},{"internalType":"uint48","name":"validAfter","type":"uint48"},{"internalType":"uint48","name":"validUntil","type":"uint48"},{"internalType":"bool","name":"targetSuccess","type":"bool"},{"internalType":"bytes","name":"targetResult","type":"bytes"}]},
+  {"type":"error","name":"ValidationResult","inputs":[
+      {"components":[
+          {"internalType":"uint256","name":"preOpGas","type":"uint256"},
+          {"internalType":"uint256","name":"prefund","type":"uint256"},
+          {"internalType":"bool","name":"sigFailed","type":"bool"},
+          {"internalType":"uint48","name":"validAfter","type":"uint48"},
+          {"internalType":"uint48","name":"validUntil","type":"uint48"},
+          {"internalType":"bytes","name":"paymasterContext","type":"bytes"}
+      ],"internalType":"struct IEntryPoint.ReturnInfo","name":"returnInfo","type":"tuple"},
+      {"components":[
+          {"internalType":"uint256","name":"stake","type":"uint256"},
+          {"internalType":"uint256","name":"unstakeDelaySec","type":"uint256"}
+      ],"internalType":"struct IStakeManager.StakeInfo","name":"senderInfo","type":"tuple"},
+      {"components":[
+          {"internalType":"uint256","name":"stake","type":"uint256"},
+          {"internalType":"uint256","name":"unstakeDelaySec","type":"uint256"}
+      ],"internalType":"struct IStakeManager.StakeInfo","name":"factoryInfo","type":"tuple"},
+      {"components":[
+          {"internalType":"uint256","name":"stake","type":"uint256"},
+          {"internalType":"uint256","name":"unstakeDelaySec","type":"uint256"}
+      ],"internalType":"struct IStakeManager.StakeInfo","name":"paymasterInfo","type":"tuple"}
+  ]},
+  {"type":"error","name":"ValidationResultWithAggregation","inputs":[
+      {"components":[
+          {"internalType":"uint256","name":"preOpGas","type":"uint256"},
+          {"internalType":"uint256","name":"prefund","type":"uint256"},
+          {"internalType":"bool","name":"sigFailed","type":"bool"},
+          {"internalType":"uint48","name":"validAfter","type":"uint48"},
+          {"internalType":"uint48","name":"validUntil","type":"uint48"},
+          {"internalType":"bytes","name":"paymasterContext","type":"bytes"}
+      ],"internalType":"struct IEntryPoint.ReturnInfo","name":"returnInfo","type":"tuple"},
+      {"components":[
+          {"internalType":"uint256","name":"stake","type":"uint256"},
+          {"internalType":"uint256","name":"unstakeDelaySec","type":"uint256"}
+      ],"internalType":"struct IStakeManager.StakeInfo","name":"senderInfo","type":"tuple"},
+      {"components":[
+          {"internalType":"uint256","name":"stake","type":"uint256"},
+          {"internalType":"uint256","name":"unstakeDelaySec","type":"uint256"}
+      ],"internalType":"struct IStakeManager.StakeInfo","name":"factoryInfo","type":"tuple"},
+      {"components":[
+          {"internalType":"uint256","name":"stake","type":"uint256"},
+          {"internalType":"uint256","name":"unstakeDelaySec","type":"uint256"}
+      ],"internalType":"struct IStakeManager.StakeInfo","name":"paymasterInfo","type":"tuple"},
+      {"components":[
+          {"internalType":"address","name":"aggregator","type":"address"},
+          {"components":[
+              {"internalType":"uint256","name":"stake","type":"uint256"},
+              {"internalType":"uint256","name":"unstakeDelaySec","type":"uint256"}
+          ],"internalType":"struct IStakeManager.StakeInfo","name":"stakeInfo","type":"tuple"}
+      ],"internalType":"struct IEntryPoint.AggregatorStakeInfo","name":"aggregatorInfo","type":"tuple"}
+  ]},
+  {"type":"error","name":"SenderAddressResult","inputs":[{"internalType":"address","name":"sender","type":"address"}]},
+  {"type":"error","name":"DelegateAndRevert","inputs":[{"internalType":"bool","name":"success","type":"bool"},{"internalType":"bytes","name":"ret","type":"bytes"}]}
 ]`
 
 // Packed userop for ABI packing
@@ -429,7 +485,22 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 			}
 		}
 
-		log.Warn("[SSV] handleOps simulation failed", "err", err, "callData", hexutil.Encode(callData))
+		var revertData any
+		if v, ok := errData["revertData"]; ok {
+			revertData = v
+		}
+		var decoded any
+		if v, ok := errData["decoded"]; ok {
+			decoded = v
+		}
+
+		log.Warn("[SSV] handleOps simulation failed",
+			"err", err,
+			"callData", hexutil.Encode(callData),
+			"revertData", revertData,
+			"decoded", decoded,
+			"details", errData,
+		)
 		return nil, &rpc.JsonError{
 			Code:    -32006,
 			Message: "simulateValidationFailed",
@@ -617,6 +688,100 @@ func enrichRevertData(errData map[string]any, revertDataHex string) {
 	}
 }
 
+func normalizeABIValue(value interface{}) any {
+	switch v := value.(type) {
+	case nil:
+		return nil
+	case *big.Int:
+		if v == nil {
+			return nil
+		}
+		return v.String()
+	case big.Int:
+		return v.String()
+	case common.Address:
+		return v.Hex()
+	case *common.Address:
+		if v == nil {
+			return nil
+		}
+		return v.Hex()
+	case common.Hash:
+		return v.Hex()
+	case *common.Hash:
+		if v == nil {
+			return nil
+		}
+		return v.Hex()
+	case []byte:
+		if len(v) == 0 {
+			return "0x"
+		}
+		return "0x" + hex.EncodeToString(v)
+	}
+
+	rv := reflect.ValueOf(value)
+	if !rv.IsValid() {
+		return nil
+	}
+
+	switch rv.Kind() {
+	case reflect.Ptr:
+		if rv.IsNil() {
+			return nil
+		}
+		return normalizeABIValue(rv.Elem().Interface())
+	case reflect.Slice, reflect.Array:
+		if rv.Type().Elem().Kind() == reflect.Uint8 {
+			buf := make([]byte, rv.Len())
+			for i := 0; i < rv.Len(); i++ {
+				buf[i] = byte(rv.Index(i).Uint())
+			}
+			if len(buf) == 0 {
+				return "0x"
+			}
+			return "0x" + hex.EncodeToString(buf)
+		}
+		out := make([]any, 0, rv.Len())
+		for i := 0; i < rv.Len(); i++ {
+			out = append(out, normalizeABIValue(rv.Index(i).Interface()))
+		}
+		return out
+	case reflect.Struct:
+		out := map[string]any{}
+		rt := rv.Type()
+		for i := 0; i < rv.NumField(); i++ {
+			field := rt.Field(i)
+			if !field.IsExported() {
+				continue
+			}
+			name := field.Name
+			if name != "" {
+				name = strings.ToLower(name[:1]) + name[1:]
+			}
+			out[name] = normalizeABIValue(rv.Field(i).Interface())
+		}
+		return out
+	case reflect.Map:
+		out := map[string]any{}
+		iter := rv.MapRange()
+		for iter.Next() {
+			out[fmt.Sprint(iter.Key().Interface())] = normalizeABIValue(iter.Value().Interface())
+		}
+		return out
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return fmt.Sprintf("%d", rv.Int())
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return fmt.Sprintf("%d", rv.Uint())
+	case reflect.Bool:
+		return rv.Bool()
+	case reflect.String:
+		return rv.String()
+	default:
+		return fmt.Sprintf("%v", value)
+	}
+}
+
 // decodeEntryPointError attempts to decode EntryPoint custom errors using the ABI.
 // Returns a map with decoded fields if successful, nil otherwise.
 // Recursively decodes nested revert data (e.g., inner reverts in FailedOpWithRevert).
@@ -635,56 +800,68 @@ func decodeEntryPointError(revertDataHex string) map[string]any {
 	data := revertData[4:]
 
 	for name, customErr := range parsedABI.Errors {
-		if hex.EncodeToString(customErr.ID[:4]) == hex.EncodeToString(selector) {
-			values, err := customErr.Inputs.Unpack(data)
-			if err != nil {
-				return nil
-			}
-
-			result := map[string]any{"error": name}
-
-			switch name {
-			case "FailedOp":
-				if len(values) >= 2 {
-					result["opIndex"] = fmt.Sprintf("%v", values[0])
-					result["reason"] = fmt.Sprintf("%v", values[1])
-				}
-
-			case "FailedOpWithRevert":
-				if len(values) >= 3 {
-					result["opIndex"] = fmt.Sprintf("%v", values[0])
-					result["reason"] = fmt.Sprintf("%v", values[1])
-					// Recursively decode inner revert data
-					if innerBytes, ok := values[2].([]byte); ok && len(innerBytes) > 0 {
-						innerHex := "0x" + hex.EncodeToString(innerBytes)
-						result["innerRevert"] = innerHex
-						// Try to decode as standard Error(string) or nested EntryPoint error
-						if decoded := decodeRevertReason(innerBytes); decoded != nil {
-							result["innerDecoded"] = decoded
-						}
-					}
-				}
-
-			case "SignatureValidationFailed":
-				if len(values) >= 1 {
-					if addr, ok := values[0].(common.Address); ok {
-						result["aggregator"] = addr.Hex()
-					}
-				}
-
-			case "PostOpReverted":
-				if len(values) >= 1 {
-					if returnData, ok := values[0].([]byte); ok {
-						result["returnData"] = "0x" + hex.EncodeToString(returnData)
-						if decoded := decodeRevertReason(returnData); decoded != nil {
-							result["decoded"] = decoded
-						}
-					}
-				}
-			}
-
-			return result
+		if !bytes.Equal(customErr.ID[:4], selector) {
+			continue
 		}
+
+		values, err := customErr.Inputs.Unpack(data)
+		if err != nil {
+			return nil
+		}
+
+		result := map[string]any{"error": name}
+		for i, arg := range customErr.Inputs {
+			if i >= len(values) {
+				break
+			}
+			fieldName := arg.Name
+			if fieldName == "" {
+				fieldName = fmt.Sprintf("arg%d", i)
+			}
+			result[fieldName] = normalizeABIValue(values[i])
+		}
+
+		switch name {
+		case "FailedOpWithRevert":
+			if len(values) >= 3 {
+				if innerBytes, ok := values[2].([]byte); ok && len(innerBytes) > 0 {
+					innerHex := "0x" + hex.EncodeToString(innerBytes)
+					result["inner"] = innerHex
+					if decoded := decodeRevertReason(innerBytes); decoded != nil {
+						result["innerDecoded"] = decoded
+					}
+				}
+			}
+		case "PostOpReverted":
+			if len(values) >= 1 {
+				if returnData, ok := values[0].([]byte); ok && len(returnData) > 0 {
+					result["returnData"] = "0x" + hex.EncodeToString(returnData)
+					if decoded := decodeRevertReason(returnData); decoded != nil {
+						result["decoded"] = decoded
+					}
+				}
+			}
+		case "ExecutionResult":
+			if len(values) >= 6 {
+				if targetResult, ok := values[5].([]byte); ok && len(targetResult) > 0 {
+					result["targetResult"] = "0x" + hex.EncodeToString(targetResult)
+					if decoded := decodeRevertReason(targetResult); decoded != nil {
+						result["targetDecoded"] = decoded
+					}
+				}
+			}
+		case "DelegateAndRevert":
+			if len(values) >= 2 {
+				if ret, ok := values[1].([]byte); ok && len(ret) > 0 {
+					result["ret"] = "0x" + hex.EncodeToString(ret)
+					if decoded := decodeRevertReason(ret); decoded != nil {
+						result["retDecoded"] = decoded
+					}
+				}
+			}
+		}
+
+		return result
 	}
 
 	return nil
