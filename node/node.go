@@ -223,15 +223,15 @@ func New(conf *Config) (*Node, error) {
 	//}
 
 	// Determine our ChainID
-	// Priority:
-	// 1) Match our listen port against entries in --sequencer.addrs (format: chainID:host:port)
-	// 2) Fallback to the first entry's chainID if no direct match
-	var chainIDInt64 int64
+	if conf.NetworkId == 0 {
+		return nil, errors.New("networkid is required for rollup/SP wiring; set --networkid to your L2 chain id")
+	}
+	chainIDInt64 := int64(conf.NetworkId)
 
-	// Extract our listen port (may be ":9898" -> host empty, port 9898)
-	_, listenPort, err := net.SplitHostPort(conf.SPListenAddr)
-	if err != nil {
-		node.log.Warn("Failed to parse sp.listen.addr; falling back to first sequencer addr", "err", err, "listen", conf.SPListenAddr)
+	// Parse SequencerAddrs
+	addrByID := map[uint64]string{}
+	if strings.TrimSpace(conf.SequencerAddrs) == "" {
+		node.log.Warn("sequencer.addrs is empty; proceeding without P2P peers (SP/CIRC limited)")
 	}
 
 	entries := strings.Split(conf.SequencerAddrs, ",")
@@ -246,33 +246,37 @@ func New(conf *Config) (*Node, error) {
 			node.log.Error("Invalid sequencer address format, expected id:host:port", "entry", entry)
 			continue
 		}
-
 		idStr := strings.TrimSpace(parts[0])
-		//host := strings.TrimSpace(parts[1])
+		host := strings.TrimSpace(parts[1])
 		port := strings.TrimSpace(parts[2])
 
-		// Try exact port match first
-		if listenPort != "" && port == listenPort {
-			if idBig, ok := new(big.Int).SetString(idStr, 10); ok {
-				chainIDInt64 = idBig.Int64()
-				ssvLogger.Info().
-					Str("matched_entry", entry).
-					Str("listen_port", listenPort).
-					Msg("Detected ChainID from sequencer.addrs")
-				break
-			}
-			node.log.Warn("Invalid chainID in sequencer.addrs entry", "entry", entry)
+		idBig, ok := new(big.Int).SetString(idStr, 10)
+		if !ok || idBig.Sign() <= 0 {
+			return nil, fmt.Errorf("invalid chain id %q in sequencer.addrs entry %q (decimal expected)", idStr, entry)
 		}
+		id := idBig.Uint64()
+		if _, exists := addrByID[id]; exists {
+			return nil, fmt.Errorf("duplicate chain id %d in sequencer.addrs", id)
+		}
+		addrByID[id] = net.JoinHostPort(host, port)
+	}
 
-		// As a backup, if we didn't find any match yet, remember the first well-formed id
-		if chainIDInt64 == 0 {
-			if idBig, ok := new(big.Int).SetString(idStr, 10); ok {
-				chainIDInt64 = idBig.Int64()
+	// If our chain id exists in the list and listen port differs: warn about it.
+	if selected, ok := addrByID[conf.NetworkId]; ok {
+		if _, listenPort, err := net.SplitHostPort(conf.SPListenAddr); err == nil {
+			if _, selPort, err2 := net.SplitHostPort(selected); err2 == nil && listenPort != "" && selPort != "" && selPort != listenPort {
+				node.log.Warn("rollup listen port differs from sequencer.addrs entry",
+					"chainID", conf.NetworkId, "listen", conf.SPListenAddr, "selected", selected)
 			}
 		}
+	} else {
+		node.log.Info("no self entry in sequencer.addrs; proceeding", "chainID", conf.NetworkId)
 	}
 
 	_, addrs := generateClients(conf.SequencerAddrs, authManager)
+	// Exclude self from peer list to avoid dialing ourselves
+	selfKey := spconsensus.ChainKeyUint64(uint64(chainIDInt64))
+	delete(addrs, selfKey)
 	node.sequencerAddrs = addrs
 	node.sequencerKey = parsePrivateKey(conf.SequencerKey)
 
