@@ -1398,21 +1398,44 @@ func (b *EthAPIBackend) poolPayloadTx(tx *types.Transaction) {
 // This enables per-XT cleanup when transactions are aborted.
 func (b *EthAPIBackend) assignXtKeyToHash(tx *types.Transaction, xtID *rollupv1.XtID) {
 	if tx == nil || xtID == nil {
+		log.Warn("[SSV] assignXtKeyToHash called with nil parameter", "txNil", tx == nil, "xtIDNil", xtID == nil)
 		return
 	}
 	key := hexutil.Encode(xtID.Hash)
+	txHash := tx.Hash()
 
 	b.sequencerTxMutex.Lock()
 	defer b.sequencerTxMutex.Unlock()
 
-	if b.pendingByHash != nil {
-		if idx, ok := b.pendingByHash[tx.Hash()]; ok {
-			// Bounds check to prevent panic
-			if idx >= 0 && idx < len(b.pendingXTEntries) {
-				b.pendingXTEntries[idx].xtID = key
-			}
-		}
+	if b.pendingByHash == nil {
+		log.Warn("[SSV] assignXtKeyToHash: pendingByHash is nil", "txHash", txHash.Hex(), "xtID", key)
+		return
 	}
+
+	idx, ok := b.pendingByHash[txHash]
+	if !ok {
+		log.Warn("[SSV] assignXtKeyToHash: transaction not found in pendingByHash",
+			"txHash", txHash.Hex(),
+			"xtID", key,
+			"pendingCount", len(b.pendingXTEntries))
+		return
+	}
+
+	// Bounds check to prevent panic
+	if idx < 0 || idx >= len(b.pendingXTEntries) {
+		log.Error("[SSV] assignXtKeyToHash: index out of bounds",
+			"txHash", txHash.Hex(),
+			"xtID", key,
+			"idx", idx,
+			"pendingCount", len(b.pendingXTEntries))
+		return
+	}
+
+	b.pendingXTEntries[idx].xtID = key
+	log.Info("[SSV] Assigned xtID to transaction",
+		"txHash", txHash.Hex(),
+		"xtID", key,
+		"idx", idx)
 }
 
 func (b *EthAPIBackend) addSequencerEntryLocked(tx *types.Transaction, kind sequencerTxKind) {
@@ -1640,7 +1663,60 @@ func (b *EthAPIBackend) NotifySlotStart(startSlot *rollupv1.StartSlot) error {
 func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *rollupv1.RequestSeal) error {
 	log.Info("[SSV] Notify miner: RequestSeal", "slot", requestSeal.Slot, "included_xts", len(requestSeal.IncludedXts))
 
-	// Store RequestSeal info first
+	// Clean up non-included transactions FIRST, before storing RequestSeal info
+	// This ensures transactions rejected by SCP cannot be included in blocks built during Submission state
+	included := make(map[string]struct{}, len(requestSeal.IncludedXts))
+	for _, xt := range requestSeal.IncludedXts {
+		included[hexutil.Encode(xt)] = struct{}{}
+	}
+
+	// Collect ALL pending transaction keys
+	b.sequencerTxMutex.RLock()
+	pendingKeys := make(map[string]struct{})
+	totalPending := len(b.pendingXTEntries)
+	for _, entry := range b.pendingXTEntries {
+		if entry.xtID != "" {
+			pendingKeys[entry.xtID] = struct{}{}
+		}
+	}
+	b.sequencerTxMutex.RUnlock()
+
+	log.Info("[SSV] RequestSeal cleanup check",
+		"slot", requestSeal.Slot,
+		"totalPending", totalPending,
+		"pendingWithXtID", len(pendingKeys),
+		"includedXts", len(included))
+
+	// Drop transactions NOT in the included list
+	totalDroppedPut := 0
+	totalDroppedOriginal := 0
+	for key := range pendingKeys {
+		if _, ok := included[key]; ok {
+			log.Info("[SSV] Keeping transaction (included in RequestSeal)", "xtID", key)
+			continue
+		}
+
+		removedPut, removedOriginal := b.dropTransactionsForXtKey(key)
+		totalDroppedPut += removedPut
+		totalDroppedOriginal += removedOriginal
+		if removedPut+removedOriginal > 0 {
+			log.Info("[SSV] Dropped staged sequencer transactions after RequestSeal abort",
+				"xtID", key,
+				"putInboxRemoved", removedPut,
+				"originalRemoved", removedOriginal)
+		} else {
+			log.Warn("[SSV] RequestSeal cleanup: no transactions found for xtID", "xtID", key)
+		}
+	}
+
+	if totalDroppedPut+totalDroppedOriginal > 0 {
+		log.Info("[SSV] RequestSeal cleanup completed",
+			"slot", requestSeal.Slot,
+			"totalDroppedPut", totalDroppedPut,
+			"totalDroppedOriginal", totalDroppedOriginal)
+	}
+
+	// Store RequestSeal info after cleanup
 	b.rsMutex.Lock()
 	b.lastRequestSealIncluded = make([][]byte, len(requestSeal.IncludedXts))
 	for i, xt := range requestSeal.IncludedXts {
@@ -1665,34 +1741,6 @@ func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *roll
 		}
 	} else {
 		log.Info("[SSV] RequestSeal received with no stored blocks yet (will build now)", "slot", requestSeal.Slot)
-	}
-
-	included := make(map[string]struct{}, len(requestSeal.IncludedXts))
-	for _, xt := range requestSeal.IncludedXts {
-		included[hexutil.Encode(xt)] = struct{}{}
-	}
-
-	b.sequencerTxMutex.RLock()
-	pendingKeys := make(map[string]struct{})
-	for _, entry := range b.pendingXTEntries {
-		if entry.xtID != "" {
-			pendingKeys[entry.xtID] = struct{}{}
-		}
-	}
-	b.sequencerTxMutex.RUnlock()
-
-	for key := range pendingKeys {
-		if _, ok := included[key]; ok {
-			continue
-		}
-
-		removedPut, removedOriginal := b.dropTransactionsForXtKey(key)
-		if removedPut+removedOriginal > 0 {
-			log.Info("[SSV] Dropped staged sequencer transactions after RequestSeal abort",
-				"xtID", key,
-				"putInboxRemoved", removedPut,
-				"originalRemoved", removedOriginal)
-		}
 	}
 
 	return nil
