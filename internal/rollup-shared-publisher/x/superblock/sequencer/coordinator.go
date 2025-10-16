@@ -754,14 +754,17 @@ func (sc *SequencerCoordinator) OnBlockBuildingComplete(ctx context.Context, blo
 	return nil
 }
 
-// handleConsensusDecision is invoked by the consensus layer when the underlying 2PC (SCP)
-// reaches a final decision for the active StartSC.
+// handleConsensusDecision processes the final decision from the consensus layer for a cross-chain
+// transaction. It updates the block builder state and manages transaction lifecycle based on whether
+// the transaction was committed (decision=true) or aborted (decision=false).
 //
-// The Decided message from the publisher is a preliminary hint about inclusion. RequestSeal
-// provides the authoritative final decision about which transactions are included in blocks.
-// This handler updates SCP state and processes queued StartSCs but does NOT clean up transactions.
-// Transaction cleanup is deferred to the RequestSeal handler to avoid race conditions when both
-// messages arrive nearly simultaneously.
+// For committed transactions, the block builder includes them in the draft block. For aborted
+// transactions, they are immediately removed from both the block builder and the execution layer's
+// pending pool to ensure they cannot be included in any block. This guarantees atomic inclusion
+// semantics: transactions are either fully included or fully excluded, with no partial states.
+//
+// After processing the decision, if the coordinator has returned to Building-Free state and there
+// are queued cross-chain transactions waiting, the next one is automatically started.
 func (sc *SequencerCoordinator) handleConsensusDecision(ctx context.Context, xtID *pb.XtID, decision bool) error {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
@@ -779,6 +782,14 @@ func (sc *SequencerCoordinator) handleConsensusDecision(ctx context.Context, xtI
 			Str("xt_id", xtID.Hex()).
 			Msg("SCP context already processed (likely by RequestSeal)")
 		return nil
+	}
+
+	// For aborted transactions, immediately invoke cleanup callback to remove from pending pool.
+	// This ensures the transaction cannot be committed in blocks built before RequestSeal arrives.
+	if !decision && sc.callbacks.CleanupAbortedTransaction != nil {
+		if err := sc.callbacks.CleanupAbortedTransaction(ctx, xtID); err != nil {
+			sc.log.Warn().Err(err).Str("xt_id", xtID.Hex()).Msg("Cleanup callback failed for aborted transaction")
+		}
 	}
 
 	// If we returned to Building-Free and have queued StartSCs, process the next one

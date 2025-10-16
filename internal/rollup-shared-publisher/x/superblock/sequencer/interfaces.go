@@ -22,6 +22,11 @@ type CoordinatorCallbacks struct {
 	// or not (vote=false). This callback is used by the coordinator during
 	// StartSC handling and is implemented by the host SDK (e.g., geth backend).
 	SimulateAndVote func(ctx context.Context, xtReq *pb.XTRequest, xtID *pb.XtID) (bool, error)
+	// CleanupAbortedTransaction is called when an SCP instance decides to abort,
+	// allowing the execution layer to immediately remove staged transactions from
+	// its pending pool. This ensures atomic exclude behavior when blocks are built
+	// before RequestSeal arrives.
+	CleanupAbortedTransaction func(ctx context.Context, xtID *pb.XtID) error
 }
 
 // BlockLifecycleManager handles block building lifecycle events

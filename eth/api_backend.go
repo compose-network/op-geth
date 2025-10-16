@@ -1594,6 +1594,8 @@ func (b *EthAPIBackend) SetSequencerCoordinator(coord sequencer.Coordinator, sp 
 		b.coordinator.SetCallbacks(sequencer.CoordinatorCallbacks{
 			// For SBCP mode simulation during StartSC
 			SimulateAndVote: b.simulateXTRequestForSBCP,
+			// For immediate cleanup of aborted transactions
+			CleanupAbortedTransaction: b.cleanupAbortedTransactionCallback,
 		})
 
 		// Set miner notifier and start
@@ -1750,6 +1752,29 @@ func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *roll
 // SSV
 func (b *EthAPIBackend) NotifyStateChange(from, to sequencer.State, slot uint64) error {
 	log.Debug("[SSV] SBCP state change", "from", from.String(), "to", to.String(), "slot", slot)
+	return nil
+}
+
+// cleanupAbortedTransactionCallback removes aborted cross-chain transactions from the pending pool
+// immediately upon consensus decision. This ensures transactions rejected by the consensus layer
+// cannot be included in blocks, maintaining atomic transaction semantics where transactions are
+// either fully committed or fully excluded across all participating chains.
+//
+// This callback is invoked by the sequencer coordinator and complements the RequestSeal cleanup,
+// providing early removal to handle the case where blocks are built before the seal message arrives.
+// SSV
+func (b *EthAPIBackend) cleanupAbortedTransactionCallback(ctx context.Context, xtID *rollupv1.XtID) error {
+	if xtID == nil {
+		return nil
+	}
+	key := hexutil.Encode(xtID.Hash)
+	removedPut, removedOriginal := b.dropTransactionsForXtKey(key)
+	if removedPut+removedOriginal > 0 {
+		log.Info("[SSV] Dropped aborted transactions via callback",
+			"xtID", key,
+			"putInboxRemoved", removedPut,
+			"originalRemoved", removedOriginal)
+	}
 	return nil
 }
 
