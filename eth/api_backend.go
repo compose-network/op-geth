@@ -1584,15 +1584,52 @@ func (b *EthAPIBackend) NotifySlotStart(startSlot *rollupv1.StartSlot) error {
 
 	// Clear any pending blocks from previous slot when new slot starts
 	b.pendingBlockMutex.Lock()
-	if len(b.pendingBlocks) > 0 {
+	prevBlockCount := len(b.pendingBlocks)
+	if prevBlockCount > 0 {
 		log.Warn("[SSV] Clearing unsent blocks from previous slot",
 			"prevSlot", b.pendingBlockSlot,
 			"newSlot", startSlot.Slot,
-			"blockCount", len(b.pendingBlocks))
+			"blockCount", prevBlockCount)
 	}
 	b.pendingBlocks = nil
 	b.pendingBlockSlot = startSlot.Slot
 	b.pendingBlockMutex.Unlock()
+
+	// Clear any lingering sequencer transactions from previous slot.
+	b.sequencerTxMutex.Lock()
+	prevTxCount := len(b.pendingXTEntries)
+	if prevTxCount > 0 {
+		putInboxCount := 0
+		originalCount := 0
+		for _, entry := range b.pendingXTEntries {
+			if entry.kind == sequencerTxPutInbox {
+				putInboxCount++
+			} else {
+				originalCount++
+			}
+		}
+
+		log.Warn("[SSV] Clearing lingering sequencer transactions from previous slot",
+			"slot", startSlot.Slot,
+			"totalTxs", prevTxCount,
+			"putInbox", putInboxCount,
+			"original", originalCount)
+
+		b.pendingXTEntries = nil
+		b.pendingByHash = make(map[common.Hash]int)
+	}
+	b.sequencerTxMutex.Unlock()
+
+	// Clear committed transaction tracking for new slot
+	b.committedTxsMutex.Lock()
+	prevCommittedCount := len(b.committedTxHashes)
+	if prevCommittedCount > 0 {
+		log.Debug("[SSV] Clearing committed tx hashes from previous slot",
+			"slot", startSlot.Slot,
+			"count", prevCommittedCount)
+	}
+	b.committedTxHashes = make(map[common.Hash]bool)
+	b.committedTxsMutex.Unlock()
 
 	return nil
 }
