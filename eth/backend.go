@@ -54,7 +54,6 @@ import (
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
 	"github.com/ethereum/go-ethereum/eth/tracers"
-	"github.com/ethereum/go-ethereum/eth/tracers/native"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
@@ -414,10 +413,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		log.Info("Unprotected transactions allowed")
 	}
 	eth.APIBackend.gpo = gasprice.NewOracle(eth.APIBackend, config.GPO, config.Miner.GasPrice)
-	if err := eth.APIBackend.ConfigureMailboxes(map[uint64]string{
-		native.RollupAChainID: config.RollupAMailboxAddr,
-		native.RollupBChainID: config.RollupBMailboxAddr,
-	}); err != nil {
+	if err := eth.APIBackend.ConfigureMailboxes(config.Mailboxes); err != nil {
 		return nil, err
 	}
 

@@ -76,8 +76,8 @@ var Defaults = Config{
 	SPListenAddr:           ":9898",
 	SPServerAddr:           "localhost:18080",
 	SequencerAddrs:         "77777:localhost:9898,88888:localhost:10898",
-	RollupAMailboxAddr:     "0x248721a59a2756E579026aDA017bd9B6adFe3e57",
-	RollupBMailboxAddr:     "0x248721a59a2756E579026aDA017bd9B6adFe3e57",
+	RollupAMailboxAddr:     "", // to be filled from registry
+	RollupBMailboxAddr:     "", // to be filled from registry
 	OverrideOptimismJovian: &defaultOptimismJovianOverride,
 }
 
@@ -212,6 +212,8 @@ type Config struct {
 	CoordinatorKey     string
 	RollupAMailboxAddr string
 	RollupBMailboxAddr string
+	Mailboxes          map[uint64]string `toml:",omitempty"`
+	RegistryPath       string            `toml:",omitempty"`
 }
 
 // CreateConsensusEngine creates a consensus engine for the given chain config.

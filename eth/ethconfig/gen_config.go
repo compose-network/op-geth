@@ -73,10 +73,12 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		RollupDisableTxPoolGossip                 bool
 		RollupDisableTxPoolAdmission              bool
 		RollupHaltOnIncompatibleProtocolVersion   string
-		InteropMessageRPC                         string `toml:",omitempty"`
-		InteropMempoolFiltering                   bool   `toml:",omitempty"`
-		RollupAMailboxAddr                        string
-		RollupBMailboxAddr                        string
+		InteropMessageRPC                         string            `toml:",omitempty"`
+		InteropMempoolFiltering                   bool              `toml:",omitempty"`
+		RollupAMailboxAddr                        string            // deprecated
+		RollupBMailboxAddr                        string            // deprecated
+		Mailboxes                                 map[uint64]string `toml:",omitempty"`
+		RegistryPath                              string            `toml:",omitempty"`
 	}
 	var enc Config
 	enc.Genesis = c.Genesis
@@ -139,6 +141,8 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.InteropMempoolFiltering = c.InteropMempoolFiltering
 	enc.RollupAMailboxAddr = c.RollupAMailboxAddr
 	enc.RollupBMailboxAddr = c.RollupBMailboxAddr
+	enc.Mailboxes = c.Mailboxes
+	enc.RegistryPath = c.RegistryPath
 	return &enc, nil
 }
 
@@ -205,6 +209,8 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		InteropMempoolFiltering                   *bool   `toml:",omitempty"`
 		RollupAMailboxAddr                        *string
 		RollupBMailboxAddr                        *string
+		Mailboxes                                 map[uint64]string `toml:",omitempty"`
+		RegistryPath                              *string           `toml:",omitempty"`
 	}
 	var dec Config
 	if err := unmarshal(&dec); err != nil {
@@ -389,6 +395,12 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.RollupBMailboxAddr != nil {
 		c.RollupBMailboxAddr = *dec.RollupBMailboxAddr
+	}
+	if dec.Mailboxes != nil {
+		c.Mailboxes = dec.Mailboxes
+	}
+	if dec.RegistryPath != nil {
+		c.RegistryPath = *dec.RegistryPath
 	}
 	return nil
 }

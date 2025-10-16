@@ -1156,6 +1156,13 @@ Please note that --` + MetricsHTTPFlag.Name + ` must be set to start the server.
 		Value:    ethconfig.Defaults.RollupBMailboxAddr,
 		Category: flags.SharedPublisherCategory,
 	}
+	// RegistryPathFlag optionally points geth to a local registry data dir.
+	RegistryPathFlag = &cli.StringFlag{
+		Name:     "registry.path",
+		Usage:    `Optional path to a Compose registry data directory (overrides embedded registry)`,
+		Value:    "",
+		Category: flags.RollupCategory,
+	}
 )
 
 var (
@@ -2002,6 +2009,9 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	}
 	if ctx.IsSet(MailboxAddrBFlag.Name) {
 		cfg.RollupBMailboxAddr = ctx.String(MailboxAddrBFlag.Name)
+	}
+	if ctx.IsSet(RegistryPathFlag.Name) {
+		cfg.RegistryPath = ctx.String(RegistryPathFlag.Name)
 	}
 	cfg.RollupDisableTxPoolGossip = ctx.Bool(RollupDisableTxPoolGossipFlag.Name)
 	cfg.RollupDisableTxPoolAdmission = cfg.RollupSequencerHTTP != "" && !ctx.Bool(RollupEnableTxPoolAdmissionFlag.Name)
