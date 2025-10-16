@@ -259,7 +259,9 @@ func (c *coordinator) RecordDecision(xtID *pb.XtID, decision bool) error {
 		Dur("duration", duration).
 		Msg("Recorded decision")
 
-	// Invoke decision callback so sequencer can transition state and process queued transactions
+	// Notify the sequencer coordinator about the decision to allow state transitions and
+	// processing of queued transactions. Transaction cleanup is handled separately by the
+	// RequestSeal handler to avoid race conditions.
 	c.callbackMgr.InvokeDecision(xtID, decision, duration)
 
 	// Schedule cleanup

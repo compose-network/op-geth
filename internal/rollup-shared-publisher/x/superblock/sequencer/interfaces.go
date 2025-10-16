@@ -22,9 +22,6 @@ type CoordinatorCallbacks struct {
 	// or not (vote=false). This callback is used by the coordinator during
 	// StartSC handling and is implemented by the host SDK (e.g., geth backend).
 	SimulateAndVote func(ctx context.Context, xtReq *pb.XTRequest, xtID *pb.XtID) (bool, error)
-	// OnDecision is called when a final decision is reached for a cross-chain transaction.
-	// This allows the host to clean up pooled transactions when decision is false (abort).
-	OnDecision func(ctx context.Context, xtID *pb.XtID, decision bool) error
 }
 
 // BlockLifecycleManager handles block building lifecycle events

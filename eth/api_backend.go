@@ -1149,8 +1149,9 @@ func (b *EthAPIBackend) OnBlockBuildingStart(ctx context.Context) error {
 	return nil
 }
 
-// OnBlockBuildingComplete is called when block building completes
-// Per SBCP spec: Always STORE all blocks, never send here. Sending happens in NotifyRequestSeal.
+// OnBlockBuildingComplete is called when block building completes.
+// Blocks are stored for later submission but not sent immediately. Block submission to the
+// shared publisher happens in NotifyRequestSeal after the seal request arrives.
 // SSV
 func (b *EthAPIBackend) OnBlockBuildingComplete(
 	ctx context.Context,
@@ -1570,8 +1571,6 @@ func (b *EthAPIBackend) SetSequencerCoordinator(coord sequencer.Coordinator, sp 
 		b.coordinator.SetCallbacks(sequencer.CoordinatorCallbacks{
 			// For SBCP mode simulation during StartSC
 			SimulateAndVote: b.simulateXTRequestForSBCP,
-			// Clean up pooled transactions when decision is made (especially on abort)
-			OnDecision: b.handleSCPDecision,
 		})
 
 		// Set miner notifier and start
@@ -2074,29 +2073,4 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 	)
 
 	return allSuccessful, nil
-}
-
-// handleSCPDecision is called when a consensus decision is reached for a cross-chain transaction.
-// When the decision is false (abort), it removes pooled transactions from the pending list and txpool
-// to prevent them from being included in blocks.
-// SSV
-func (b *EthAPIBackend) handleSCPDecision(ctx context.Context, xtID *rollupv1.XtID, decision bool) error {
-	xtIDStr := hexutil.Encode(xtID.Hash)
-
-	log.Info("[SSV] Handling SCP decision",
-		"xtID", xtIDStr,
-		"decision", decision)
-
-	// If decision is false (abort), remove pooled transactions for this XT
-	if !decision {
-		removedPut, removedOriginal := b.dropTransactionsForXtKey(xtIDStr)
-		if removedPut+removedOriginal > 0 {
-			log.Info("[SSV] Dropped pooled transactions after abort decision",
-				"xtID", xtIDStr,
-				"putInboxRemoved", removedPut,
-				"originalRemoved", removedOriginal)
-		}
-	}
-
-	return nil
 }

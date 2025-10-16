@@ -218,8 +218,8 @@ func (sc *SequencerCoordinator) handleStartSlot(startSlot *pb.StartSlot) error {
 	// Reset SCP per-slot tracking
 	sc.scpIntegration.ResetForSlot(startSlot.Slot)
 
-	// Per spec, StartSlot should be processed regardless of current state.
-	// If not in Waiting, first reset to Waiting; then move to Building-Free.
+	// StartSlot messages should be processed regardless of the current state to handle
+	// publisher crashes and restarts. Reset to Waiting first if needed, then proceed to Building-Free.
 	curr := sc.stateMachine.GetCurrentState()
 	if curr != StateWaiting {
 		_ = sc.stateMachine.TransitionTo(StateWaiting, startSlot.Slot, "reset by StartSlot")
@@ -755,8 +755,13 @@ func (sc *SequencerCoordinator) OnBlockBuildingComplete(ctx context.Context, blo
 }
 
 // handleConsensusDecision is invoked by the consensus layer when the underlying 2PC (SCP)
-// reaches a final decision for the active StartSC. It updates the local SCP integration
-// and unblocks any queued StartSC messages.
+// reaches a final decision for the active StartSC.
+//
+// The Decided message from the publisher is a preliminary hint about inclusion. RequestSeal
+// provides the authoritative final decision about which transactions are included in blocks.
+// This handler updates SCP state and processes queued StartSCs but does NOT clean up transactions.
+// Transaction cleanup is deferred to the RequestSeal handler to avoid race conditions when both
+// messages arrive nearly simultaneously.
 func (sc *SequencerCoordinator) handleConsensusDecision(ctx context.Context, xtID *pb.XtID, decision bool) error {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
@@ -766,19 +771,14 @@ func (sc *SequencerCoordinator) handleConsensusDecision(ctx context.Context, xtI
 		Bool("decision", decision).
 		Msg("Processing consensus decision at coordinator")
 
+	// HandleDecision is idempotent - if RequestSeal already processed this, it's a no-op
 	if err := sc.scpIntegration.HandleDecision(xtID, decision); err != nil {
-		sc.log.Error().Err(err).Str("xt_id", xtID.Hex()).Msg("Failed to apply decision to SCP integration")
-		return err
-	}
-
-	// Notify host SDK about the decision for transaction cleanup (especially on abort)
-	if sc.callbacks.OnDecision != nil {
-		if err := sc.callbacks.OnDecision(ctx, xtID, decision); err != nil {
-			sc.log.Error().Err(err).
-				Str("xt_id", xtID.Hex()).
-				Bool("decision", decision).
-				Msg("OnDecision callback failed")
-		}
+		// If context not found, it means RequestSeal already handled this decision
+		sc.log.Debug().
+			Err(err).
+			Str("xt_id", xtID.Hex()).
+			Msg("SCP context already processed (likely by RequestSeal)")
+		return nil
 	}
 
 	// If we returned to Building-Free and have queued StartSCs, process the next one
