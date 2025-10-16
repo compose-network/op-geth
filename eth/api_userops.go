@@ -485,7 +485,16 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 			}
 		}
 
-		errData["callData"] = hexutil.Encode(callData)
+		callDataHex := hexutil.Encode(callData)
+		errData["callData"] = callDataHex
+		if len(callData) >= 4 {
+			selector := callData[:4]
+			selectorHex := hexutil.Encode(selector)
+			errData["entryPointSelector"] = selectorHex
+			if method, methodErr := parsedABI.MethodById(selector); methodErr == nil {
+				errData["entryPointFunction"] = method.RawName
+			}
+		}
 
 		var (
 			revertData any
@@ -502,11 +511,13 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 		}
 		if decoded != nil {
 			errData["decoded"] = decoded
+		} else if reasonText := extractRevertText(err); reasonText != "" {
+			errData["revertReason"] = reasonText
 		}
 
 		log.Warn("[SSV] handleOps simulation failed",
 			"err", err,
-			"callData", hexutil.Encode(callData),
+			"callData", callDataHex,
 			"revertData", revertData,
 			"decoded", decoded,
 			"details", errData,
@@ -775,6 +786,25 @@ func normalizeABIValue(value interface{}) any {
 	default:
 		return fmt.Sprintf("%v", value)
 	}
+}
+
+func extractRevertText(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	if msg == "" {
+		return ""
+	}
+	const prefix = "execution reverted"
+	idx := strings.Index(msg, prefix)
+	if idx == -1 {
+		return ""
+	}
+	after := strings.TrimSpace(msg[idx+len(prefix):])
+	after = strings.TrimPrefix(after, ":")
+	after = strings.TrimSpace(after)
+	return after
 }
 
 // decodeEntryPointError attempts to decode EntryPoint custom errors using the ABI.
