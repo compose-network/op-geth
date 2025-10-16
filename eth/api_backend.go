@@ -1078,16 +1078,28 @@ func (b *EthAPIBackend) GetOrderedTransactionsForBlock(ctx context.Context) (typ
 }
 
 // buildSequencerOnlyList assembles only the sequencer-managed transactions in the
-// correct internal order: putInbox(), then the original user txs.
+// correct internal order: putInbox() first, then original user transactions.
+// This maintains a consistent snapshot by holding the lock for the entire read operation,
+// preventing race conditions where transactions might be read in incorrect order.
 // Normal mempool transactions are not part of this list.
 func (b *EthAPIBackend) buildSequencerOnlyList() types.Transactions {
+	b.sequencerTxMutex.RLock()
+	defer b.sequencerTxMutex.RUnlock()
+
 	var orderedTxs types.Transactions
 
-	for _, tx := range b.GetPendingPutInboxTxs() {
-		orderedTxs = append(orderedTxs, tx)
+	// First pass: add all putInbox transactions
+	for _, entry := range b.pendingXTEntries {
+		if entry.kind == sequencerTxPutInbox {
+			orderedTxs = append(orderedTxs, entry.tx)
+		}
 	}
-	for _, tx := range b.GetPendingOriginalTxs() {
-		orderedTxs = append(orderedTxs, tx)
+
+	// Second pass: add all original transactions
+	for _, entry := range b.pendingXTEntries {
+		if entry.kind == sequencerTxOriginal {
+			orderedTxs = append(orderedTxs, entry.tx)
+		}
 	}
 
 	return orderedTxs
