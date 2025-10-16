@@ -215,6 +215,7 @@ type Config struct {
 	SPListenAddr   string `toml:",omitempty"`
 	SPAddr         string `toml:",omitempty"`
 	SequencerAddrs string `toml:",omitempty"`
+	NetworkId      uint64 `toml:"-"` // Derived from Eth.NetworkId; not settable via TOML.
 	SequencerKey   string `toml:",omitempty"`
 	CoordinatorKey string `toml:",omitempty"`
 

@@ -75,7 +75,7 @@ var Defaults = Config{
 
 	SPListenAddr:           ":9898",
 	SPServerAddr:           "localhost:18080",
-	SequencerAddrs:         "77777:localhost:9898,88888:localhost:10898",
+	SequencerAddrs:         "", // to be filled from registry
 	RollupAMailboxAddr:     "", // to be filled from registry
 	RollupBMailboxAddr:     "", // to be filled from registry
 	OverrideOptimismJovian: &defaultOptimismJovianOverride,

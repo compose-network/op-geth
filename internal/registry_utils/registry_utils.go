@@ -2,6 +2,7 @@ package registry_utils
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	reg "github.com/compose-network/registry/registry"
@@ -50,4 +51,51 @@ func (u RegistryUtils) Mailboxes() (map[uint64]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// SequencerAddrs returns a map chainID -> host:port for all chains in the network.
+func (u RegistryUtils) SequencerAddrs() (map[uint64]string, error) {
+	n, err := u.r.GetNetworkBySlug(u.network)
+	if err != nil {
+		return nil, err
+	}
+	chains, err := n.ListChains()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[uint64]string, len(chains))
+	for _, ch := range chains {
+		ccfg, err := ch.LoadConfig()
+		if err != nil {
+			return nil, err
+		}
+		addr := strings.TrimSpace(ccfg.Sequencer)
+		if addr == "" {
+			// fallback to compose.sequencer if present
+			if strings.TrimSpace(ccfg.Compose.Sequencer.Host) != "" && ccfg.Compose.Sequencer.Port != 0 {
+				addr = fmt.Sprintf("%s:%d", ccfg.Compose.Sequencer.Host, ccfg.Compose.Sequencer.Port)
+			}
+		}
+		if addr != "" {
+			out[ccfg.ChainID] = addr
+		}
+	}
+	return out, nil
+}
+
+// JoinSequencerAddrs deterministically formats map[chainID]addr into "id:addr,id:addr".
+func JoinSequencerAddrs(m map[uint64]string) string {
+	if len(m) == 0 {
+		return ""
+	}
+	ids := make([]uint64, 0, len(m))
+	for id := range m {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	parts := make([]string, 0, len(ids))
+	for _, id := range ids {
+		parts = append(parts, fmt.Sprintf("%d:%s", id, m[id]))
+	}
+	return strings.Join(parts, ",")
 }

@@ -164,6 +164,46 @@ func loadBaseConfig(ctx *cli.Context) gethConfig {
 // makeConfigNode loads geth configuration and creates a blank node instance.
 func makeConfigNode(ctx *cli.Context) (*node.Node, gethConfig) {
 	cfg := loadBaseConfig(ctx)
+
+	// Resolve registry
+	regPath := cfg.Eth.RegistryPath
+	if ctx.IsSet(utils.RegistryPathFlag.Name) {
+		regPath = ctx.String(utils.RegistryPathFlag.Name)
+	}
+	ru, err := registry_utils.New(regPath, "hoodi")
+	if err != nil {
+		utils.Fatalf("registry init: %v", err)
+	}
+
+	// Derive rollup identity early from --networkid or TOML Eth.NetworkId so node.New can use it.
+	if ctx.IsSet(utils.NetworkIdFlag.Name) {
+		cfg.Node.NetworkId = ctx.Uint64(utils.NetworkIdFlag.Name)
+	} else if cfg.Eth.NetworkId != 0 {
+		cfg.Node.NetworkId = cfg.Eth.NetworkId
+	}
+
+	// Resolve sequencer.addrs from registry if CLI/TOML did not provide it and log source/value.
+	seqSource := "cli"
+	if !ctx.IsSet(utils.SequencerAddrs.Name) {
+		if strings.TrimSpace(cfg.Node.SequencerAddrs) != "" {
+			seqSource = "toml"
+		}
+	}
+	if !ctx.IsSet(utils.SequencerAddrs.Name) && strings.TrimSpace(cfg.Node.SequencerAddrs) == "" {
+		sm, err := ru.SequencerAddrs()
+		seqSource = "registry"
+
+		if err != nil {
+			utils.Fatalf("registry sequencer addrs: %v", err)
+		}
+		cfg.Node.SequencerAddrs = registry_utils.JoinSequencerAddrs(sm)
+	}
+	seqCount := 0
+	if s := strings.TrimSpace(cfg.Node.SequencerAddrs); s != "" {
+		seqCount = len(strings.Split(s, ","))
+	}
+	log.Info("SequencerAddrs resolved", "source", seqSource, "count", seqCount, "value", cfg.Node.SequencerAddrs)
+
 	stack, err := node.New(&cfg.Node)
 	if err != nil {
 		utils.Fatalf("Failed to create the protocol stack: %v", err)
@@ -174,6 +214,40 @@ func makeConfigNode(ctx *cli.Context) (*node.Node, gethConfig) {
 	}
 
 	utils.SetEthConfig(ctx, stack, &cfg.Eth)
+
+	// Resolve mailboxes (registry < TOML < CLI overrides)
+	mailSource := "toml"
+	overrideA := false
+	overrideB := false
+	if cfg.Eth.Mailboxes == nil {
+		cfg.Eth.Mailboxes = make(map[uint64]string)
+	}
+	if len(cfg.Eth.Mailboxes) == 0 {
+		mailSource = "registry"
+		m, err := ru.Mailboxes()
+		if err != nil {
+			utils.Fatalf("registry mailboxes: %v", err)
+		}
+		cfg.Eth.Mailboxes = m
+	}
+	if s := strings.TrimSpace(cfg.Eth.RollupAMailboxAddr); s != "" {
+		const RollupAChainID = 77777
+		cfg.Eth.Mailboxes[RollupAChainID] = s
+		overrideA = true
+	}
+	if s := strings.TrimSpace(cfg.Eth.RollupBMailboxAddr); s != "" {
+		const RollupBChainID = 88888
+		cfg.Eth.Mailboxes[RollupBChainID] = s
+		overrideB = true
+	}
+	log.Info("Mailboxes resolved",
+		"source", mailSource,
+		"override_a", overrideA,
+		"override_b", overrideB,
+		"count", len(cfg.Eth.Mailboxes),
+		"values", cfg.Eth.Mailboxes,
+	)
+
 	if ctx.IsSet(utils.EthStatsURLFlag.Name) {
 		cfg.Ethstats.URL = ctx.String(utils.EthStatsURLFlag.Name)
 	}
@@ -224,53 +298,6 @@ func constructDevModeBanner(ctx *cli.Context, cfg gethConfig) string {
 // makeFullNode loads geth configuration and creates the Ethereum backend.
 func makeFullNode(ctx *cli.Context) *node.Node {
 	stack, cfg := makeConfigNode(ctx)
-	{
-		// === Registry ===
-		regPath := cfg.Eth.RegistryPath
-		ru, err := registry_utils.New(regPath, "hoodi")
-		if err != nil {
-			utils.Fatalf("registry init: %v", err)
-		}
-		log.Info("Initialized registry", "path", regPath)
-
-		// === Mailboxes ===
-		// Overrides are: registry < config file < cli flags
-		// If no config file values are provided, fill with registry values
-		mailSource := "toml"
-		override_a := false
-		override_b := false
-		if cfg.Eth.Mailboxes == nil {
-			cfg.Eth.Mailboxes = make(map[uint64]string)
-		}
-		if len(cfg.Eth.Mailboxes) == 0 {
-			mailSource = "registry"
-			m, err := ru.Mailboxes()
-			if err != nil {
-				utils.Fatalf("registry mailboxes: %v", err)
-			}
-			cfg.Eth.Mailboxes = m
-		}
-		// If CLI overrides are provided, use them to override
-		// Todo: remove RollupAMailboxAddr and RollupBMailboxAddr cli flags
-		// and use Mailboxes flag instead to be more generic
-		if s := strings.TrimSpace(cfg.Eth.RollupAMailboxAddr); s != "" {
-			const RollupAChainID = 77777 // use same variable name to easily grep when we refactor
-			cfg.Eth.Mailboxes[RollupAChainID] = s
-			override_a = true
-		}
-		if s := strings.TrimSpace(cfg.Eth.RollupBMailboxAddr); s != "" {
-			const RollupBChainID = 88888 // use same variable name to easily grep when we refactor
-			cfg.Eth.Mailboxes[RollupBChainID] = s
-			override_b = true
-		}
-		log.Info("Mailboxes resolved",
-			"source", mailSource,
-			"override_a", override_a,
-			"override_b", override_b,
-			"count", len(cfg.Eth.Mailboxes),
-			"values", cfg.Eth.Mailboxes,
-		)
-	}
 	if ctx.IsSet(utils.OverrideOsaka.Name) {
 		v := ctx.Uint64(utils.OverrideOsaka.Name)
 		cfg.Eth.OverrideOsaka = &v
