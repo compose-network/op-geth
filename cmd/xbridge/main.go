@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/rand"
+	"flag"
 	"fmt"
 	"log"
 	"math/big"
 	"os"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -42,6 +44,16 @@ type Config struct {
 }
 
 func main() {
+	batchMode := flag.Bool("batch", false, "Enable batch mode to send multiple transactions")
+	numTxs := flag.Int("num", 1, "Number of transactions to send in batch mode")
+	delayMs := flag.Int("delay", 500, "Delay in milliseconds between transactions in batch mode")
+	amountValue := flag.Int64("amount", 100000, "Token amount to send")
+	flag.Parse()
+
+	if *batchMode && *numTxs < 1 {
+		log.Fatal("Number of transactions must be at least 1 in batch mode")
+	}
+
 	config := loadConfigFromYAML(configFile)
 
 	rollupA, exists := config.Rollups["A"]
@@ -68,20 +80,168 @@ func main() {
 	publicKeyECDSA, _ = publicKey.(*ecdsa.PublicKey)
 	addressB := crypto.PubkeyToAddress(*publicKeyECDSA)
 
-	log.Printf("using address: %v", addressA)
-
 	tokenA := common.HexToAddress(config.Token)
 	bridgeA := common.HexToAddress(rollupA.Bridge)
 	bridgeB := common.HexToAddress(rollupB.Bridge)
 
+	// Get starting nonces
+	startingNonceA, err := getNonceFor(rollupA.RPC, addressA)
+	if err != nil {
+		log.Fatal("Failed to get nonce for address A:", err)
+	}
+
+	startingNonceB, err := getNonceFor(rollupB.RPC, addressB)
+	if err != nil {
+		log.Fatal("Failed to get nonce for address B:", err)
+	}
+
+	if *batchMode {
+		log.Printf("Running in BATCH mode: %d transactions with %dms delay", *numTxs, *delayMs)
+		log.Printf("Address A: %s (starting nonce: %d)", addressA.Hex(), startingNonceA)
+		log.Printf("Address B: %s (starting nonce: %d)", addressB.Hex(), startingNonceB)
+		runBatchMode(
+			rollupA, rollupB,
+			chainAId, chainBId,
+			privateKeyA, privateKeyB,
+			addressA, addressB,
+			tokenA, bridgeA, bridgeB,
+			startingNonceA, startingNonceB,
+			*numTxs, time.Duration(*delayMs)*time.Millisecond,
+			big.NewInt(*amountValue),
+		)
+	} else {
+		log.Printf("Running in SINGLE mode")
+		log.Printf("Address A: %s (nonce: %d)", addressA.Hex(), startingNonceA)
+		log.Printf("Address B: %s (nonce: %d)", addressB.Hex(), startingNonceB)
+		runSingleMode(
+			rollupA, rollupB,
+			chainAId, chainBId,
+			privateKeyA, privateKeyB,
+			addressA, addressB,
+			tokenA, bridgeA, bridgeB,
+			startingNonceA, startingNonceB,
+			big.NewInt(*amountValue),
+		)
+	}
+}
+
+func runSingleMode(
+	rollupA, rollupB Rollup,
+	chainAId, chainBId *big.Int,
+	privateKeyA, privateKeyB *ecdsa.PrivateKey,
+	addressA, addressB common.Address,
+	tokenA, bridgeA, bridgeB common.Address,
+	nonceA, nonceB uint64,
+	amount *big.Int,
+) {
+	ctx := context.Background()
+
 	// Create bridge parameters
 	sessionId := generateRandomSessionID()
-	amount := big.NewInt(100)
 
-	// Create a send transaction (A -> B)
+	log.Printf("Creating single bridge transaction with session ID: %s", sessionId.String())
+
+	// Create transaction pair
+	xtRequest, err := createBridgeTransactionPair(
+		chainAId, chainBId,
+		privateKeyA, privateKeyB,
+		addressA, addressB,
+		tokenA, bridgeA, bridgeB,
+		nonceA, nonceB,
+		amount, sessionId,
+	)
+	if err != nil {
+		log.Fatalf("Failed to create transaction pair: %v", err)
+	}
+
+	// Send the transaction
+	err = sendXTRequest(ctx, rollupA.RPC, xtRequest)
+	if err != nil {
+		log.Fatalf("Failed to send transaction: %v", err)
+	}
+
+	fmt.Printf("✓ Successfully submitted cross-chain transaction\n")
+}
+
+func runBatchMode(
+	rollupA, rollupB Rollup,
+	chainAId, chainBId *big.Int,
+	privateKeyA, privateKeyB *ecdsa.PrivateKey,
+	addressA, addressB common.Address,
+	tokenA, bridgeA, bridgeB common.Address,
+	startingNonceA, startingNonceB uint64,
+	numTxs int,
+	delay time.Duration,
+	amount *big.Int,
+) {
+	ctx := context.Background()
+
+	log.Printf("Starting batch execution...")
+
+	successCount := 0
+	failCount := 0
+
+	for i := 0; i < numTxs; i++ {
+		currentNonceA := startingNonceA + uint64(i)
+		currentNonceB := startingNonceB + uint64(i)
+
+		// Generate unique session ID for each transaction pair
+		sessionId := generateRandomSessionID()
+
+		log.Printf("[%d/%d] Creating transaction pair with nonces A=%d, B=%d, session=%s",
+			i+1, numTxs, currentNonceA, currentNonceB, sessionId.String())
+
+		// Create transaction pair
+		xtRequest, err := createBridgeTransactionPair(
+			chainAId, chainBId,
+			privateKeyA, privateKeyB,
+			addressA, addressB,
+			tokenA, bridgeA, bridgeB,
+			currentNonceA, currentNonceB,
+			amount, sessionId,
+		)
+		if err != nil {
+			log.Printf("✗ [%d/%d] Failed to create transaction pair: %v", i+1, numTxs, err)
+			failCount++
+			continue
+		}
+
+		// Send the transaction
+		err = sendXTRequest(ctx, rollupA.RPC, xtRequest)
+		if err != nil {
+			log.Printf("✗ [%d/%d] Failed to send: %v", i+1, numTxs, err)
+			failCount++
+			continue
+		}
+
+		log.Printf("✓ [%d/%d] Successfully submitted", i+1, numTxs)
+		successCount++
+
+		// Sleep before next transaction (except for the last one)
+		if i < numTxs-1 {
+			time.Sleep(delay)
+		}
+	}
+
+	fmt.Printf("\n=== Batch Execution Summary ===\n")
+	fmt.Printf("Total transactions: %d\n", numTxs)
+	fmt.Printf("Successful: %d\n", successCount)
+	fmt.Printf("Failed: %d\n", failCount)
+	fmt.Printf("Success rate: %.1f%%\n", float64(successCount)/float64(numTxs)*100)
+}
+
+func createBridgeTransactionPair(
+	chainAId, chainBId *big.Int,
+	privateKeyA, privateKeyB *ecdsa.PrivateKey,
+	addressA, addressB common.Address,
+	tokenA, bridgeA, bridgeB common.Address,
+	nonceA, nonceB uint64,
+	amount, sessionId *big.Int,
+) (*rollupv1.XTRequest, error) {
+	// Create send transaction (A -> B)
 	sendParams := BridgeParams{
-		ChainSrc:   chainAId, // 11111
-		ChainDest:  chainBId, // 22222
+		ChainSrc:   chainAId,
+		ChainDest:  chainBId,
 		Token:      tokenA,
 		Sender:     addressA,
 		Receiver:   addressB,
@@ -89,29 +249,22 @@ func main() {
 		SessionId:  sessionId,
 		DestBridge: bridgeB,
 		SrcBridge:  bridgeA,
-	}
-
-	fmt.Println(sendParams)
-
-	nonceA, err := getNonceFor(rollupA.RPC, addressA)
-	if err != nil {
-		log.Fatal(err)
 	}
 
 	signedTx1, err := createSendTransaction(sendParams, nonceA, privateKeyA, bridgeA)
 	if err != nil {
-		log.Fatal("Failed to create send transaction:", err)
+		return nil, fmt.Errorf("failed to create send transaction: %w", err)
 	}
 
 	rlpSignedTx1, err := signedTx1.MarshalBinary()
 	if err != nil {
-		log.Fatal(err)
+		return nil, fmt.Errorf("failed to marshal send transaction: %w", err)
 	}
 
-	// Create a receive transaction (B -> A)
+	// Create receive transaction (B receives from A)
 	receiveParams := BridgeParams{
-		ChainSrc:   chainAId, // 11111
-		ChainDest:  chainBId, // 22222
+		ChainSrc:   chainAId,
+		ChainDest:  chainBId,
 		Token:      tokenA,
 		Sender:     addressA,
 		Receiver:   addressB,
@@ -121,40 +274,34 @@ func main() {
 		SrcBridge:  bridgeA,
 	}
 
-	nonceB, err := getNonceFor(rollupB.RPC, addressB)
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	signedTx2, err := createReceiveTransaction(receiveParams, nonceB, privateKeyB, bridgeB)
 	if err != nil {
-		log.Fatal("Failed to create receive transaction:", err)
+		return nil, fmt.Errorf("failed to create receive transaction: %w", err)
 	}
 
 	rlpSignedTx2, err := signedTx2.MarshalBinary()
 	if err != nil {
-		log.Fatal(err)
+		return nil, fmt.Errorf("failed to marshal receive transaction: %w", err)
 	}
 
-	xtRequest := &rollupv1.XTRequest{
+	// Create XTRequest
+	return &rollupv1.XTRequest{
 		Transactions: []*rollupv1.TransactionRequest{
 			{
-				ChainId: chainAId.Bytes(),
-				Transaction: [][]byte{
-					rlpSignedTx1,
-				},
+				ChainId:     chainAId.Bytes(),
+				Transaction: [][]byte{rlpSignedTx1},
 			},
 			{
-				ChainId: chainBId.Bytes(),
-				Transaction: [][]byte{
-					rlpSignedTx2,
-				},
+				ChainId:     chainBId.Bytes(),
+				Transaction: [][]byte{rlpSignedTx2},
 			},
 		},
-	}
+	}, nil
+}
 
+func sendXTRequest(ctx context.Context, rpcURL string, xtRequest *rollupv1.XTRequest) error {
 	spMsg := &rollupv1.Message{
-		SenderId: "client",
+		SenderId: "xbridge-client",
 		Payload: &rollupv1.Message_XtRequest{
 			XtRequest: xtRequest,
 		},
@@ -162,27 +309,23 @@ func main() {
 
 	encodedPayload, err := proto.Marshal(spMsg)
 	if err != nil {
-		log.Fatalf("Failed to marshal XTRequest: %v", err)
+		return fmt.Errorf("failed to marshal XTRequest: %w", err)
 	}
 
-	fmt.Printf("Successfully encoded send-receive payload. Size: %d bytes\n", len(encodedPayload))
-	fmt.Printf("Session ID: %d\n", sessionId.Int64())
-	fmt.Printf("Send amount: %d\n", amount.Int64())
-	fmt.Printf("Receive amount: %d\n", amount.Int64())
-
-	l1Client, err := rpc.Dial(rollupA.RPC)
+	client, err := rpc.DialContext(ctx, rpcURL)
 	if err != nil {
-		log.Fatalf("could not connect to custom rpc: %v", err)
+		return fmt.Errorf("failed to connect to RPC: %w", err)
 	}
-	defer l1Client.Close()
+	defer client.Close()
 
-	var resultHashes []common.Hash
-	err = l1Client.CallContext(context.Background(), &resultHashes, sendTxRPCMethod, hexutil.Encode(encodedPayload))
+	// Call eth_sendXTransaction - response is ignored, we just check if RPC succeeded
+	var result interface{}
+	err = client.CallContext(ctx, &result, sendTxRPCMethod, hexutil.Encode(encodedPayload))
 	if err != nil {
-		log.Fatalf("RPC call failed: %v", err)
+		return fmt.Errorf("RPC call failed: %w", err)
 	}
 
-	fmt.Printf("Submitted %d transactions: %v\n", len(resultHashes), resultHashes)
+	return nil
 }
 
 func loadConfigFromYAML(filename string) Config {

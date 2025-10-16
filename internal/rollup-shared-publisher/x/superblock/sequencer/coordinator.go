@@ -527,6 +527,19 @@ func (sc *SequencerCoordinator) handleRequestSeal(ctx context.Context, from stri
 		}
 	}
 
+	// Clear queued StartSC messages: RequestSeal marks the end of the SCP phase for this slot.
+	// Messages that were queued but not yet processed arrived too late (after the seal cutover
+	// time) to be included in this slot. The publisher tracks attempted transactions and will
+	// re-queue them for the next slot if this slot fails. The sequencer should not carry over
+	// queued messages across slot boundaries.
+	if len(sc.pendingStartSCs) > 0 {
+		sc.log.Info().
+			Int("dropped_count", len(sc.pendingStartSCs)).
+			Uint64("slot", requestSeal.Slot).
+			Msg("Clearing queued StartSC messages at RequestSeal (too late for this slot)")
+		sc.pendingStartSCs = nil
+	}
+
 	// Notify miner to seal current block
 	if sc.minerNotifier != nil {
 		if err := sc.minerNotifier.NotifyRequestSeal(ctx, requestSeal); err != nil {
