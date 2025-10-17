@@ -1288,7 +1288,7 @@ func (b *EthAPIBackend) clearCommittedSequencerTransactions(committed map[common
 	for hash := range removeSet {
 		if tx := b.eth.txPool.Get(hash); tx != nil {
 			tx.SetRejected()
-			log.Info("[SSV] Marked committed tx as rejected in txpool to prevent re-inclusion",
+			log.Debug("[SSV] Marked committed tx as rejected in txpool to prevent re-inclusion",
 				"txHash", hash.Hex())
 		}
 	}
