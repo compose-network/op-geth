@@ -107,7 +107,7 @@ func Setup(ctx context.Context, cfg Config) (*Runtime, error) {
 		Slot: slot.Config{
 			Duration:    slotDuration,
 			SealCutover: sealCutover,
-			GenesisTime: time.Now(),
+			GenesisTime: time.Unix(1760599941, 0), // Custom genesis time
 		},
 		BlockTimeout:         30 * time.Second,
 		MaxLocalTxs:          1000,
