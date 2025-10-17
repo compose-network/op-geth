@@ -284,7 +284,7 @@ func New(conf *Config) (*Node, error) {
 		PeerAddrs:       addrs,
 		P2PListenAddr:   conf.SPListenAddr,
 		Log:             ssvLogger,
-		SlotDuration:    12 * time.Second,
+		SlotDuration:    6 * time.Second,
 		SlotSealCutover: 2.0 / 3.0,
 	})
 	if err != nil {

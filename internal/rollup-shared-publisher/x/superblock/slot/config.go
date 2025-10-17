@@ -11,7 +11,7 @@ type Config struct {
 
 func DefaultConfig() Config {
 	return Config{
-		Duration:    12 * time.Second, // Ethereum slot alignment
-		SealCutover: 2.0 / 3.0,        // Seal at 8 seconds into 12-second slot
+		Duration:    6 * time.Second, // Ethereum slot alignment
+		SealCutover: 2.0 / 3.0,       // Seal at 8 seconds into 12-second slot
 	}
 }
