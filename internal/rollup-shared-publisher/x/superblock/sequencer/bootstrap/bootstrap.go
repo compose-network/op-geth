@@ -95,7 +95,7 @@ func Setup(ctx context.Context, cfg Config) (*Runtime, error) {
 	// Sequencer coordinator (SBCP)
 	slotDuration := cfg.SlotDuration
 	if slotDuration == 0 {
-		slotDuration = 12 * time.Second
+		slotDuration = 6 * time.Second
 	}
 	sealCutover := cfg.SlotSealCutover
 	if sealCutover == 0 {
