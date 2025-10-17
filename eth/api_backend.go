@@ -1400,7 +1400,9 @@ func (b *EthAPIBackend) waitForPutInboxTransactionsToBeProcessed() error {
 	return nil
 }
 
-func (b *EthAPIBackend) poolPayloadTx(tx *types.Transaction) {
+func (b *EthAPIBackend) poolPayloadTx(
+	ctx context.Context,
+	tx *types.Transaction) {
 	b.sequencerTxMutex.Lock()
 	b.addSequencerEntryLocked(tx, sequencerTxOriginal)
 	b.sequencerTxMutex.Unlock()
@@ -1408,7 +1410,7 @@ func (b *EthAPIBackend) poolPayloadTx(tx *types.Transaction) {
 	// Add to Ethereum txpool for native nonce management.
 	// Transactions are filtered from block building via skip logic until SCP coordination completes,
 	// ensuring proper nonce sequencing while preventing premature inclusion.
-	if err := b.sendTx(context.Background(), tx); err != nil {
+	if err := b.sendTx(ctx, tx); err != nil {
 		log.Warn("[SSV] Failed to add original tx to txpool for nonce management",
 			"txHash", tx.Hash().Hex(), "err", err)
 	} else {
@@ -2131,7 +2133,7 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 			_, done := txDone[simState.Tx.Hash().Hex()]
 			if newSimState.Success && !done && len(newSimState.Dependencies) == 0 {
 				log.Info("[SSV] Pooling transaction after re-simulation", "hash", simState.Tx.Hash().Hex())
-				b.poolPayloadTx(simState.Tx)
+				b.poolPayloadTx(ctx, simState.Tx)
 				b.assignXtKeyToHash(simState.Tx, xtID)
 				txDone[simState.Tx.Hash().Hex()] = struct{}{}
 			}
@@ -2144,7 +2146,7 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 		_, done := txDone[tx.Hash().Hex()]
 		if simState.Success && !done && len(simState.Dependencies) == 0 {
 			log.Info("[SSV] Pooling remaining successful transaction", "hash", tx.Hash().Hex())
-			b.poolPayloadTx(tx)
+			b.poolPayloadTx(ctx, tx)
 			b.assignXtKeyToHash(tx, xtID)
 			txDone[tx.Hash().Hex()] = struct{}{}
 		}
