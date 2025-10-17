@@ -1780,6 +1780,17 @@ func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *roll
 // SSV
 func (b *EthAPIBackend) NotifyStateChange(from, to sequencer.State, slot uint64) error {
 	log.Debug("[SSV] SBCP state change", "from", from.String(), "to", to.String(), "slot", slot)
+
+	// When SCP completes (Building-Locked → Building-Free), force miner to rebuild payload
+	// with newly added SCP transactions. Without this, the payload remains stale and
+	// RequestSeal seals a block without the SCP transactions.
+	if from == sequencer.StateBuildingLocked && to == sequencer.StateBuildingFree {
+		if miner := b.eth.miner; miner != nil {
+			log.Info("[SSV] Forcing payload rebuild after SCP completion", "slot", slot)
+			miner.InvalidatePendingCache()
+		}
+	}
+
 	return nil
 }
 
