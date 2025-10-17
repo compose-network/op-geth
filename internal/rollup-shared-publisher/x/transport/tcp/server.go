@@ -36,13 +36,9 @@ type Server struct {
 }
 
 func DefaultServerConfig() transport.Config {
-	return transport.Config{
-		ListenAddr:      ":8080",
-		MaxConnections:  1024,
-		MaxMessageSize:  1024 * 1024,
-		KeepAlive:       true,
-		KeepAlivePeriod: 30 * time.Second,
-	}
+	cfg := transport.DefaultConfig()
+	cfg.MaxConnections = 1024
+	return cfg
 }
 
 // NewServer creates a new TCP server
