@@ -1283,10 +1283,21 @@ func (b *EthAPIBackend) clearCommittedSequencerTransactions(committed map[common
 	removedPutInbox, removedOriginal := b.removeEntriesByHashLocked(removeSet)
 	b.sequencerTxMutex.Unlock()
 
+	// Mark committed transactions as rejected in txpool to prevent re-inclusion.
+	// Without this, transactions stay in txpool after being cleared from pendingXTEntries.
+	for hash := range removeSet {
+		if tx := b.eth.txPool.Get(hash); tx != nil {
+			tx.SetRejected()
+			log.Info("[SSV] Marked committed tx as rejected in txpool to prevent re-inclusion",
+				"txHash", hash.Hex())
+		}
+	}
+
 	if removedPutInbox > 0 || removedOriginal > 0 {
-		log.Debug("[SSV] Cleared committed cross-chain txs after delivery",
+		log.Info("[SSV] Cleared committed cross-chain txs after delivery",
 			"putInboxRemoved", removedPutInbox,
-			"originalRemoved", removedOriginal)
+			"originalRemoved", removedOriginal,
+			"rejectedInPool", len(removeSet))
 	}
 }
 
