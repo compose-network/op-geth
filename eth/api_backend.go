@@ -1376,7 +1376,7 @@ func (b *EthAPIBackend) waitForPutInboxTransactionsToBeProcessed() error {
 	// Wait for transactions to be in txpool
 	for _, tx := range putInboxTxs {
 		timeout := time.After(5 * time.Second)
-		ticker := time.NewTicker(100 * time.Millisecond)
+		ticker := time.NewTicker(50 * time.Millisecond)
 
 		func() {
 			defer ticker.Stop() // Now properly scoped to this transaction
@@ -1388,8 +1388,6 @@ func (b *EthAPIBackend) waitForPutInboxTransactionsToBeProcessed() error {
 				case <-ticker.C:
 					if poolTx := b.GetPoolTransaction(tx.Hash()); poolTx != nil {
 						log.Info("[SSV] found putInbox transaction in pool", "hash", tx.Hash().Hex())
-						// small settling delay so miner refresh picks it up in pending view
-						time.Sleep(450 * time.Millisecond)
 						return // This will trigger the defer and stop the ticker
 					}
 				}
