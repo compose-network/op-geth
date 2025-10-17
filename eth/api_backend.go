@@ -1077,29 +1077,17 @@ func (b *EthAPIBackend) GetOrderedTransactionsForBlock(ctx context.Context) (typ
 	}
 }
 
-// buildSequencerOnlyList assembles only the sequencer-managed transactions in the
-// correct internal order: putInbox() first, then original user transactions.
-// This maintains a consistent snapshot by holding the lock for the entire read operation,
-// preventing race conditions where transactions might be read in incorrect order.
-// Normal mempool transactions are not part of this list.
+// buildSequencerOnlyList assembles only the sequencer-managed transactions preserving
+// their insertion order. The insertion order is guaranteed to be correct because:
+// 1. For each XT, putInbox transactions are created before original transactions
+// 2. XTs are processed sequentially, maintaining their relative order
 func (b *EthAPIBackend) buildSequencerOnlyList() types.Transactions {
 	b.sequencerTxMutex.RLock()
 	defer b.sequencerTxMutex.RUnlock()
 
-	var orderedTxs types.Transactions
-
-	// First pass: add all putInbox transactions
+	orderedTxs := make(types.Transactions, 0, len(b.pendingXTEntries))
 	for _, entry := range b.pendingXTEntries {
-		if entry.kind == sequencerTxPutInbox {
-			orderedTxs = append(orderedTxs, entry.tx)
-		}
-	}
-
-	// Second pass: add all original transactions
-	for _, entry := range b.pendingXTEntries {
-		if entry.kind == sequencerTxOriginal {
-			orderedTxs = append(orderedTxs, entry.tx)
-		}
+		orderedTxs = append(orderedTxs, entry.tx)
 	}
 
 	return orderedTxs
@@ -1981,15 +1969,6 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 				"requiresCoordination", simState.RequiresCoordination(),
 				"dependencies", len(simState.Dependencies),
 				"outbound", len(simState.OutboundMessages))
-
-			// Pool successful transactions immediately
-			_, done := txDone[tx.Hash().Hex()]
-			if simState.Success && !done && len(simState.Dependencies) == 0 {
-				log.Info("[SSV] Pooling successful transaction immediately", "hash", tx.Hash().Hex())
-				b.poolPayloadTx(tx)
-				b.assignXtKeyToHash(tx, xtID)
-				txDone[tx.Hash().Hex()] = struct{}{}
-			}
 		}
 	}
 
