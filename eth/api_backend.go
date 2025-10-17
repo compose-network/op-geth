@@ -768,21 +768,21 @@ func (b *EthAPIBackend) SimulateTransaction(
 		return nil, err
 	}
 
-	mailboxAddresses := b.GetMailboxAddresses()
-	tracer := native.NewSSVTracer(mailboxAddresses)
-
-	vmConfig := vm.Config{}
-	if b.eth.blockchain.GetVMConfig() != nil {
-		vmConfig = *b.eth.blockchain.GetVMConfig()
-	}
-	vmConfig.Tracer = tracer.Hooks()
-	vmConfig.EnablePreimageRecording = true
-
 	blockContext := core.NewEVMBlockContext(header, b.eth.blockchain, nil, b.ChainConfig(), stateDB)
 
-	evm := vm.NewEVM(blockContext, stateDB, b.ChainConfig(), vmConfig)
-
+	// Pre-apply staging transactions without tracing
 	if ctx.Value("simulation") != nil {
+		// Create a clean VM config without tracer for staging transactions
+		stagingVMConfig := vm.Config{}
+		if b.eth.blockchain.GetVMConfig() != nil {
+			stagingVMConfig = *b.eth.blockchain.GetVMConfig()
+		}
+		stagingVMConfig.Tracer = nil
+		stagingVMConfig.EnablePreimageRecording = true
+
+		stagingEVM := vm.NewEVM(blockContext, stateDB, b.ChainConfig(), stagingVMConfig)
+
+		// Pre-apply putInbox transactions without tracing
 		for _, staged := range b.GetPendingPutInboxTxs() {
 			if staged == nil || staged.Hash() == tx.Hash() {
 				continue
@@ -799,7 +799,7 @@ func (b *EthAPIBackend) SimulateTransaction(
 			if wants := staged.Nonce(); stateDB.GetNonce(stageMsg.From) != wants {
 				stateDB.SetNonce(stageMsg.From, wants, tracing.NonceChangeUnspecified)
 			}
-			if _, err := core.ApplyMessage(evm, stageMsg, stageGasPool); err != nil {
+			if _, err := core.ApplyMessage(stagingEVM, stageMsg, stageGasPool); err != nil {
 				log.Warn("[SSV] Failed to pre-apply putInbox transaction", "txHash", staged.Hash(), "err", err)
 				continue
 			}
@@ -828,7 +828,7 @@ func (b *EthAPIBackend) SimulateTransaction(
 			if wants := staged.Nonce(); stateDB.GetNonce(stageMsg.From) != wants {
 				stateDB.SetNonce(stageMsg.From, wants, tracing.NonceChangeUnspecified)
 			}
-			if _, err := core.ApplyMessage(evm, stageMsg, stageGasPool); err != nil {
+			if _, err := core.ApplyMessage(stagingEVM, stageMsg, stageGasPool); err != nil {
 				log.Warn("[SSV] Failed to pre-apply original transaction", "txHash", staged.Hash(), "err", err)
 				continue
 			}
@@ -839,6 +839,21 @@ func (b *EthAPIBackend) SimulateTransaction(
 			stateDB.Finalise(true)
 		}
 	}
+
+	// Create fresh tracer and EVM for the actual transaction being simulated.
+	// This ensures only the target transaction's mailbox operations are captured,
+	// not any operations from pre-applied staging transactions.
+	mailboxAddresses := b.GetMailboxAddresses()
+	tracer := native.NewSSVTracer(mailboxAddresses)
+
+	vmConfig := vm.Config{}
+	if b.eth.blockchain.GetVMConfig() != nil {
+		vmConfig = *b.eth.blockchain.GetVMConfig()
+	}
+	vmConfig.Tracer = tracer.Hooks()
+	vmConfig.EnablePreimageRecording = true
+
+	evm := vm.NewEVM(blockContext, stateDB, b.ChainConfig(), vmConfig)
 
 	stateDB.SetTxContext(tx.Hash(), stateDB.TxIndex()+1)
 
