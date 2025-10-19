@@ -69,12 +69,10 @@ func (u RegistryUtils) SequencerAddrs() (map[uint64]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		addr := strings.TrimSpace(ccfg.Sequencer)
-		if addr == "" {
-			// fallback to compose.sequencer if present
-			if strings.TrimSpace(ccfg.Compose.Sequencer.Host) != "" && ccfg.Compose.Sequencer.Port != 0 {
-				addr = fmt.Sprintf("%s:%d", ccfg.Compose.Sequencer.Host, ccfg.Compose.Sequencer.Port)
-			}
+
+		addr := strings.TrimSpace(ccfg.Sequencer.Host)
+		if strings.TrimSpace(ccfg.Sequencer.Host) != "" && ccfg.Sequencer.Port != 0 {
+			addr = fmt.Sprintf("%s:%d", ccfg.Sequencer.Host, ccfg.Sequencer.Port)
 		}
 		if addr != "" {
 			out[ccfg.ChainID] = addr
