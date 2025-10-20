@@ -77,7 +77,6 @@ func Setup(ctx context.Context, cfg Config) (*Runtime, error) {
 		nodeID := fmt.Sprintf("sequencer-%d", time.Now().UnixNano())
 		c := consensus.DefaultConfig(nodeID)
 		c.Role = consensus.Follower
-		c.IsLeader = false
 		c.Timeout = time.Minute
 		base = consensus.New(log, c)
 	}
