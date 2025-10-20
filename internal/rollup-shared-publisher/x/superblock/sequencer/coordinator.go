@@ -363,6 +363,8 @@ func (sc *SequencerCoordinator) handleStartSC(
 	if lastSeq, ok := sc.scpIntegration.GetLastDecidedSequenceNumber(); ok {
 		requiredSeq = lastSeq + 1
 	}
+	// TODO startSC.XtSequenceNumber doesn't need to be prev+1
+	// check should be: startSC.XtSequenceNumber > next (= last+1)
 	if startSC.XtSequenceNumber != requiredSeq {
 		sc.log.Warn().
 			Uint64("got_seq", startSC.XtSequenceNumber).
@@ -395,6 +397,9 @@ func (sc *SequencerCoordinator) handleStartSC(
 	// Extract our transactions
 	myTxs := sc.extractMyTransactions(startSC.XtRequest)
 
+	// TODO: set default vote result to be false
+	// if len(myTxs) == 0, set to true
+	// but if sc.callbacks.SimulateAndVote != nil, set to false
 	var voteResult = true
 
 	if sc.callbacks.SimulateAndVote != nil && len(myTxs) > 0 {
