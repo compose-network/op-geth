@@ -496,7 +496,7 @@ func (mp *MailboxProcessor) handleCrossRollupCoordination(
 			dep.Receiver = common.BytesToAddress(circMsg.Receiver[0])
 		}
 		dep.Data = circMsg.Data[0]
-		dep.SessionID = new(big.Int).SetUint64(circMsg.SessionId)
+		dep.SessionID = new(big.Int).SetBytes(circMsg.SessionId)
 		circDeps = append(circDeps, dep)
 	}
 
@@ -513,9 +513,9 @@ func (mp *MailboxProcessor) handleCrossRollupCoordination(
 }
 
 func (mp *MailboxProcessor) sendCIRCMessage(ctx context.Context, msg *CrossRollupMessage, xtID *rollupv1.XtID) error {
-	var sessionID uint64
+	var sessionID []byte
 	if msg.SessionID != nil {
-		sessionID = msg.SessionID.Uint64()
+		sessionID = common.LeftPadBytes(msg.SessionID.Bytes(), 32)
 	}
 
 	// Build CIRC payload

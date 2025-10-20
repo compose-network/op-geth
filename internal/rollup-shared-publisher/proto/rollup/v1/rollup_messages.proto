@@ -73,7 +73,7 @@ message CIRCMessage {
   XtID xt_id = 5;
   string label = 6;
   repeated bytes data = 7; // ABI encoded data
-  uint64 session_id = 8;
+  bytes session_id = 8; // 32-byte big-endian session identifier (U256)
 }
 
 // =============================================================================

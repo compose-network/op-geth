@@ -574,8 +574,8 @@ type CIRCMessage struct {
 	Receiver         [][]byte               `protobuf:"bytes,4,rep,name=receiver,proto3" json:"receiver,omitempty"`
 	XtId             *XtID                  `protobuf:"bytes,5,opt,name=xt_id,json=xtId,proto3" json:"xt_id,omitempty"`
 	Label            string                 `protobuf:"bytes,6,opt,name=label,proto3" json:"label,omitempty"`
-	Data             [][]byte               `protobuf:"bytes,7,rep,name=data,proto3" json:"data,omitempty"`                             // ABI encoded data
-	SessionId        uint64                 `protobuf:"varint,8,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Data             [][]byte               `protobuf:"bytes,7,rep,name=data,proto3" json:"data,omitempty"` // ABI encoded data
+	SessionId        []byte                 `protobuf:"bytes,8,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -659,11 +659,11 @@ func (x *CIRCMessage) GetData() [][]byte {
 	return nil
 }
 
-func (x *CIRCMessage) GetSessionId() uint64 {
+func (x *CIRCMessage) GetSessionId() []byte {
 	if x != nil {
 		return x.SessionId
 	}
-	return 0
+	return nil
 }
 
 // Auxiliary message for requesting specific L2 blocks
@@ -1417,7 +1417,7 @@ const file_rollup_messages_proto_rawDesc = "" +
 	"\x05label\x18\x06 \x01(\tR\x05label\x12\x12\n" +
 	"\x04data\x18\a \x03(\fR\x04data\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\b \x01(\x04R\tsessionId\"o\n" +
+	"session_id\x18\b \x01(\fR\tsessionId\"o\n" +
 	"\x0eL2BlockRequest\x12\x19\n" +
 	"\bchain_id\x18\x01 \x01(\fR\achainId\x12!\n" +
 	"\fblock_number\x18\x02 \x01(\x04R\vblockNumber\x12\x1f\n" +
