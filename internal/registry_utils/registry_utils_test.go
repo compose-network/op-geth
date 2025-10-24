@@ -4,10 +4,10 @@ import (
 	"testing"
 )
 
-func TestSequencerAddrs_Hoodi(t *testing.T) {
-	ru, err := New("", "hoodi")
+func TestSequencerAddrs_ByL2ID(t *testing.T) {
+	ru, err := NewByL2ID("", 77777)
 	if err != nil {
-		t.Fatalf("new resolver: %v", err)
+		t.Fatalf("resolver by L2: %v", err)
 	}
 	got, err := ru.SequencerAddrs()
 	if err != nil {
@@ -31,10 +31,10 @@ func TestSequencerAddrs_Hoodi(t *testing.T) {
 	}
 }
 
-func TestMailboxes_Hoodi(t *testing.T) {
-	ru, err := New("", "hoodi")
+func TestMailboxes_ByL2ID(t *testing.T) {
+	ru, err := NewByL2ID("", 77777)
 	if err != nil {
-		t.Fatalf("new resolver: %v", err)
+		t.Fatalf("resolver by L2: %v", err)
 	}
 	got, err := ru.Mailboxes()
 	if err != nil {
