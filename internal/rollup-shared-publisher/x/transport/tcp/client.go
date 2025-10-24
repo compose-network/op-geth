@@ -196,10 +196,10 @@ func (c *client) Connect(ctx context.Context, addr string) error {
 // Disconnect closes the connection
 func (c *client) Disconnect(ctx context.Context) error {
 	c.autoReconnect.Store(false)
-	c.mu.Lock()
-	defer c.mu.Unlock()
 
+	c.mu.Lock()
 	if !c.connected.Load() {
+		c.mu.Unlock()
 		return fmt.Errorf("client not connected")
 	}
 
@@ -216,6 +216,7 @@ func (c *client) Disconnect(ctx context.Context) error {
 	if c.conn != nil {
 		c.conn.Close()
 	}
+	c.mu.Unlock() // Release lock BEFORE waiting for goroutines
 
 	// Wait for goroutines with timeout
 	done := make(chan struct{})
