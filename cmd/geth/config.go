@@ -191,6 +191,7 @@ func makeConfigNode(ctx *cli.Context) (*node.Node, gethConfig) {
 	l2h := ru.Chain()
 	l1net := l2h.Network()
 	l1cfg, _ := l1net.LoadConfig()
+	log.Info("Registry networks resolved")
 	log.Info("Registry resolved",
 		"registry.l1_slug", l1net.Slug(),
 		"registry.l1_chain_id", l1cfg.L1.ChainID,
