@@ -141,6 +141,8 @@ func (c *coordinator) StartTransaction(ctx context.Context, from string, xtReq *
 	}
 
 	// Timeout only for leader; followers rely on the SP decision
+	// TODO: followers (sequencers) should also have timeouts, with the logic that:
+	// if a vote hasn't yet been sent, send it with vote = false
 	if c.config.Role == Leader {
 		state.Timer = time.AfterFunc(c.config.Timeout, func() {
 			c.handleTimeout(xtID)
@@ -208,6 +210,10 @@ func (c *coordinator) RecordVote(xtID *pb.XtID, chainID string, vote bool) (Deci
 			return c.handleCommit(xtID, state), nil
 		}
 	} else {
+		// TODO: remove this logic. A sequencer receiving a vote from another sequencer doesn't imply
+		// that is should broadcast its own vote.
+		// Or is this function used by the sequencer to ONLY record its own vote?
+
 		// Follower broadcasts vote
 		c.callbackMgr.InvokeVote(xtID, vote, voteLatency)
 	}

@@ -50,18 +50,16 @@ type BlockFn func(ctx context.Context, block *types.Block, xtIDs []*pb.XtID) err
 
 // Config holds coordinator configuration
 type Config struct {
-	NodeID   string
-	IsLeader bool
-	Timeout  time.Duration
-	Role     Role
+	NodeID  string
+	Timeout time.Duration
+	Role    Role
 }
 
 // DefaultConfig returns sensible defaults
 func DefaultConfig(nodeID string) Config {
 	return Config{
-		NodeID:   nodeID,
-		IsLeader: true,
-		Timeout:  time.Minute,
-		Role:     Leader,
+		NodeID:  nodeID,
+		Timeout: 4 * time.Second,
+		Role:    Leader,
 	}
 }
