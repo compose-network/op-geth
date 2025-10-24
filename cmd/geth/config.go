@@ -224,7 +224,7 @@ func makeConfigNode(ctx *cli.Context) (*node.Node, gethConfig) {
 	if s := strings.TrimSpace(cfg.Node.SequencerAddrs); s != "" {
 		seqCount = len(strings.Split(s, ","))
 	}
-	log.Info("SequencerAddrs resolved", "source", seqSource, "count", seqCount, "value", cfg.Node.SequencerAddrs)
+	log.Info("SequencerAddrs X resolved", "source", seqSource, "count", seqCount, "value", cfg.Node.SequencerAddrs)
 
 	stack, err := node.New(&cfg.Node)
 	if err != nil {
