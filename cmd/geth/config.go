@@ -180,6 +180,8 @@ func makeConfigNode(ctx *cli.Context) (*node.Node, gethConfig) {
 	}
 	if cfg.Node.NetworkId == 0 {
 		utils.Fatalf("--networkid (L2 chain-id) is required")
+	} else {
+		log.Info("NetworkID set", "networkid", cfg.Node.NetworkId)
 	}
 
 	ru, err := registry_utils.NewByL2ID(regPath, cfg.Node.NetworkId)
@@ -191,7 +193,6 @@ func makeConfigNode(ctx *cli.Context) (*node.Node, gethConfig) {
 	l2h := ru.Chain()
 	l1net := l2h.Network()
 	l1cfg, _ := l1net.LoadConfig()
-	log.Info("Registry networks resolved")
 	log.Info("Registry resolved",
 		"registry.l1_slug", l1net.Slug(),
 		"registry.l1_chain_id", l1cfg.L1.ChainID,
@@ -224,7 +225,7 @@ func makeConfigNode(ctx *cli.Context) (*node.Node, gethConfig) {
 	if s := strings.TrimSpace(cfg.Node.SequencerAddrs); s != "" {
 		seqCount = len(strings.Split(s, ","))
 	}
-	log.Info("SequencerAddrs X resolved", "source", seqSource, "count", seqCount, "value", cfg.Node.SequencerAddrs)
+	log.Info("SequencerAddrs resolved", "source", seqSource, "count", seqCount, "value", cfg.Node.SequencerAddrs)
 
 	stack, err := node.New(&cfg.Node)
 	if err != nil {
