@@ -101,6 +101,167 @@ type EthAPIBackend struct {
 	// but we need them to determine which blocks have XTs when sending to SP
 	committedTxsMutex sync.RWMutex
 	committedTxHashes map[common.Hash]bool // Hashes of txs that were committed in blocks during this slot
+
+	// Intended as a stopgap to prevent concurrent nonce collisions.
+	nonceMu     sync.Mutex
+	nonceByAddr map[common.Address]*nonceTracker
+}
+
+// nonceTracker keeps an in-memory next nonce with a local lock.
+type nonceTracker struct {
+	mu   sync.Mutex
+	next uint64
+	init bool
+	res  map[uint64]*nonceReservation
+}
+
+type nonceReservation struct {
+	deadline time.Time
+	used     bool
+	expired  bool
+}
+
+const reservationTTL = 30 * time.Second
+
+// reserveNextNonce returns a unique next nonce for the given address within this
+// process, snapping forward to the pool nonce when drift is detected. This is a
+// best-effort, in-memory guard to avoid concurrent duplicate nonces when
+// multiple compose_buildSignedUserOpsTx calls arrive in parallel for the same
+// EOA. It intentionally does not persist state and will re-initialize from the
+// pool after restarts.
+func (b *EthAPIBackend) reserveNextNonce(_ context.Context, addr common.Address) (uint64, error) {
+	// Get/create tracker entry
+	b.nonceMu.Lock()
+	if b.nonceByAddr == nil {
+		b.nonceByAddr = make(map[common.Address]*nonceTracker)
+	}
+	tr := b.nonceByAddr[addr]
+	if tr == nil {
+		tr = &nonceTracker{res: make(map[uint64]*nonceReservation)}
+		b.nonceByAddr[addr] = tr
+	}
+	b.nonceMu.Unlock()
+
+	// Serialize per-address
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+
+	// Snap forward to current pool nonce if needed
+	poolNonce := b.eth.txPool.PoolNonce(addr)
+	if !tr.init || poolNonce > tr.next {
+		tr.next = poolNonce
+		tr.init = true
+	}
+	n := tr.next
+	tr.next++
+	// Track a reservation with TTL and schedule expiry.
+	if _, ok := tr.res[n]; !ok {
+		r := &nonceReservation{deadline: time.Now().Add(reservationTTL)}
+		tr.res[n] = r
+		time.AfterFunc(reservationTTL, func() { b.expireReservedNonce(addr, n) })
+	}
+	return n, nil
+}
+
+// expireReservedNonce sends a minimal self-transaction to consume an expired nonce.
+// It is a best-effort safeguard to prevent long-lived gaps. Only applies to the
+// sequencer EOA; ignored for other EOAs.
+func (b *EthAPIBackend) expireReservedNonce(addr common.Address, nonce uint64) {
+	if addr != b.sequencerAddress || b.sequencerKey == nil {
+		return
+	}
+	// Lookup reservation under per-address tracker
+	b.nonceMu.Lock()
+	tr := b.nonceByAddr[addr]
+	b.nonceMu.Unlock()
+	if tr == nil {
+		return
+	}
+	tr.mu.Lock()
+	r := tr.res[nonce]
+	if r == nil || r.used || r.expired || time.Now().Before(r.deadline) {
+		tr.mu.Unlock()
+		return
+	}
+	// Mark expired under lock to avoid double fire
+	r.expired = true
+	tr.mu.Unlock()
+
+	// Build a tiny type-2 tx to self with the reserved nonce
+	header := b.eth.blockchain.CurrentBlock()
+	if header == nil {
+		return
+	}
+	baseFee := header.BaseFee
+	if baseFee == nil {
+		baseFee = big.NewInt(0)
+	}
+	var tip *big.Int
+	var err error
+	if b.gpo != nil {
+		tip, err = b.gpo.SuggestTipCap(context.Background())
+	}
+	if b.gpo == nil || err != nil || tip == nil || tip.Sign() <= 0 {
+		tip = big.NewInt(1_000_000_000) // 1 gwei fallback
+	}
+	feeCap := new(big.Int).Add(tip, new(big.Int).Mul(baseFee, big.NewInt(2)))
+	to := b.sequencerAddress
+	tx := types.NewTx(&types.DynamicFeeTx{
+		ChainID:   b.ChainConfig().ChainID,
+		Nonce:     nonce,
+		GasTipCap: tip,
+		GasFeeCap: feeCap,
+		Gas:       21_000,
+		To:        &to,
+		Value:     big.NewInt(0),
+		Data:      nil,
+	})
+	signed, err := types.SignTx(tx, types.NewLondonSigner(b.ChainConfig().ChainID), b.sequencerKey)
+	if err != nil {
+		log.Warn("[SSV] Failed to sign expiry no-op tx", "err", err, "nonce", nonce)
+		return
+	}
+	if err := b.sendTx(context.Background(), signed); err != nil {
+		log.Warn("[SSV] Failed to submit expiry no-op tx", "err", err, "nonce", nonce)
+		return
+	}
+	log.Info("[SSV] Submitted expiry no-op tx to consume reserved nonce", "nonce", nonce, "hash", signed.Hash())
+}
+
+// validateAndConsumeSequencerReservation enforces TTL and consumes a valid reservation
+// when a sequencer-signed tx is finally injected into the pool.
+func (b *EthAPIBackend) validateAndConsumeSequencerReservation(tx *types.Transaction) error {
+	// Only enforce for sequencer EOA
+	signer := types.NewLondonSigner(b.ChainConfig().ChainID)
+	from, err := types.Sender(signer, tx)
+	if err != nil {
+		return nil
+	}
+	if from != b.sequencerAddress {
+		return nil
+	}
+
+	b.nonceMu.Lock()
+	tr := b.nonceByAddr[from]
+	b.nonceMu.Unlock()
+	if tr == nil {
+		return nil
+	}
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	r := tr.res[tx.Nonce()]
+	if r == nil {
+		return nil
+	}
+	if r.used {
+		return fmt.Errorf("reserved nonce already used: %d", tx.Nonce())
+	}
+	// If expired or past deadline, reject to force client to rebuild with a new reservation
+	if r.expired || time.Now().After(r.deadline) {
+		return fmt.Errorf("reserved nonce expired: %d", tx.Nonce())
+	}
+	r.used = true
+	return nil
 }
 
 type sequencerTxKind int
@@ -857,6 +1018,13 @@ func (b *EthAPIBackend) SimulateTransaction(
 
 	stateDB.SetTxContext(tx.Hash(), stateDB.TxIndex()+1)
 
+	// Ensure the state nonce matches the tx nonce for simulation purposes.
+	// This avoids false-negative failures like "nonce too high/low" when simulating
+	// multiple same-EOA transactions that haven't been staged/applied yet.
+	if wants := tx.Nonce(); stateDB.GetNonce(msg.From) != wants {
+		stateDB.SetNonce(msg.From, wants, tracing.NonceChangeUnspecified)
+	}
+
 	gasPool := new(core.GasPool).AddGas(header.GasLimit)
 	result, err := core.ApplyMessage(evm, msg, gasPool)
 	if err != nil {
@@ -1401,6 +1569,13 @@ func (b *EthAPIBackend) waitForPutInboxTransactionsToBeProcessed() error {
 func (b *EthAPIBackend) poolPayloadTx(
 	ctx context.Context,
 	tx *types.Transaction) {
+	// If this is a sequencer-signed tx, enforce reservation TTL.
+	if err := b.validateAndConsumeSequencerReservation(tx); err != nil {
+		log.Warn("[SSV] Dropping sequencer tx due to expired/invalid nonce reservation",
+			"txHash", tx.Hash().Hex(), "nonce", tx.Nonce(), "err", err)
+		return
+	}
+
 	b.sequencerTxMutex.Lock()
 	b.addSequencerEntryLocked(tx, sequencerTxOriginal)
 	b.sequencerTxMutex.Unlock()
