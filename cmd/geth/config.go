@@ -170,17 +170,40 @@ func makeConfigNode(ctx *cli.Context) (*node.Node, gethConfig) {
 	if ctx.IsSet(utils.RegistryPathFlag.Name) {
 		regPath = ctx.String(utils.RegistryPathFlag.Name)
 	}
-	ru, err := registry_utils.New(regPath, "hoodi")
-	if err != nil {
-		utils.Fatalf("registry init: %v", err)
-	}
 
 	// Derive rollup identity early from --networkid or TOML Eth.NetworkId so node.New can use it.
+	// This is temporary until we use the genesis instead.
 	if ctx.IsSet(utils.NetworkIdFlag.Name) {
 		cfg.Node.NetworkId = ctx.Uint64(utils.NetworkIdFlag.Name)
 	} else if cfg.Eth.NetworkId != 0 {
 		cfg.Node.NetworkId = cfg.Eth.NetworkId
 	}
+	if cfg.Node.NetworkId == 0 {
+		utils.Fatalf("--networkid (L2 chain-id) is required")
+	} else {
+		log.Info("NetworkID set", "networkid", cfg.Node.NetworkId)
+	}
+
+	ru, err := registry_utils.NewByL2ID(regPath, cfg.Node.NetworkId)
+	if err != nil {
+		utils.Fatalf("registry init (l2=%d): %v", cfg.Node.NetworkId, err)
+	}
+
+	l2c := ru.ChainConfig()
+	l2h := ru.Chain()
+	l1net := l2h.Network()
+	l1cfg, _ := l1net.LoadConfig()
+	log.Info("Registry resolved",
+		"registry.l1_slug", l1net.Slug(),
+		"registry.l1_chain_id", l1cfg.L1.ChainID,
+		"registry.l1_name", l1cfg.Name,
+		"registry.l2_slug", l2h.Slug(),
+		"registry.l2_chain_id", l2c.ChainID,
+		"registry.l2_name", l2c.Name,
+		"config.networkid", cfg.Node.NetworkId,
+		"config.eth_networkid", cfg.Eth.NetworkId,
+		"config.registry_path", regPath,
+	)
 
 	// Resolve sequencer.addrs from registry if CLI/TOML did not provide it and log source/value.
 	seqSource := "cli"

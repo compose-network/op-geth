@@ -14,7 +14,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/eth/tracers"
-	"github.com/ethereum/go-ethereum/eth/tracers/native"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
 	rollupv1 "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/proto/rollup/v1"
 	spconsensus "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/consensus"
@@ -659,14 +658,9 @@ func (mp *MailboxProcessor) createPutInboxTx(dep CrossRollupDependency, nonce ui
 		return nil, err
 	}
 
-	var mailboxAddr common.Address
-	switch mp.chainID {
-	case native.RollupAChainID:
-		mailboxAddr = mp.mailboxAddresses[0]
-	case native.RollupBChainID:
-		mailboxAddr = mp.mailboxAddresses[1]
-	default:
-		return nil, fmt.Errorf("unable to select mailbox addr. Unsupported \"%d\" chain id", mp.chainID)
+	mailboxAddr := mp.backend.(*EthAPIBackend).GetMailboxAddressFromChainID(mp.chainID)
+	if (mailboxAddr == common.Address{}) {
+		return nil, fmt.Errorf("unable to select mailbox addr. No address configured for chain %d", mp.chainID)
 	}
 
 	txData := &types.DynamicFeeTx{

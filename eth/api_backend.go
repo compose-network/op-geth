@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/transport"
 
 	"math/big"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -902,7 +903,19 @@ func (b *EthAPIBackend) SubmitSequencerTransaction(ctx context.Context, tx *type
 // ConfigureMailboxes sets the mailbox contract addresses for known rollups.
 // SSV
 func (b *EthAPIBackend) ConfigureMailboxes(raw map[uint64]string) error {
-	ordered := []uint64{native.RollupAChainID, native.RollupBChainID}
+	if len(raw) == 0 {
+		b.mailboxAddresses = nil
+		b.mailboxByChainID = nil
+		native.ReplaceChainIDToMailbox(nil)
+		return nil
+	}
+
+	ordered := make([]uint64, 0, len(raw))
+	for chainID := range raw {
+		ordered = append(ordered, chainID)
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
+
 	addresses := make([]common.Address, 0, len(ordered))
 	mailboxMap := make(map[uint64]common.Address, len(ordered))
 
