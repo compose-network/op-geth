@@ -177,16 +177,25 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 	userOps []userOperationV07,
 	opts composeOpts,
 ) (*SignedTxResp, error) {
+	log.Info("[BuildSignedUserOpsTempDebug] BuildSignedUserOpsTx called",
+		"userOpsCount", len(userOps),
+		"requestedChainID", opts.ChainID)
+
 	// Canonicalize & quick policy checks
 	chainID := api.b.ChainConfig().ChainID.Uint64()
 	if opts.ChainID == 0 || opts.ChainID != chainID {
+		log.Warn("[BuildSignedUserOpsTempDebug] Chain ID mismatch",
+			"requestedChainID", opts.ChainID,
+			"expectedChainID", chainID)
 		return nil, &rpc.JsonError{Code: -32001, Message: "wrongChainId", Data: map[string]any{"expected": chainID}}
 	}
 
 	// Always use the canonical v0.7 EntryPoint address.
 	ep := common.HexToAddress("0x0000000071727de22e5e9d8baf0edac6f37da032")
+	log.Info("[BuildSignedUserOpsTempDebug] Using EntryPoint", "address", ep.Hex(), "chainID", chainID)
 
 	if len(userOps) == 0 {
+		log.Warn("[BuildSignedUserOpsTempDebug] Empty userOps array")
 		return nil, &rpc.JsonError{
 			Code:    -32602,
 			Message: "invalidUserOperation",
@@ -194,6 +203,7 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 		}
 	}
 	if len(userOps) > 10 {
+		log.Warn("[BuildSignedUserOpsTempDebug] Batch too large", "count", len(userOps), "max", 10)
 		return nil, &rpc.JsonError{
 			Code:    -32007,
 			Message: "rateLimited",
@@ -204,6 +214,7 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 	// Pull network fee context (for checks only; we no longer mutate user fee fields)
 	tipSuggestion, err := api.b.SuggestGasTipCap(ctx)
 	if err != nil {
+		log.Error("[BuildSignedUserOpsTempDebug] Failed to get suggested tip", "err", err)
 		return nil, err
 	}
 	head := api.b.CurrentHeader()
@@ -211,6 +222,15 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 	if head != nil && head.BaseFee != nil {
 		baseFee = new(big.Int).Set(head.BaseFee)
 	}
+	log.Info("[BuildSignedUserOpsTempDebug] Network fee context",
+		"tipSuggestion", tipSuggestion.String(),
+		"baseFee", baseFee.String(),
+		"blockNumber", func() string {
+			if head != nil {
+				return head.Number.String()
+			}
+			return "nil"
+		}())
 
 	// ABI for EntryPoint
 	parsedABI, err := abi.JSON(strings.NewReader(entryPointV07ABI))
@@ -230,6 +250,21 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 	minUserFeeCap := (*big.Int)(nil)
 
 	for i, op := range userOps {
+		log.Info("[BuildSignedUserOpsTempDebug] Processing userOp",
+			"opIndex", i,
+			"sender", op.Sender.Hex(),
+			"nonce", toBig(op.Nonce).String(),
+			"initCodeLen", len(op.InitCode),
+			"callDataLen", len(op.CallData),
+			"verificationGasLimit", toBig(op.VerificationGasLimit).String(),
+			"callGasLimit", toBig(op.CallGasLimit).String(),
+			"preVerificationGas", toBig(op.PreVerificationGas).String(),
+			"maxFeePerGas", toBig(op.MaxFeePerGas).String(),
+			"maxPriorityFeePerGas", toBig(op.MaxPriorityFeePerGas).String(),
+			"paymasterAndDataLen", len(op.PaymasterAndData),
+			"hasUnpackedPaymaster", op.Paymaster != nil && *op.Paymaster != (common.Address{}),
+			"signatureLen", len(op.Signature))
+
 		var paymasterAddr common.Address
 		var paymasterData []byte
 		var paymasterVerificationGas, paymasterPostOpGas *big.Int
@@ -328,24 +363,42 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 		// Pack gas pairs into bytes32 as per v0.7: (verificationGasLimit, callGasLimit)
 		agl, ok := packPairToBytes32(vgl, cgl)
 		if !ok {
+			log.Warn("[BuildSignedUserOpsTempDebug] Gas limits exceed uint128 bounds",
+				"opIndex", i,
+				"verificationGasLimit", vgl.String(),
+				"callGasLimit", cgl.String())
 			return nil, &rpc.JsonError{
 				Code:    -32005,
 				Message: "gasCapExceeded",
 				Data:    map[string]any{"opIndex": i, "reason": "gas exceeds uint128 bounds"},
 			}
 		}
+		log.Info("[BuildSignedUserOpsTempDebug] Packed accountGasLimits",
+			"opIndex", i,
+			"verificationGasLimit", vgl.String(),
+			"callGasLimit", cgl.String(),
+			"packedHex", hexutil.Encode(agl[:]))
 
 		// Use user-provided fees; do not mutate to preserve signature validity
 		uTip := toBig(op.MaxPriorityFeePerGas)
 		uFeeCap := toBig(op.MaxFeePerGas)
 		gfees, ok := packPairToBytes32(uTip, uFeeCap)
 		if !ok {
+			log.Warn("[BuildSignedUserOpsTempDebug] Fee values exceed uint128 bounds",
+				"opIndex", i,
+				"maxPriorityFeePerGas", uTip.String(),
+				"maxFeePerGas", uFeeCap.String())
 			return nil, &rpc.JsonError{
 				Code:    -32005,
 				Message: "gasCapExceeded",
 				Data:    map[string]any{"opIndex": i, "reason": "fee exceeds uint128 bounds"},
 			}
 		}
+		log.Info("[BuildSignedUserOpsTempDebug] Packed gasFees",
+			"opIndex", i,
+			"maxPriorityFeePerGas", uTip.String(),
+			"maxFeePerGas", uFeeCap.String(),
+			"packedHex", hexutil.Encode(gfees[:]))
 
 		p := packedUserOp{
 			Sender:             op.Sender,
@@ -376,20 +429,55 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 		gasSum.Add(gasSum, paymasterPostOpGas)
 		prefundBound := new(big.Int).Mul(gasSum, uFeeCap)
 
+		log.Info("[BuildSignedUserOpsTempDebug] Calculated prefund bound",
+			"opIndex", i,
+			"callGas", cgl.String(),
+			"verificationGas", vgl.String(),
+			"preVerificationGas", pvg.String(),
+			"paymasterVerificationGas", paymasterVerificationGas.String(),
+			"paymasterPostOpGas", paymasterPostOpGas.String(),
+			"gasSum", gasSum.String(),
+			"maxFeePerGas", uFeeCap.String(),
+			"prefundBound", prefundBound.String())
+
 		// balanceOf(sender) or paymaster if sponsored
 		balanceTarget := op.Sender
 		if paymasterAddr != (common.Address{}) {
 			balanceTarget = paymasterAddr
 		}
+		log.Info("[BuildSignedUserOpsTempDebug] Checking balance",
+			"opIndex", i,
+			"balanceTarget", balanceTarget.Hex(),
+			"isPaymaster", paymasterAddr != (common.Address{}))
+
 		data, err := parsedABI.Pack("balanceOf", balanceTarget)
 		if err != nil {
+			log.Error("[BuildSignedUserOpsTempDebug] Failed to pack balanceOf call", "opIndex", i, "err", err)
 			return nil, fmt.Errorf("abi pack balanceOf: %w", err)
 		}
 		bal, err := api.callUint256(ctx, ep, data, callAt)
 		if err != nil {
+			log.Error("[BuildSignedUserOpsTempDebug] balanceOf call failed",
+				"opIndex", i,
+				"target", balanceTarget.Hex(),
+				"entryPoint", ep.Hex(),
+				"err", err)
 			return nil, fmt.Errorf("balanceOf call failed: %w", err)
 		}
+		log.Info("[BuildSignedUserOpsTempDebug] Balance check result",
+			"opIndex", i,
+			"balanceTarget", balanceTarget.Hex(),
+			"balance", bal.String(),
+			"required", prefundBound.String(),
+			"sufficient", bal.Cmp(prefundBound) >= 0)
+
 		if bal.Cmp(prefundBound) < 0 {
+			log.Warn("[BuildSignedUserOpsTempDebug] Insufficient deposit",
+				"opIndex", i,
+				"sponsor", balanceTarget.Hex(),
+				"balance", bal.String(),
+				"required", prefundBound.String(),
+				"shortfall", new(big.Int).Sub(prefundBound, bal).String())
 			return nil, &rpc.JsonError{
 				Code:    -32004,
 				Message: "insufficientDeposit",
@@ -405,30 +493,61 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 		// getUserOpHash(op)
 		data, err = parsedABI.Pack("getUserOpHash", p)
 		if err != nil {
+			log.Error("[BuildSignedUserOpsTempDebug] Failed to pack getUserOpHash call", "opIndex", i, "err", err)
 			return nil, fmt.Errorf("abi pack getUserOpHash: %w", err)
 		}
 		hashBytes, err := api.callBytes32(ctx, ep, data, callAt)
 		if err != nil {
+			log.Error("[BuildSignedUserOpsTempDebug] getUserOpHash call failed",
+				"opIndex", i,
+				"entryPoint", ep.Hex(),
+				"err", err)
 			return nil, fmt.Errorf("getUserOpHash call failed: %w", err)
 		}
-		userOpHashes = append(userOpHashes, "0x"+hex.EncodeToString(hashBytes[:]))
+		userOpHash := "0x" + hex.EncodeToString(hashBytes[:])
+		log.Info("[BuildSignedUserOpsTempDebug] Computed userOpHash",
+			"opIndex", i,
+			"userOpHash", userOpHash)
+
+		userOpHashes = append(userOpHashes, userOpHash)
 		packedOps = append(packedOps, p)
 
 		// Maintain minimum user fee caps across batch
+		prevMinTip := minUserTip
+		prevMinFeeCap := minUserFeeCap
 		if minUserTip == nil || uTip.Cmp(minUserTip) < 0 {
 			minUserTip = new(big.Int).Set(uTip)
 		}
 		if minUserFeeCap == nil || uFeeCap.Cmp(minUserFeeCap) < 0 {
 			minUserFeeCap = new(big.Int).Set(uFeeCap)
 		}
+		if prevMinTip != minUserTip || prevMinFeeCap != minUserFeeCap {
+			log.Info("[BuildSignedUserOpsTempDebug] Updated minimum fees",
+				"opIndex", i,
+				"minUserTip", minUserTip.String(),
+				"minUserFeeCap", minUserFeeCap.String())
+		}
 	}
+
+	log.Info("[BuildSignedUserOpsTempDebug] Completed processing all userOps",
+		"count", len(packedOps),
+		"minUserTip", minUserTip.String(),
+		"minUserFeeCap", minUserFeeCap.String())
 
 	// Encode handleOps(ops, beneficiary)
 	beneficiary := api.b.sequencerAddress // enforce reimbursement to sequencer
+	log.Info("[BuildSignedUserOpsTempDebug] Encoding handleOps call",
+		"beneficiary", beneficiary.Hex(),
+		"opsCount", len(packedOps))
+
 	callData, err := parsedABI.Pack("handleOps", packedOps, beneficiary)
 	if err != nil {
+		log.Error("[BuildSignedUserOpsTempDebug] Failed to pack handleOps", "err", err)
 		return nil, fmt.Errorf("abi pack handleOps: %w", err)
 	}
+	log.Info("[BuildSignedUserOpsTempDebug] handleOps callData encoded",
+		"callDataLen", len(callData),
+		"callDataHex", hexutil.Encode(callData))
 
 	// Estimate gas for the call, add 15% safety margin
 	from := api.b.sequencerAddress
@@ -439,6 +558,11 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 		// Fees are irrelevant for estimation
 		Value: (*hexutil.Big)(big.NewInt(0)),
 	}
+	log.Info("[BuildSignedUserOpsTempDebug] Starting gas estimation",
+		"from", from.Hex(),
+		"to", ep.Hex(),
+		"callDataLen", len(callData))
+
 	estGas, err := ethapi.DoEstimateGas(
 		ctx,
 		api.b,
@@ -531,6 +655,11 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 	gas := uint64(estGas)
 	gas = gas + gas/6 // + ~16.6% safety
 
+	log.Info("[BuildSignedUserOpsTempDebug] Gas estimation completed",
+		"estimatedGas", estGas,
+		"gasWithSafety", gas,
+		"safetyMargin", "16.6%")
+
 	// Decide outer tx fee caps so we don't overpay beyond reimbursement limits.
 	if minUserTip == nil || minUserFeeCap == nil {
 		return nil, &rpc.JsonError{
@@ -542,7 +671,20 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 	// Quick sanity: ensure current inclusion is feasible
 	// Require minUserFeeCap >= baseFee + minUserTip
 	effNow := new(big.Int).Add(baseFee, minUserTip)
+	log.Info("[BuildSignedUserOpsTempDebug] Validating fee caps",
+		"baseFee", baseFee.String(),
+		"minUserTip", minUserTip.String(),
+		"minUserFeeCap", minUserFeeCap.String(),
+		"effectiveRequired", effNow.String(),
+		"sufficient", minUserFeeCap.Cmp(effNow) >= 0)
+
 	if minUserFeeCap.Cmp(effNow) < 0 {
+		log.Warn("[BuildSignedUserOpsTempDebug] User fee caps below current baseFee",
+			"baseFee", baseFee.String(),
+			"minUserTip", minUserTip.String(),
+			"minUserFeeCap", minUserFeeCap.String(),
+			"effectiveRequired", effNow.String(),
+			"tipSuggestion", tipSuggestion.String())
 		return nil, &rpc.JsonError{
 			Code:    -32003,
 			Message: "invalidUserOperation",
@@ -559,8 +701,20 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 	// Compose and sign a type-2 tx from the sequencer EOA
 	nonce, err := api.b.GetPoolNonce(ctx, from)
 	if err != nil {
+		log.Error("[BuildSignedUserOpsTempDebug] Failed to get nonce",
+			"from", from.Hex(),
+			"err", err)
 		return nil, fmt.Errorf("get nonce: %w", err)
 	}
+
+	log.Info("[BuildSignedUserOpsTempDebug] Building transaction",
+		"from", from.Hex(),
+		"nonce", nonce,
+		"gasTipCap", minUserTip.String(),
+		"gasFeeCap", minUserFeeCap.String(),
+		"gas", gas,
+		"to", ep.Hex(),
+		"chainID", api.b.ChainConfig().ChainID.String())
 
 	txData := &types.DynamicFeeTx{
 		ChainID:   api.b.ChainConfig().ChainID,
@@ -575,6 +729,8 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 	tx := types.NewTx(txData)
 	signedTx, err := types.SignTx(tx, types.NewLondonSigner(api.b.ChainConfig().ChainID), api.b.sequencerKey)
 	if err != nil {
+		log.Error("[BuildSignedUserOpsTempDebug] Failed to sign transaction",
+			"err", err)
 		return nil, fmt.Errorf("sign tx: %w", err)
 	}
 
@@ -591,6 +747,8 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 
 	raw, err := signedTx.MarshalBinary()
 	if err != nil {
+		log.Error("[BuildSignedUserOpsTempDebug] Failed to marshal transaction",
+			"err", err)
 		return nil, fmt.Errorf("marshal tx: %w", err)
 	}
 
@@ -605,6 +763,15 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 		MaxPriorityFeePerGas: (*hexutil.Big)(minUserTip).String(),
 		UserOpHashes:         userOpHashes,
 	}
+
+	log.Info("[BuildSignedUserOpsTempDebug] BuildSignedUserOpsTx completed successfully",
+		"txHash", resp.Hash,
+		"rawLen", len(raw),
+		"userOpHashesCount", len(userOpHashes),
+		"gas", resp.Gas,
+		"maxFeePerGas", resp.MaxFeePerGas,
+		"maxPriorityFeePerGas", resp.MaxPriorityFeePerGas)
+
 	return resp, nil
 }
 
