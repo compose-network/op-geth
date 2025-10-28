@@ -116,9 +116,10 @@ type nonceTracker struct {
 }
 
 type nonceReservation struct {
-	deadline time.Time
-	used     bool
-	expired  bool
+	deadline  time.Time
+	used      bool
+	expired   bool
+	firstHash common.Hash
 }
 
 const reservationTTL = 30 * time.Second
@@ -253,14 +254,24 @@ func (b *EthAPIBackend) validateAndConsumeSequencerReservation(tx *types.Transac
 	if r == nil {
 		return nil
 	}
-	if r.used {
-		return fmt.Errorf("reserved nonce already used: %d", tx.Nonce())
-	}
 	// If expired or past deadline, reject to force client to rebuild with a new reservation
 	if r.expired || time.Now().After(r.deadline) {
 		return fmt.Errorf("reserved nonce expired: %d", tx.Nonce())
 	}
+	// If the reservation has already been used, allow rebroadcasts or fee-bump
+	// replacements to proceed. The txpool is the source of truth for
+	// "already known" and replacement underpricing semantics. Emit a clear log.
+	if r.used {
+		if r.firstHash == tx.Hash() {
+			log.Info("[SSV] Re-received tx for reserved nonce (rebroadcast)", "nonce", tx.Nonce(), "txHash", tx.Hash())
+		} else {
+			log.Info("[SSV] Re-received tx for reserved nonce (replacement)", "nonce", tx.Nonce(), "txHash", tx.Hash(), "firstHash", r.firstHash)
+		}
+		return nil
+	}
 	r.used = true
+	r.firstHash = tx.Hash()
+	log.Info("[SSV] Consuming reserved nonce for tx", "nonce", tx.Nonce(), "txHash", tx.Hash())
 	return nil
 }
 
