@@ -557,7 +557,9 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 	}
 
 	// Compose and sign a type-2 tx from the sequencer EOA
-	nonce, err := api.b.GetPoolNonce(ctx, from)
+	// Use a lightweight in-process nonce reservation to avoid duplicate nonces
+	// when multiple compose_buildSignedUserOpsTx calls run in parallel.
+	nonce, err := api.b.reserveNextNonce(ctx, from)
 	if err != nil {
 		return nil, fmt.Errorf("get nonce: %w", err)
 	}
