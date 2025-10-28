@@ -1305,66 +1305,6 @@ func (b *EthAPIBackend) GetPendingOriginalTxs() []*types.Transaction {
 	return b.listTransactionsByKind(sequencerTxOriginal)
 }
 
-// reSimulateTransaction re-simulates a single transaction and checks for success
-// SSV
-func (b *EthAPIBackend) reSimulateTransaction(
-	ctx context.Context,
-	tx *types.Transaction,
-	blockNrOrHash rpc.BlockNumberOrHash,
-	xtID *rollupv1.XtID,
-) (bool, error) {
-	log.Debug("[SSV] Re-simulating transaction",
-		"txHash", tx.Hash().Hex(),
-		"xtID", xtID.Hex())
-
-	// Simulate with SSV tracing to detect mailbox interactions
-	traceResult, err := b.SimulateTransaction(ctx, tx, blockNrOrHash)
-	if err != nil {
-		log.Error("[SSV] Transaction simulation with trace failed - REASON: simulation_trace_error",
-			"txHash", tx.Hash().Hex(),
-			"error", err,
-			"xtID", xtID.Hex(),
-			"failure_reason", "simulation_trace_error")
-		return false, err
-	}
-
-	// Check if execution was successful
-	if traceResult.ExecutionResult.Err != nil {
-		log.Warn("[SSV] Transaction execution failed in re-simulation - REASON: execution_error",
-			"txHash", tx.Hash().Hex(),
-			"executionError", traceResult.ExecutionResult.Err,
-			"xtID", xtID.Hex(),
-			"failure_reason", "execution_error")
-		return false, nil
-	}
-
-	// Validate that the transaction used reasonable gas (not failed silently)
-	if traceResult.ExecutionResult.UsedGas == 0 {
-		log.Warn("[SSV] Transaction used no gas, likely failed silently - REASON: zero_gas_used",
-			"txHash", tx.Hash().Hex(),
-			"xtID", xtID.Hex(),
-			"failure_reason", "zero_gas_used")
-		return false, nil
-	}
-
-	// Check that mailbox operations were traced (indicating they succeeded)
-	if len(traceResult.Operations) == 0 {
-		log.Warn("[SSV] No mailbox operations detected in re-simulation - REASON: no_mailbox_operations",
-			"txHash", tx.Hash().Hex(),
-			"xtID", xtID.Hex(),
-			"failure_reason", "no_mailbox_operations")
-		return false, nil
-	}
-
-	log.Debug("[SSV] Transaction re-simulation successful",
-		"txHash", tx.Hash().Hex(),
-		"gasUsed", traceResult.ExecutionResult.UsedGas,
-		"mailboxOps", len(traceResult.Operations),
-		"xtID", xtID.Hex())
-
-	return true, nil
-}
-
 // waitForPutInboxTransactionsToBeProcessed waits for putInbox transactions to be included
 // SSV
 func (b *EthAPIBackend) waitForPutInboxTransactionsToBeProcessed() error {

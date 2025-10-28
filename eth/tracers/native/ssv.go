@@ -20,8 +20,8 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
-const RollupAChainID = 77777
-const RollupBChainID = 88888
+const RollupAChainID = 11110
+const RollupBChainID = 21110
 
 var (
 	chainIDToMailboxMu sync.RWMutex
