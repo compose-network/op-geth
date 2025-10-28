@@ -557,9 +557,7 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 	}
 
 	// Compose and sign a type-2 tx from the sequencer EOA
-	// Use a lightweight in-process nonce reservation to avoid duplicate nonces
-	// when multiple compose_buildSignedUserOpsTx calls run in parallel.
-	nonce, err := api.b.reserveNextNonce(ctx, from)
+	nonce, err := api.b.GetPoolNonce(ctx, from)
 	if err != nil {
 		return nil, fmt.Errorf("get nonce: %w", err)
 	}
@@ -579,9 +577,6 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 	if err != nil {
 		return nil, fmt.Errorf("sign tx: %w", err)
 	}
-
-	// Log the reserved nonce and the resulting tx hash together for traceability.
-	log.Info("[SSV] Reserved sequencer nonce for tx", "nonce", nonce, "txHash", signedTx.Hash())
 
 	log.Info("[SSV] Signed user transaction with sequencer key",
 		"txHash", signedTx.Hash().Hex(),
