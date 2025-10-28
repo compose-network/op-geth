@@ -580,6 +580,9 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 		return nil, fmt.Errorf("sign tx: %w", err)
 	}
 
+	// Log the reserved nonce and the resulting tx hash together for traceability.
+	log.Info("[SSV] Reserved sequencer nonce for tx", "nonce", nonce, "txHash", signedTx.Hash())
+
 	log.Info("[SSV] Signed user transaction with sequencer key",
 		"txHash", signedTx.Hash().Hex(),
 		"chainID", api.b.ChainConfig().ChainID,
