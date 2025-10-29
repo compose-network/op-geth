@@ -91,3 +91,6 @@ go.work.sum
 
 *.json
 config.yml
+
+start.sh
+init.sh

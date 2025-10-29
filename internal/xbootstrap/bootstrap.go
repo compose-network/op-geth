@@ -41,11 +41,6 @@ type Config struct {
 
 	// P2PListenAddr is an optional P2P listen address, overriding P2PServerConfig.ListenAddr.
 	P2PListenAddr string
-
-	// SlotDuration is the duration of a slot. Defaults to 12 s.
-	SlotDuration time.Duration
-	// SlotSealCutover is the fraction of the slot after which it should be sealed. Defaults to 2/3.
-	SlotSealCutover float64
 }
 
 // Runtime exposes the wired components and lifecycle.
@@ -70,6 +65,24 @@ func Setup(cfg Config) (*Runtime, error) {
 		log = zerolog.Nop()
 	}
 
+	seqCoord, spClient := setupSequencerCoordinator(cfg, log)
+
+	p2pSrv := setupP2PServer(seqCoord, cfg, log)
+
+	peers := setupP2PClients(cfg, log)
+
+	rt := &Runtime{
+		Coordinator: seqCoord,
+		SPClient:    spClient,
+		P2PServer:   p2pSrv,
+		Peers:       peers,
+		log:         log,
+		cfg:         cfg,
+	}
+	return rt, nil
+}
+
+func setupSequencerCoordinator(cfg Config, log zerolog.Logger) (*xsequencer.SequencerCoordinator, xtransport.Client) {
 	// Base consensus (2PC)
 	base := cfg.BaseConsensus
 	if base == nil {
@@ -89,18 +102,10 @@ func Setup(cfg Config) (*Runtime, error) {
 	if cfg.SPAddr != "" {
 		spCfg.ServerAddr = cfg.SPAddr
 	}
+
 	spClient := tcp.NewClient(spCfg, log)
 
 	// Sequencer coordinator (SBCP)
-	slotDuration := cfg.SlotDuration
-	if slotDuration == 0 {
-		slotDuration = 6 * time.Second
-	}
-	sealCutover := cfg.SlotSealCutover
-	if sealCutover == 0 {
-		sealCutover = 2.0 / 3.0
-	}
-
 	seqCfg := xsequencer.Config{
 		ChainID:              cfg.ChainID,
 		BlockTimeout:         30 * time.Second,
@@ -115,7 +120,11 @@ func Setup(cfg Config) (*Runtime, error) {
 		return nil, coord.HandleMessage(c, msg.SenderId, msg)
 	})
 
-	// P2P server for CIRC
+	return coord, spClient
+}
+
+// P2P server for CIRC
+func setupP2PServer(coord *xsequencer.SequencerCoordinator, cfg Config, log zerolog.Logger) xtransport.Server {
 	var p2pSrv xtransport.Server
 	if cfg.P2PServerConfig != nil {
 		if cfg.P2PListenAddr != "" {
@@ -133,6 +142,10 @@ func Setup(cfg Config) (*Runtime, error) {
 		return coord.HandleMessage(c, from, msg)
 	})
 
+	return p2pSrv
+}
+
+func setupP2PClients(cfg Config, log zerolog.Logger) map[string]xtransport.Client {
 	log.Info().Interface("peer_addrs", cfg.PeerAddrs).Msg("Setting up peer clients")
 
 	peers := make(map[string]xtransport.Client)
@@ -155,15 +168,7 @@ func Setup(cfg Config) (*Runtime, error) {
 
 	log.Info().Int("peer_count", len(peers)).Interface("peer_keys", getPeerKeys(peers)).Msg("Peer clients created")
 
-	rt := &Runtime{
-		Coordinator: coord,
-		SPClient:    spClient,
-		P2PServer:   p2pSrv,
-		Peers:       peers,
-		log:         log,
-		cfg:         cfg,
-	}
-	return rt, nil
+	return peers
 }
 
 // Start brings up coordinator, connects to SP, starts P2P, and dials peers.

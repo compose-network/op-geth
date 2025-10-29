@@ -281,13 +281,11 @@ func New(conf *Config) (*Node, error) {
 	// Bootstrap SBCP runtime (coordinator, SP client, P2P) - handles all connections
 	chainIDBytes := big.NewInt(chainIDInt64).Bytes()
 	rt, err := xbootstrap.Setup(xbootstrap.Config{
-		ChainID:         chainIDBytes,
-		SPAddr:          conf.SPAddr,
-		PeerAddrs:       addrs,
-		P2PListenAddr:   conf.SPListenAddr,
-		Log:             ssvLogger,
-		SlotDuration:    6 * time.Second,
-		SlotSealCutover: 2.0 / 3.0,
+		ChainID:       chainIDBytes,
+		SPAddr:        conf.SPAddr,
+		PeerAddrs:     addrs,
+		P2PListenAddr: conf.SPListenAddr,
+		Log:           ssvLogger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap setup failed: %w", err)
@@ -297,7 +295,7 @@ func New(conf *Config) (*Node, error) {
 	if sc, ok := rt.Coordinator.(*xsequencer.SequencerCoordinator); ok {
 		node.sequencerCoordinator = sc
 	} else {
-		node.sequencerCoordinator = xsequencer.NewSequencerCoordinator(rt.Coordinator.Consensus(), xsequencer.Config{ChainID: chainIDBytes}, rt.SPClient, ssvLogger)
+		return nil, fmt.Errorf("coordinator coordinator does not implement SequencerCoordinator")
 	}
 
 	ssvLogger.Info().
