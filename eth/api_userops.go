@@ -561,6 +561,22 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 	if err != nil {
 		return nil, fmt.Errorf("get nonce: %w", err)
 	}
+	// Best-effort additional context for concurrency debugging
+	// Snapshot pending/queued counts and (if cheap) latest state nonce
+	pend, queued := api.b.TxPoolContentFrom(from)
+	stateNonce := ^uint64(0) // use max as unknown sentinel
+	if hdr := api.b.CurrentHeader(); hdr != nil {
+		if st, _, err := api.b.StateAtBlock(ctx, api.b.eth.blockchain.GetBlock(hdr.Hash(), hdr.Number.Uint64()), 0, nil, true, true); err == nil && st != nil {
+			stateNonce = st.GetNonce(from)
+		}
+	}
+	log.Debug("[SSV] Sequencer nonce snapshot",
+		"addr", from.Hex(),
+		"poolNonce", nonce,
+		"stateNonce", stateNonce,
+		"pending_count", len(pend),
+		"queued_count", len(queued),
+	)
 
 	txData := &types.DynamicFeeTx{
 		ChainID:   api.b.ChainConfig().ChainID,
@@ -587,6 +603,10 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 		"gas", gas,
 		"to", ep.Hex(),
 		"callDataLen", len(callData),
+		"baseFee", baseFee.String(),
+		"tipSuggestion", tipSuggestion.String(),
+		"minUserTip", minUserTip.String(),
+		"minUserFeeCap", minUserFeeCap.String(),
 		"callData", hexutil.Encode(callData))
 
 	raw, err := signedTx.MarshalBinary()

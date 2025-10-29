@@ -309,6 +309,28 @@ func (mp *MailboxProcessor) analyzeTransaction(
 		"dependencies", len(simState.Dependencies),
 		"outboundMessages", len(simState.OutboundMessages))
 
+	if simState.RequiresCoordination() {
+		depCount := len(simState.Dependencies)
+		outCount := len(simState.OutboundMessages)
+		depPreview := make([]string, 0, 2)
+		for i := 0; i < depCount && i < 2; i++ {
+			d := simState.Dependencies[i]
+			depPreview = append(depPreview, fmt.Sprintf("%d:%s->%s", d.SourceChainID, d.Sender.Hex(), d.Receiver.Hex()))
+		}
+		outPreview := make([]string, 0, 2)
+		for i := 0; i < outCount && i < 2; i++ {
+			o := simState.OutboundMessages[i]
+			outPreview = append(outPreview, fmt.Sprintf("%d:%s->%s:%s", o.DestChainID, o.Sender.Hex(), o.Receiver.Hex(), string(o.Label)))
+		}
+		log.Info("[SSV] Coordination classification",
+			"txHash", txHashHex,
+			"deps", depCount,
+			"deps_preview", depPreview,
+			"outbound", outCount,
+			"out_preview", outPreview,
+		)
+	}
+
 	return simState, nil
 }
 
@@ -528,6 +550,11 @@ func (mp *MailboxProcessor) sendCIRCMessage(ctx context.Context, msg *CrossRollu
 		return fmt.Errorf("no client for destination chain %s", destChainID)
 	}
 	if err := sequencerClient.Send(ctx, spMsg); err != nil {
+		log.Error("[SSV] Failed to send CIRC message",
+			"xtID", xtID.Hex(),
+			"destChain", spconsensus.ChainKeyUint64(msg.DestChainID),
+			"err", err,
+		)
 		return err
 	}
 	return nil
@@ -692,7 +719,16 @@ func (mp *MailboxProcessor) createPutInboxTx(dep CrossRollupDependency, nonce ui
 	log.Info("[SSV] Created putInbox transaction",
 		"txHash", signedTx.Hash().Hex(),
 		"nonce", nonce,
-		"sessionId", dep.SessionID)
+		"sessionId", dep.SessionID,
+		"mailbox", mailboxAddr.Hex(),
+		"sourceChain", dep.SourceChainID,
+		"sender", dep.Sender.Hex(),
+		"receiver", dep.Receiver.Hex(),
+		"label_len", len(dep.Label),
+		"data_len", len(dep.Data),
+		"gasTipCap", txData.GasTipCap,
+		"gasFeeCap", txData.GasFeeCap,
+	)
 
 	return signedTx, nil
 }

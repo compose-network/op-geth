@@ -62,6 +62,57 @@ import (
 	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/superblock/sequencer"
 )
 
+// xtIDFromCtx extracts the xtID from context, if present, else returns empty string.
+func xtIDFromCtx(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if v := ctx.Value("xtID"); v != nil {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+// ctxWithXtID attaches the xtID hex string to context for downstream logging.
+func ctxWithXtID(ctx context.Context, xtID *rollupv1.XtID) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if xtID == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, "xtID", xtID.Hex())
+}
+
+// reasonForGrep maps common error message patterns to a stable, greppable reason key.
+// It intentionally prefers more specific patterns before generic ones.
+func reasonForGrep(err error) string {
+	if err == nil {
+		return "ok"
+	}
+	e := err.Error()
+	switch {
+	case strings.Contains(e, "replacement transaction underpriced"):
+		return "replacement"
+	case strings.Contains(e, "nonce too high"):
+		return "nonce_too_high"
+	case strings.Contains(e, "nonce too low"):
+		return "nonce_too_low"
+	case strings.Contains(e, "already known"):
+		return "already_known"
+	case strings.Contains(e, "insufficient funds"):
+		return "insufficient_funds"
+	case strings.Contains(e, "underpriced"):
+		return "underpriced"
+	case strings.Contains(e, "evicted"):
+		return "evicted"
+	default:
+		return "other"
+	}
+}
+
 // EthAPIBackend implements ethapi.Backend and tracers.Backend for full nodes
 type EthAPIBackend struct {
 	extRPCEnabled       bool
@@ -462,6 +513,34 @@ func (b *EthAPIBackend) sendTx(ctx context.Context, signedTx *types.Transaction)
 	// error and might be accepted later (e.g., the transaction pool is full).
 	// Locally submitted transactions will be resubmitted later via the local tracker.
 	b.eth.localTxTracker.Track(signedTx)
+
+	var from common.Address
+	if signer := types.LatestSignerForChainID(b.ChainConfig().ChainID); signer != nil {
+		if s, err := types.Sender(signer, signedTx); err == nil {
+			from = s
+		}
+	}
+	kindStr := "unknown"
+	xt := ""
+	b.sequencerTxMutex.RLock()
+	if b.pendingByHash != nil {
+		if idx, ok := b.pendingByHash[signedTx.Hash()]; ok && idx >= 0 && idx < len(b.pendingXTEntries) {
+			if b.pendingXTEntries[idx].kind == sequencerTxPutInbox {
+				kindStr = "putInbox"
+			} else {
+				kindStr = "original"
+			}
+			xt = b.pendingXTEntries[idx].xtID
+		}
+	}
+	b.sequencerTxMutex.RUnlock()
+	log.Debug("[SSV] Tracked local tx for resubmission",
+		"txHash", signedTx.Hash().Hex(),
+		"from", from.Hex(),
+		"nonce", signedTx.Nonce(),
+		"kind", kindStr,
+		"xtID", xt,
+	)
 	return nil
 }
 
@@ -506,7 +585,15 @@ func (b *EthAPIBackend) TxIndexDone() bool {
 }
 
 func (b *EthAPIBackend) GetPoolNonce(ctx context.Context, addr common.Address) (uint64, error) {
-	return b.eth.txPool.PoolNonce(addr), nil
+	nonce := b.eth.txPool.PoolNonce(addr)
+	pend, queued := b.eth.txPool.ContentFrom(addr)
+	log.Debug("[SSV] GetPoolNonce snapshot",
+		"addr", addr.Hex(),
+		"nonce", nonce,
+		"pending_count", len(pend),
+		"queued_count", len(queued),
+	)
+	return nonce, nil
 }
 
 func (b *EthAPIBackend) Stats() (runnable int, blocked int) {
@@ -797,7 +884,14 @@ func (b *EthAPIBackend) SimulateTransaction(
 			stageGasPool := new(core.GasPool).AddGas(header.GasLimit)
 			stateDB.SetTxContext(staged.Hash(), stateDB.TxIndex()+1)
 			if wants := staged.Nonce(); stateDB.GetNonce(stageMsg.From) != wants {
+				prev := stateDB.GetNonce(stageMsg.From)
 				stateDB.SetNonce(stageMsg.From, wants, tracing.NonceChangeUnspecified)
+				log.Debug("[SSV] Pre-apply putInbox adjusted nonce in simulation",
+					"from", stageMsg.From.Hex(),
+					"prev", prev,
+					"wants", wants,
+					"staged_hash", staged.Hash().Hex(),
+				)
 			}
 			if _, err := core.ApplyMessage(stagingEVM, stageMsg, stageGasPool); err != nil {
 				log.Warn("[SSV] Failed to pre-apply putInbox transaction", "txHash", staged.Hash(), "err", err)
@@ -826,7 +920,14 @@ func (b *EthAPIBackend) SimulateTransaction(
 			stageGasPool := new(core.GasPool).AddGas(header.GasLimit)
 			stateDB.SetTxContext(staged.Hash(), stateDB.TxIndex()+1)
 			if wants := staged.Nonce(); stateDB.GetNonce(stageMsg.From) != wants {
+				prev := stateDB.GetNonce(stageMsg.From)
 				stateDB.SetNonce(stageMsg.From, wants, tracing.NonceChangeUnspecified)
+				log.Debug("[SSV] Pre-apply original adjusted nonce in simulation",
+					"from", stageMsg.From.Hex(),
+					"prev", prev,
+					"wants", wants,
+					"staged_hash", staged.Hash().Hex(),
+				)
 			}
 			if _, err := core.ApplyMessage(stagingEVM, stageMsg, stageGasPool); err != nil {
 				log.Warn("[SSV] Failed to pre-apply original transaction", "txHash", staged.Hash(), "err", err)
@@ -860,10 +961,46 @@ func (b *EthAPIBackend) SimulateTransaction(
 	gasPool := new(core.GasPool).AddGas(header.GasLimit)
 	result, err := core.ApplyMessage(evm, msg, gasPool)
 	if err != nil {
+		xtKey := xtIDFromCtx(ctx)
+		reason := reasonForGrep(err)
 		log.Error("[SSV] EVM execution failed during simulation - REASON: evm_apply_message_error",
 			"txHash", tx.Hash().Hex(),
 			"error", err,
-			"failure_reason", "evm_apply_message_error")
+			"failure_reason", "evm_apply_message_error",
+			"xtID", xtKey,
+			"reason", reason,
+		)
+
+		// If it's a nonce mismatch, add a structured snapshot to aid parallel-tx debugging
+		if reason == "nonce_too_high" || reason == "nonce_too_low" {
+			// Gather sender/account info
+			sender := msg.From
+			poolNonce := b.eth.txPool.PoolNonce(sender)
+			stateNonce := stateDB.GetNonce(sender)
+			pend, queued := b.eth.txPool.ContentFrom(sender)
+			const maxDump = 16
+			pNonces := make([]uint64, 0, maxDump)
+			qNonces := make([]uint64, 0, maxDump)
+			for i := 0; i < len(pend) && i < maxDump; i++ {
+				pNonces = append(pNonces, pend[i].Nonce())
+			}
+			for i := 0; i < len(queued) && i < maxDump; i++ {
+				qNonces = append(qNonces, queued[i].Nonce())
+			}
+			log.Info("[SSV] Nonce mismatch snapshot during simulation",
+				"txHash", tx.Hash().Hex(),
+				"sender", sender.Hex(),
+				"txNonce", tx.Nonce(),
+				"poolNonce", poolNonce,
+				"stateNonce", stateNonce,
+				"pending_count", len(pend),
+				"queued_count", len(queued),
+				"pending_nonces", pNonces,
+				"queued_nonces", qNonces,
+				"xtID", xtKey,
+				"reason", reason,
+			)
+		}
 		return nil, err
 	}
 
@@ -876,6 +1013,21 @@ func (b *EthAPIBackend) SimulateTransaction(
 // SubmitSequencerTransaction submits a transaction with a priority flag.
 // SSV
 func (b *EthAPIBackend) SubmitSequencerTransaction(ctx context.Context, tx *types.Transaction, isPutInbox bool) error {
+	// Try to add sender to the log context
+	var sender common.Address
+	if signer := types.LatestSignerForChainID(b.ChainConfig().ChainID); signer != nil {
+		if s, err := types.Sender(signer, tx); err == nil {
+			sender = s
+		}
+	}
+	xtKey := xtIDFromCtx(ctx)
+	log.Info("[SSV] SubmitSequencerTransaction",
+		"txHash", tx.Hash().Hex(),
+		"nonce", tx.Nonce(),
+		"isPutInbox", isPutInbox,
+		"from", sender.Hex(),
+		"xtID", xtKey,
+	)
 	if err := b.validateSequencerTransaction(tx); err != nil {
 		log.Error("[SSV] Sequencer transaction validation failed", "err", err, "txHash", tx.Hash().Hex())
 		return fmt.Errorf("sequencer transaction validation failed: %w", err)
@@ -888,12 +1040,26 @@ func (b *EthAPIBackend) SubmitSequencerTransaction(ctx context.Context, tx *type
 	// Always inject sequencer transactions into txpool since SubmitSequencerTransaction
 	// is only called for real sequencer transactions that should be included in blocks
 	if err := b.sendTx(ctx, tx); err != nil {
-		log.Warn(
-			"[SSV] Failed to inject sequencer tx into txpool (continuing with staged include)",
-			"err",
-			err,
-			"txHash",
-			tx.Hash().Hex(),
+		reason := reasonForGrep(err)
+		msg := "[SSV] Failed to inject sequencer tx into txpool (continuing with staged include)"
+		if isPutInbox {
+			msg = "[SSV] Failed to inject putInbox tx into txpool"
+		}
+		log.Warn(msg,
+			"err", err,
+			"txHash", tx.Hash().Hex(),
+			"nonce", tx.Nonce(),
+			"from", sender.Hex(),
+			"xtID", xtKey,
+			"reason", reason,
+		)
+	} else {
+		log.Info("[SSV] Injected sequencer tx into txpool",
+			"txHash", tx.Hash().Hex(),
+			"nonce", tx.Nonce(),
+			"isPutInbox", isPutInbox,
+			"from", sender.Hex(),
+			"xtID", xtKey,
 		)
 	}
 	return nil
@@ -953,11 +1119,17 @@ func (b *EthAPIBackend) AddPendingPutInboxTx(tx *types.Transaction) {
 	b.addSequencerEntryLocked(tx, sequencerTxPutInbox)
 	putCount := b.countEntriesByKindLocked(sequencerTxPutInbox)
 	b.sequencerTxMutex.Unlock()
-
+	var from common.Address
+	if signer := types.LatestSignerForChainID(b.ChainConfig().ChainID); signer != nil {
+		if s, err := types.Sender(signer, tx); err == nil {
+			from = s
+		}
+	}
 	log.Info("[SSV] Added putInbox transaction to mempool",
 		"txHash", tx.Hash().Hex(),
 		"totalPending", putCount,
 		"nonce", tx.Nonce(),
+		"from", from.Hex(),
 	)
 
 	// Invalidate pending block cache since transaction state changed
@@ -1086,7 +1258,42 @@ func (b *EthAPIBackend) GetOrderedTransactionsForBlock(ctx context.Context) (typ
 	case sequencer.StateBuildingFree, sequencer.StateSubmission:
 		// After SCP completes (BuildingFree) or during final submission, include ready transactions
 		// This ensures transactions are committed in the first possible block after simulation/decision
-		return b.buildSequencerOnlyList(), nil
+		txs := b.buildSequencerOnlyList()
+		if len(txs) > 0 {
+			// Lightweight debug: emit counts by kind
+			b.sequencerTxMutex.RLock()
+			putCount := b.countEntriesByKindLocked(sequencerTxPutInbox)
+			origCount := b.countEntriesByKindLocked(sequencerTxOriginal)
+			// Per-tx order with minimal fields for nonce gap tracing
+			signer := types.LatestSignerForChainID(b.ChainConfig().ChainID)
+			for i, entry := range b.pendingXTEntries {
+				kind := "original"
+				if entry.kind == sequencerTxPutInbox {
+					kind = "putInbox"
+				}
+				from := common.Address{}
+				if signer != nil {
+					if s, err := types.Sender(signer, entry.tx); err == nil {
+						from = s
+					}
+				}
+				log.Debug("[SSV] Block order",
+					"idx", i,
+					"kind", kind,
+					"from", from.Hex(),
+					"nonce", entry.tx.Nonce(),
+					"xtID", entry.xtID,
+					"hash", entry.tx.Hash().Hex(),
+				)
+			}
+			b.sequencerTxMutex.RUnlock()
+			log.Debug("[SSV] GetOrderedTransactionsForBlock",
+				"total", len(txs),
+				"putInbox", putCount,
+				"original", origCount,
+			)
+		}
+		return txs, nil
 	default:
 		return types.Transactions{}, nil
 	}
@@ -1158,7 +1365,21 @@ func (b *EthAPIBackend) validateSequencerTransaction(tx *types.Transaction) erro
 // SSV
 func (b *EthAPIBackend) OnBlockBuildingStart(ctx context.Context) error {
 	if b.coordinator != nil {
-		_ = b.coordinator.OnBlockBuildingStart(ctx, b.coordinator.GetCurrentSlot())
+		slot := b.coordinator.GetCurrentSlot()
+		state := b.coordinator.GetState().String()
+		b.sequencerTxMutex.RLock()
+		putCount := b.countEntriesByKindLocked(sequencerTxPutInbox)
+		origCount := b.countEntriesByKindLocked(sequencerTxOriginal)
+		total := len(b.pendingXTEntries)
+		b.sequencerTxMutex.RUnlock()
+		log.Debug("[SSV] OnBlockBuildingStart",
+			"slot", slot,
+			"state", state,
+			"staged_total", total,
+			"staged_putInbox", putCount,
+			"staged_original", origCount,
+		)
+		_ = b.coordinator.OnBlockBuildingStart(ctx, slot)
 	}
 
 	return nil
@@ -1200,12 +1421,27 @@ func (b *EthAPIBackend) OnBlockBuildingComplete(
 
 	// Identify which cross-chain txs are in this block
 	txsToRemove := make(map[common.Hash]bool)
-	for _, tx := range block.Transactions() {
+	signer := types.LatestSignerForChainID(b.ChainConfig().ChainID)
+	for i, tx := range block.Transactions() {
 		if crossChainTxHashes[tx.Hash()] {
 			b.committedTxsMutex.Lock()
 			b.committedTxHashes[tx.Hash()] = true
 			b.committedTxsMutex.Unlock()
 			txsToRemove[tx.Hash()] = true
+
+			from := common.Address{}
+			if signer != nil {
+				if s, err := types.Sender(signer, tx); err == nil {
+					from = s
+				}
+			}
+			log.Debug("[SSV] Included sequencer tx",
+				"block", block.NumberU64(),
+				"idx", i,
+				"hash", tx.Hash().Hex(),
+				"from", from.Hex(),
+				"nonce", tx.Nonce(),
+			)
 		}
 	}
 
@@ -1375,6 +1611,7 @@ func (b *EthAPIBackend) waitForPutInboxTransactionsToBeProcessed() error {
 
 	// Wait for transactions to be in txpool
 	for _, tx := range putInboxTxs {
+		log.Debug("[SSV] Waiting for putInbox tx to appear in pool", "txHash", tx.Hash().Hex(), "nonce", tx.Nonce())
 		timeout := time.After(5 * time.Second)
 		ticker := time.NewTicker(10 * time.Millisecond)
 
@@ -1383,9 +1620,25 @@ func (b *EthAPIBackend) waitForPutInboxTransactionsToBeProcessed() error {
 			for {
 				select {
 				case <-timeout:
-					log.Error("timed out waiting for putInbox transaction appearance in pool")
+					log.Error("timed out waiting for putInbox transaction appearance in pool", "txHash", tx.Hash().Hex(), "nonce", tx.Nonce())
 					return
 				case <-ticker.C:
+					// Scan txpool for same-nonce entries from coordinator to spot gaps/duplicates
+					pend, queued := b.eth.txPool.ContentFrom(b.coordinatorAddr)
+					matchPending := 0
+					matchQueued := 0
+					for _, t := range pend {
+						if t.Nonce() == tx.Nonce() && t.Hash() != tx.Hash() {
+							matchPending++
+						}
+					}
+					for _, t := range queued {
+						if t.Nonce() == tx.Nonce() && t.Hash() != tx.Hash() {
+							matchQueued++
+						}
+					}
+					log.Debug("[SSV] putInbox pool scan", "nonce", tx.Nonce(), "matches_pending", matchPending, "matches_queued", matchQueued)
+
 					if poolTx := b.GetPoolTransaction(tx.Hash()); poolTx != nil {
 						log.Info("[SSV] found putInbox transaction in pool", "hash", tx.Hash().Hex())
 						return
@@ -1412,7 +1665,12 @@ func (b *EthAPIBackend) poolPayloadTx(
 		log.Warn("[SSV] Failed to add original tx to txpool for nonce management",
 			"txHash", tx.Hash().Hex(), "err", err)
 	} else {
-		log.Info("[SSV] Pooled original tx to txpool", "txHash", tx.Hash().Hex(), "nonce", tx.Nonce())
+		xtKey := xtIDFromCtx(ctx)
+		log.Info("[SSV] Pooled original tx to txpool",
+			"txHash", tx.Hash().Hex(),
+			"nonce", tx.Nonce(),
+			"xtID", xtKey,
+		)
 	}
 
 	if miner := b.eth.miner; miner != nil {
@@ -1458,10 +1716,15 @@ func (b *EthAPIBackend) assignXtKeyToHash(tx *types.Transaction, xtID *rollupv1.
 	}
 
 	b.pendingXTEntries[idx].xtID = key
+	var slot uint64
+	if b.coordinator != nil {
+		slot = b.coordinator.GetCurrentSlot()
+	}
 	log.Info("[SSV] Assigned xtID to transaction",
 		"txHash", txHash.Hex(),
 		"xtID", key,
-		"idx", idx)
+		"idx", idx,
+		"slot", slot)
 }
 
 func (b *EthAPIBackend) addSequencerEntryLocked(tx *types.Transaction, kind sequencerTxKind) {
@@ -1476,7 +1739,30 @@ func (b *EthAPIBackend) addSequencerEntryLocked(tx *types.Transaction, kind sequ
 		return
 	}
 	b.pendingXTEntries = append(b.pendingXTEntries, sequencerTxEntry{tx: tx, kind: kind})
-	b.pendingByHash[hash] = len(b.pendingXTEntries) - 1
+	idx := len(b.pendingXTEntries) - 1
+	b.pendingByHash[hash] = idx
+	signer := types.LatestSignerForChainID(b.ChainConfig().ChainID)
+	from := common.Address{}
+	if signer != nil {
+		if s, err := types.Sender(signer, tx); err == nil {
+			from = s
+		}
+	}
+	kindStr := "original"
+	if kind == sequencerTxPutInbox {
+		kindStr = "putInbox"
+	}
+	putCount := b.countEntriesByKindLocked(sequencerTxPutInbox)
+	origCount := b.countEntriesByKindLocked(sequencerTxOriginal)
+	log.Debug("[SSV] Staged add",
+		"idx", idx,
+		"kind", kindStr,
+		"from", from.Hex(),
+		"nonce", tx.Nonce(),
+		"hash", tx.Hash().Hex(),
+		"pending_putInbox", putCount,
+		"pending_original", origCount,
+	)
 }
 
 func (b *EthAPIBackend) countEntriesByKindLocked(kind sequencerTxKind) int {
@@ -1524,6 +1810,25 @@ func (b *EthAPIBackend) removeEntriesMatchingLocked(predicate func(sequencerTxEn
 			} else {
 				removedOriginal++
 			}
+
+			signer := types.LatestSignerForChainID(b.ChainConfig().ChainID)
+			from := common.Address{}
+			if signer != nil {
+				if s, err := types.Sender(signer, entry.tx); err == nil {
+					from = s
+				}
+			}
+			kindStr := "original"
+			if entry.kind == sequencerTxPutInbox {
+				kindStr = "putInbox"
+			}
+			log.Debug("[SSV] Staged remove",
+				"kind", kindStr,
+				"from", from.Hex(),
+				"nonce", entry.tx.Nonce(),
+				"hash", entry.tx.Hash().Hex(),
+				"xtID", entry.xtID,
+			)
 			continue
 		}
 		filtered = append(filtered, entry)
@@ -1632,7 +1937,19 @@ func (b *EthAPIBackend) SetSequencerCoordinator(coord sequencer.Coordinator, sp 
 // NotifySlotStart notifies the backend when a new SBCP slot begins.
 // SSV
 func (b *EthAPIBackend) NotifySlotStart(startSlot *rollupv1.StartSlot) error {
-	log.Info("[SSV] Notify miner: StartSlot", "slot", startSlot.Slot, "next_sb", startSlot.NextSuperblockNumber)
+	// Per-slot snapshot before any cleanup
+	b.sequencerTxMutex.RLock()
+	putInboxCount := b.countEntriesByKindLocked(sequencerTxPutInbox)
+	originalCount := b.countEntriesByKindLocked(sequencerTxOriginal)
+	b.sequencerTxMutex.RUnlock()
+	mailboxCount := len(b.mailboxAddresses)
+	log.Info("[SSV] Notify miner: StartSlot",
+		"slot", startSlot.Slot,
+		"next_sb", startSlot.NextSuperblockNumber,
+		"pending_putInbox", putInboxCount,
+		"pending_original", originalCount,
+		"mailboxes", mailboxCount,
+	)
 
 	// Clear any pending blocks from previous slot when new slot starts
 	b.pendingBlockMutex.Lock()
@@ -1689,7 +2006,19 @@ func (b *EthAPIBackend) NotifySlotStart(startSlot *rollupv1.StartSlot) error {
 // NotifyRequestSeal notifies the backend when RequestSeal is received from coordinator.
 // SSV
 func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *rollupv1.RequestSeal) error {
-	log.Info("[SSV] Notify miner: RequestSeal", "slot", requestSeal.Slot, "included_xts", len(requestSeal.IncludedXts))
+	// Per-slot snapshot at RequestSeal
+	b.sequencerTxMutex.RLock()
+	putInboxCount := b.countEntriesByKindLocked(sequencerTxPutInbox)
+	originalCount := b.countEntriesByKindLocked(sequencerTxOriginal)
+	b.sequencerTxMutex.RUnlock()
+	mailboxCount := len(b.mailboxAddresses)
+	log.Info("[SSV] Notify miner: RequestSeal",
+		"slot", requestSeal.Slot,
+		"included_xts", len(requestSeal.IncludedXts),
+		"pending_putInbox", putInboxCount,
+		"pending_original", originalCount,
+		"mailboxes", mailboxCount,
+	)
 
 	// Clean up non-included transactions FIRST, before storing RequestSeal info
 	// This ensures transactions rejected by SCP cannot be included in blocks built during Submission state
@@ -1990,7 +2319,7 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 				return false, fmt.Errorf("failed to unmarshal transaction: %w", err)
 			}
 
-			traceResult, err := b.SimulateTransaction(ctx, tx, rpc.BlockNumberOrHashWithNumber(rpc.PendingBlockNumber))
+			traceResult, err := b.SimulateTransaction(ctxWithXtID(ctx, xtID), tx, rpc.BlockNumberOrHashWithNumber(rpc.PendingBlockNumber))
 			if err != nil {
 				return false, fmt.Errorf("failed to simulate transaction: %w", err)
 			}
@@ -2055,6 +2384,8 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 			b.coordinatorAddr.Hex(),
 			"nonce",
 			nonce,
+			"xtID",
+			xtID.Hex(),
 		)
 
 		// Create putInbox transactions
@@ -2065,7 +2396,7 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 				return false, fmt.Errorf("failed to create putInbox transaction: %w", err)
 			}
 
-			if err := b.SubmitSequencerTransaction(ctx, putInboxTx, true); err != nil {
+			if err := b.SubmitSequencerTransaction(ctxWithXtID(ctx, xtID), putInboxTx, true); err != nil {
 				return false, fmt.Errorf("failed to submit putInbox transaction: %w", err)
 			}
 			b.assignXtKeyToHash(putInboxTx, xtID)
@@ -2080,11 +2411,7 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 
 		// Re-simulate after putInbox to detect ACK messages that need to be sent
 		for i, simState := range coordinationStates {
-			traceResult, err := b.SimulateTransaction(
-				ctx,
-				simState.Tx,
-				rpc.BlockNumberOrHashWithNumber(rpc.PendingBlockNumber),
-			)
+			traceResult, err := b.SimulateTransaction(ctxWithXtID(ctx, xtID), simState.Tx, rpc.BlockNumberOrHashWithNumber(rpc.PendingBlockNumber))
 			if err != nil {
 				continue
 			}
@@ -2141,8 +2468,8 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 			// Pool transactions immediately when they become successful
 			_, done := txDone[simState.Tx.Hash().Hex()]
 			if newSimState.Success && !done && len(newSimState.Dependencies) == 0 {
-				log.Info("[SSV] Pooling transaction after re-simulation", "hash", simState.Tx.Hash().Hex())
-				b.poolPayloadTx(ctx, simState.Tx)
+				log.Info("[SSV] Pooling transaction after re-simulation", "hash", simState.Tx.Hash().Hex(), "xtID", xtID.Hex())
+				b.poolPayloadTx(ctxWithXtID(ctx, xtID), simState.Tx)
 				b.assignXtKeyToHash(simState.Tx, xtID)
 				txDone[simState.Tx.Hash().Hex()] = struct{}{}
 			}
@@ -2154,8 +2481,8 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 		tx := simState.Tx
 		_, done := txDone[tx.Hash().Hex()]
 		if simState.Success && !done && len(simState.Dependencies) == 0 {
-			log.Info("[SSV] Pooling remaining successful transaction", "hash", tx.Hash().Hex())
-			b.poolPayloadTx(ctx, tx)
+			log.Info("[SSV] Pooling remaining successful transaction", "hash", tx.Hash().Hex(), "xtID", xtID.Hex())
+			b.poolPayloadTx(ctxWithXtID(ctx, xtID), tx)
 			b.assignXtKeyToHash(tx, xtID)
 			txDone[tx.Hash().Hex()] = struct{}{}
 		}
