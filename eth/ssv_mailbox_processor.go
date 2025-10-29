@@ -692,7 +692,16 @@ func (mp *MailboxProcessor) createPutInboxTx(dep CrossRollupDependency, nonce ui
 	log.Info("[SSV] Created putInbox transaction",
 		"txHash", signedTx.Hash().Hex(),
 		"nonce", nonce,
-		"sessionId", dep.SessionID)
+		"sessionId", dep.SessionID,
+		"mailbox", mailboxAddr.Hex(),
+		"sourceChain", dep.SourceChainID,
+		"sender", dep.Sender.Hex(),
+		"receiver", dep.Receiver.Hex(),
+		"label_len", len(dep.Label),
+		"data_len", len(dep.Data),
+		"gasTipCap", txData.GasTipCap,
+		"gasFeeCap", txData.GasFeeCap,
+	)
 
 	return signedTx, nil
 }
