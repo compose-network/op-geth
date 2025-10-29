@@ -603,6 +603,10 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 		"gas", gas,
 		"to", ep.Hex(),
 		"callDataLen", len(callData),
+		"baseFee", baseFee.String(),
+		"tipSuggestion", tipSuggestion.String(),
+		"minUserTip", minUserTip.String(),
+		"minUserFeeCap", minUserFeeCap.String(),
 		"callData", hexutil.Encode(callData))
 
 	raw, err := signedTx.MarshalBinary()
