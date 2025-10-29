@@ -21,12 +21,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 	gomath "math"
 	"math/big"
 	"strings"
 	"time"
 
-	rollupv1 "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/proto/rollup/v1"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/davecgh/go-spew/spew"

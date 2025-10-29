@@ -19,10 +19,9 @@ package ethapi
 
 import (
 	"context"
+	"github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 
 	"github.com/ethereum/go-ethereum/core/ssv"
-	rollupv1 "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/proto/rollup/v1"
-
 	"math/big"
 	"time"
 

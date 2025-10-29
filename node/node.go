@@ -23,6 +23,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/ethereum/go-ethereum/internal/xauth"
+	"github.com/ethereum/go-ethereum/internal/xbootstrap"
+	"github.com/ethereum/go-ethereum/internal/xconsensus"
+	ssvlog "github.com/ethereum/go-ethereum/internal/xlog"
+	xsequencer "github.com/ethereum/go-ethereum/internal/xsuperblock/sequencer"
 	"hash/crc32"
 	"math/big"
 	"net"
@@ -36,15 +41,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
-	ssvlog "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/log"
-	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/auth"
-	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/consensus"
-	spconsensus "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/consensus"
-	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/superblock/sequencer"
-	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/superblock/sequencer/bootstrap"
-	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/superblock/slot"
-	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/transport"
-	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/transport/tcp"
+	"github.com/ethereum/go-ethereum/internal/xtransport"
+	"github.com/ethereum/go-ethereum/internal/xtransport/tcp"
 	"github.com/rs/zerolog"
 
 	"github.com/ethereum/go-ethereum/accounts"
@@ -84,14 +82,14 @@ type Node struct {
 	ipc           *ipcServer  // Stores information about the ipc http server
 	inprocHandler *rpc.Server // In-process RPC request handler to process the API requests
 
-	coordinator          consensus.Coordinator
-	spClient             transport.Client
+	coordinator          xconsensus.Coordinator
+	spClient             xtransport.Client
 	sequencerAddrs       map[string]string // Map of sequencer chain IDs to their addresses
 	sequencerKey         *ecdsa.PrivateKey
 	coordinatorKey       *ecdsa.PrivateKey
-	sequencerCoordinator *sequencer.SequencerCoordinator
+	sequencerCoordinator *xsequencer.SequencerCoordinator
 	ssvLogger            zerolog.Logger
-	sequencerRuntime     *bootstrap.Runtime
+	sequencerRuntime     *xbootstrap.Runtime
 
 	databases map[*closeTrackingDB]struct{} // All open databases
 }
@@ -193,7 +191,7 @@ func New(conf *Config) (*Node, error) {
 	serverCfg := tcp.DefaultServerConfig()
 	serverCfg.ListenAddr = conf.SPListenAddr
 
-	var authManager auth.Manager
+	var authManager xauth.Manager
 	if conf.SequencerKey != "" {
 		privKey := parsePrivateKey(conf.SequencerKey)
 		//authManager = auth.NewManager(privKey)
@@ -275,14 +273,14 @@ func New(conf *Config) (*Node, error) {
 
 	_, addrs := generateClients(conf.SequencerAddrs, authManager)
 	// Exclude self from peer list to avoid dialing ourselves
-	selfKey := spconsensus.ChainKeyUint64(uint64(chainIDInt64))
+	selfKey := xconsensus.ChainKeyUint64(uint64(chainIDInt64))
 	delete(addrs, selfKey)
 	node.sequencerAddrs = addrs
 	node.sequencerKey = parsePrivateKey(conf.SequencerKey)
 
 	// Bootstrap SBCP runtime (coordinator, SP client, P2P) - handles all connections
 	chainIDBytes := big.NewInt(chainIDInt64).Bytes()
-	rt, err := bootstrap.Setup(context.Background(), bootstrap.Config{
+	rt, err := xbootstrap.Setup(xbootstrap.Config{
 		ChainID:         chainIDBytes,
 		SPAddr:          conf.SPAddr,
 		PeerAddrs:       addrs,
@@ -296,10 +294,10 @@ func New(conf *Config) (*Node, error) {
 	}
 	node.sequencerRuntime = rt
 	node.spClient = rt.SPClient
-	if sc, ok := rt.Coordinator.(*sequencer.SequencerCoordinator); ok {
+	if sc, ok := rt.Coordinator.(*xsequencer.SequencerCoordinator); ok {
 		node.sequencerCoordinator = sc
 	} else {
-		node.sequencerCoordinator = sequencer.NewSequencerCoordinator(rt.Coordinator.Consensus(), sequencer.Config{ChainID: chainIDBytes, Slot: slot.Config{Duration: 12 * time.Second, SealCutover: 2.0 / 3.0, GenesisTime: time.Now()}}, rt.SPClient, ssvLogger)
+		node.sequencerCoordinator = xsequencer.NewSequencerCoordinator(rt.Coordinator.Consensus(), xsequencer.Config{ChainID: chainIDBytes}, rt.SPClient, ssvLogger)
 	}
 
 	ssvLogger.Info().
@@ -310,7 +308,7 @@ func New(conf *Config) (*Node, error) {
 	return node, nil
 }
 
-func setupSequencerAuth(myChainID string, authManager auth.Manager) {
+func setupSequencerAuth(myChainID string, authManager xauth.Manager) {
 	spPublicKey := "03c720e214dccd730db38d10daca5f86d9e95f068ca5eb3930b7d0126e7a37c4a1"
 
 	spPubKeyBytes, err := hex.DecodeString(spPublicKey)
@@ -360,8 +358,8 @@ func parsePrivateKey(privKeyHex string) *ecdsa.PrivateKey {
 	return privateKey
 }
 
-func generateClients(addrs string, authManager auth.Manager) (map[string]transport.Client, map[string]string) {
-	clients := make(map[string]transport.Client)
+func generateClients(addrs string, authManager xauth.Manager) (map[string]xtransport.Client, map[string]string) {
+	clients := make(map[string]xtransport.Client)
 	addresses := make(map[string]string)
 
 	if addrs == "" {
@@ -395,7 +393,7 @@ func generateClients(addrs string, authManager auth.Manager) (map[string]transpo
 		// Normalize chain ID key: accept decimal or hex and store canonical hex key
 		var key string
 		if bi, ok := new(big.Int).SetString(rawID, 10); ok {
-			key = spconsensus.ChainKeyUint64(bi.Uint64())
+			key = xconsensus.ChainKeyUint64(bi.Uint64())
 		} else {
 			// Assume hex; strip optional 0x and lowercase
 			rid := strings.ToLower(strings.TrimPrefix(rawID, "0x"))
@@ -938,28 +936,28 @@ func (n *Node) Server() *p2p.Server {
 	return n.server
 }
 
-func (n *Node) SPClient() transport.Client {
+func (n *Node) SPClient() xtransport.Client {
 	n.lock.Lock()
 	defer n.lock.Unlock()
 
 	return n.spClient
 }
 
-func (n *Node) Coordinator() sequencer.Coordinator {
+func (n *Node) Coordinator() xsequencer.Coordinator {
 	n.lock.Lock()
 	defer n.lock.Unlock()
 
 	return n.sequencerCoordinator
 }
 
-func (n *Node) SequencerClients() map[string]transport.Client {
+func (n *Node) SequencerClients() map[string]xtransport.Client {
 	n.lock.Lock()
 	defer n.lock.Unlock()
 
 	if n.sequencerRuntime != nil {
 		return n.sequencerRuntime.Peers
 	}
-	return make(map[string]transport.Client)
+	return make(map[string]xtransport.Client)
 }
 
 func (n *Node) SequencerKey() *ecdsa.PrivateKey {

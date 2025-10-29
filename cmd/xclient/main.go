@@ -5,11 +5,10 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"fmt"
+	"github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/ethclient"
-	rollupv1 "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/proto/rollup/v1"
-
 	"log"
 	"math/big"
 	"os"

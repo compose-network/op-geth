@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 	"math"
 	"math/big"
 	"os"
@@ -34,10 +35,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ethereum/go-ethereum/core/ssv"
-	rollupv1 "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/proto/rollup/v1"
-
 	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/core/ssv"
 	"github.com/ethereum/go-ethereum/internal/ethapi/override"
 
 	"github.com/ethereum/go-ethereum"

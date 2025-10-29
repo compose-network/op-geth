@@ -22,9 +22,10 @@ import (
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
-
-	rollupv1 "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/proto/rollup/v1"
-	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/transport"
+	spconsensus "github.com/ethereum/go-ethereum/internal/xconsensus"
+	"github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
+	xsequencer "github.com/ethereum/go-ethereum/internal/xsuperblock/sequencer"
+	"github.com/ethereum/go-ethereum/internal/xtransport"
 
 	"math/big"
 	"strings"
@@ -57,9 +58,6 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
-
-	spconsensus "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/consensus"
-	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/superblock/sequencer"
 )
 
 // EthAPIBackend implements ethapi.Backend and tracers.Backend for full nodes
@@ -71,9 +69,9 @@ type EthAPIBackend struct {
 	gpo                 *gasprice.Oracle
 
 	// SSV: Shared publisher + SBCP coordinator integration
-	spClient         transport.Client
-	coordinator      sequencer.Coordinator
-	sequencerClients map[string]transport.Client
+	spClient         xtransport.Client
+	coordinator      xsequencer.Coordinator
+	sequencerClients map[string]xtransport.Client
 	sequencerKey     *ecdsa.PrivateKey
 	sequencerAddress common.Address
 	coordinatorKey   *ecdsa.PrivateKey
@@ -94,7 +92,6 @@ type EthAPIBackend struct {
 	// SSV: Store built blocks to send after RequestSeal
 	pendingBlockMutex sync.RWMutex
 	pendingBlocks     []*types.Block
-	pendingBlockSlot  uint64
 
 	// SSV: Keep copy of committed transactions for SP submission
 	// Transactions are staged in pendingXTEntries and cleared after block building,
@@ -982,26 +979,21 @@ func (b *EthAPIBackend) ClearSequencerTransactionsAfterBlock() {
 		return
 	}
 
-	currentState := b.coordinator.GetState()
-	slot := b.coordinator.GetCurrentSlot()
-
 	log.Info("[SSV] Transaction clearing request",
-		"state", currentState.String(),
-		"slot", slot,
 		"pending", len(b.GetPendingPutInboxTxs())+len(b.GetPendingOriginalTxs()))
 
-	switch currentState {
-	case sequencer.StateBuildingFree, sequencer.StateBuildingLocked:
-		// Preserve transactions during these states:
-		// - BuildingLocked: SCP coordination in progress
-		// - BuildingFree: Transactions ready, waiting for block inclusion
-		// Actual clearing happens in OnBlockBuildingComplete after commitment
-		log.Info("[SSV] Preserving transactions during coordination")
-		return
-	default:
-		log.Info("[SSV] Clearing transactions")
-		b.clearAllSequencerTransactions()
-	}
+	//switch currentState {
+	//case sequencer.StateBuildingFree, sequencer.StateBuildingLocked:
+	// Preserve transactions during these states:
+	// - BuildingLocked: SCP coordination in progress
+	// - BuildingFree: Transactions ready, waiting for block inclusion
+	// Actual clearing happens in OnBlockBuildingComplete after commitment
+	//log.Info("[SSV] Preserving transactions during coordination")
+	//return
+	//default:
+	//	log.Info("[SSV] Clearing transactions")
+	b.clearAllSequencerTransactions()
+	//}
 }
 
 // clearAllSequencerTransactions performs the actual clearing of transactions
@@ -1054,15 +1046,12 @@ func (b *EthAPIBackend) PrepareSequencerTransactionsForBlock(ctx context.Context
 		return nil
 	}
 
-	currentState := b.coordinator.GetState()
-	currentSlot := b.coordinator.GetCurrentSlot()
-
 	// During active SCP coordination, notify coordinator
-	if currentState == sequencer.StateBuildingLocked {
-		if err := b.coordinator.PrepareTransactionsForBlock(ctx, currentSlot); err != nil {
-			log.Warn("[SSV] Coordinator failed to prepare transactions", "err", err)
-		}
-	}
+	//if currentState == sequencer.StateBuildingLocked {
+	//	if err := b.coordinator.PrepareTransactionsForBlock(ctx, currentSlot); err != nil {
+	//		log.Warn("[SSV] Coordinator failed to prepare transactions", "err", err)
+	//	}
+	//}
 
 	return nil
 }
@@ -1072,24 +1061,7 @@ func (b *EthAPIBackend) PrepareSequencerTransactionsForBlock(ctx context.Context
 // included by the miner after this list, and must not be returned here.
 // SSV
 func (b *EthAPIBackend) GetOrderedTransactionsForBlock(ctx context.Context) (types.Transactions, error) {
-	if b.coordinator == nil {
-		// Non-SBCP mode: return sequencer-managed txs only; miner appends normals
-		return b.buildSequencerOnlyList(), nil
-	}
-
-	currentState := b.coordinator.GetState()
-
-	switch currentState {
-	case sequencer.StateBuildingLocked:
-		// During coordination, exclude cross-chain txs - they'll be included after decision
-		return types.Transactions{}, nil
-	case sequencer.StateBuildingFree, sequencer.StateSubmission:
-		// After SCP completes (BuildingFree) or during final submission, include ready transactions
-		// This ensures transactions are committed in the first possible block after simulation/decision
-		return b.buildSequencerOnlyList(), nil
-	default:
-		return types.Transactions{}, nil
-	}
+	return b.buildSequencerOnlyList(), nil
 }
 
 // buildSequencerOnlyList assembles only the sequencer-managed transactions preserving
@@ -1158,7 +1130,7 @@ func (b *EthAPIBackend) validateSequencerTransaction(tx *types.Transaction) erro
 // SSV
 func (b *EthAPIBackend) OnBlockBuildingStart(ctx context.Context) error {
 	if b.coordinator != nil {
-		_ = b.coordinator.OnBlockBuildingStart(ctx, b.coordinator.GetCurrentSlot())
+		_ = b.coordinator.OnBlockBuildingStart(ctx, 0)
 	}
 
 	return nil
@@ -1182,13 +1154,13 @@ func (b *EthAPIBackend) OnBlockBuildingComplete(
 		return nil
 	}
 
-	// Get slot
-	slot := uint64(0)
-	currentState := "unknown"
-	if b.coordinator != nil {
-		slot = b.coordinator.GetCurrentSlot()
-		currentState = b.coordinator.GetState().String()
-	}
+	//Get slot
+	//slot := uint64(0)
+	//currentState := "unknown"
+	//if b.coordinator != nil {
+	//	slot = b.coordinator.GetCurrentSlot()
+	//	currentState = b.coordinator.GetState().String()
+	//}
 
 	// Get current cross-chain tx hashes BEFORE clearing
 	b.sequencerTxMutex.RLock()
@@ -1212,7 +1184,7 @@ func (b *EthAPIBackend) OnBlockBuildingComplete(
 	if len(txsToRemove) > 0 {
 		b.clearCommittedSequencerTransactions(txsToRemove)
 		log.Info("[SSV] Cleared committed sequencer transactions after block build",
-			"slot", slot,
+			//"slot", slot,
 			"blockNumber", block.NumberU64(),
 			"cleared", len(txsToRemove))
 	}
@@ -1243,8 +1215,8 @@ func (b *EthAPIBackend) OnBlockBuildingComplete(
 		b.pendingBlockMutex.Unlock()
 
 		log.Debug("[SSV] Skipping duplicate block (identical hash already stored)",
-			"slot", slot,
-			"state", currentState,
+			//"slot", slot,
+			//"state", currentState,
 			"blockNumber", blockNumber,
 			"hash", blockHash.Hex(),
 			"totalStored", totalStored)
@@ -1252,19 +1224,19 @@ func (b *EthAPIBackend) OnBlockBuildingComplete(
 	}
 
 	b.pendingBlocks = append(filtered, block)
-	b.pendingBlockSlot = slot
+	//b.pendingBlockSlot = slot
 	b.pendingBlockMutex.Unlock()
 
 	// If RequestSeal already arrived for this slot, send immediately
-	b.rsMutex.RLock()
-	requestSealReady := b.lastRequestSealIncluded != nil && b.lastRequestSealSlot == slot
-	b.rsMutex.RUnlock()
+	//b.rsMutex.RLock()
+	//requestSealReady := b.lastRequestSealIncluded != nil && b.lastRequestSealSlot == slot
+	//b.rsMutex.RUnlock()
 
-	if requestSealReady {
-		if err := b.sendStoredL2Block(ctx); err != nil {
-			log.Error("[SSV] Failed to send stored L2Blocks after block build", "err", err, "slot", slot)
-		}
-	}
+	//if requestSealReady {
+	//	if err := b.sendStoredL2Block(ctx); err != nil {
+	//		log.Error("[SSV] Failed to send stored L2Blocks after block build", "err", err, "slot", slot)
+	//	}
+	//}
 
 	return nil
 }
@@ -1587,7 +1559,7 @@ func (b *EthAPIBackend) dropTransactionsForXtKey(key string) (int, int) {
 
 // SetSequencerCoordinator wires an SBCP sequencer coordinator, consensus callbacks, and SP client routing.
 // SSV
-func (b *EthAPIBackend) SetSequencerCoordinator(coord sequencer.Coordinator, sp transport.Client) {
+func (b *EthAPIBackend) SetSequencerCoordinator(coord xsequencer.Coordinator, sp xtransport.Client) {
 	b.coordinator = coord
 	b.spClient = sp
 
@@ -1617,7 +1589,7 @@ func (b *EthAPIBackend) SetSequencerCoordinator(coord sequencer.Coordinator, sp 
 		}
 
 		// Register SBCP callbacks
-		b.coordinator.SetCallbacks(sequencer.CoordinatorCallbacks{
+		b.coordinator.SetCallbacks(xsequencer.CoordinatorCallbacks{
 			// For SBCP mode simulation during StartSC
 			SimulateAndVote: b.simulateXTRequestForSBCP,
 			// For immediate cleanup of aborted transactions
@@ -1639,12 +1611,12 @@ func (b *EthAPIBackend) NotifySlotStart(startSlot *rollupv1.StartSlot) error {
 	prevBlockCount := len(b.pendingBlocks)
 	if prevBlockCount > 0 {
 		log.Warn("[SSV] Clearing unsent blocks from previous slot",
-			"prevSlot", b.pendingBlockSlot,
+			//"prevSlot", b.pendingBlockSlot,
 			"newSlot", startSlot.Slot,
 			"blockCount", prevBlockCount)
 	}
 	b.pendingBlocks = nil
-	b.pendingBlockSlot = startSlot.Slot
+	//b.pendingBlockSlot = startSlot.Slot
 	b.pendingBlockMutex.Unlock()
 
 	// Clear any lingering sequencer transactions from previous slot.
@@ -1776,21 +1748,21 @@ func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *roll
 
 // NotifyStateChange notifies the miner of sequencer state changes
 // SSV
-func (b *EthAPIBackend) NotifyStateChange(from, to sequencer.State, slot uint64) error {
-	log.Debug("[SSV] SBCP state change", "from", from.String(), "to", to.String(), "slot", slot)
-
-	// When SCP completes (Building-Locked → Building-Free), force miner to rebuild payload
-	// with newly added SCP transactions. Without this, the payload remains stale and
-	// RequestSeal seals a block without the SCP transactions.
-	if from == sequencer.StateBuildingLocked && to == sequencer.StateBuildingFree {
-		if miner := b.eth.miner; miner != nil {
-			log.Info("[SSV] Forcing payload rebuild after SCP completion", "slot", slot)
-			miner.InvalidatePendingCache()
-		}
-	}
-
-	return nil
-}
+//func (b *EthAPIBackend) NotifyStateChange(from, to sequencer.State, slot uint64) error {
+//	log.Debug("[SSV] SBCP state change", "from", from.String(), "to", to.String(), "slot", slot)
+//
+//	// When SCP completes (Building-Locked → Building-Free), force miner to rebuild payload
+//	// with newly added SCP transactions. Without this, the payload remains stale and
+//	// RequestSeal seals a block without the SCP transactions.
+//	if from == sequencer.StateBuildingLocked && to == sequencer.StateBuildingFree {
+//		if miner := b.eth.miner; miner != nil {
+//			log.Info("[SSV] Forcing payload rebuild after SCP completion", "slot", slot)
+//			miner.InvalidatePendingCache()
+//		}
+//	}
+//
+//	return nil
+//}
 
 // cleanupAbortedTransactionCallback removes aborted cross-chain transactions from the pending pool
 // immediately upon consensus decision. This ensures transactions rejected by the consensus layer
@@ -1821,7 +1793,7 @@ func (b *EthAPIBackend) sendStoredL2Block(ctx context.Context) error {
 	b.pendingBlockMutex.Lock()
 	blocks := make([]*types.Block, len(b.pendingBlocks))
 	copy(blocks, b.pendingBlocks)
-	slot := b.pendingBlockSlot
+	//slot := b.pendingBlockSlot
 	// Clear after copying
 	b.pendingBlocks = nil
 	b.pendingBlockMutex.Unlock()
@@ -1849,7 +1821,7 @@ func (b *EthAPIBackend) sendStoredL2Block(ctx context.Context) error {
 	b.committedTxsMutex.RUnlock()
 
 	log.Info("[SSV] Submitting L2 blocks to shared publisher",
-		"slot", slot,
+		//"slot", slot,
 		"blockCount", len(blocks),
 		"committedXTs", len(crossChainTxHashes))
 
@@ -1882,7 +1854,7 @@ func (b *EthAPIBackend) sendStoredL2Block(ctx context.Context) error {
 		}
 
 		l2 := &rollupv1.L2Block{
-			Slot:            slot,
+			//Slot:            slot,
 			ChainId:         b.ChainConfig().ChainID.Bytes(),
 			BlockNumber:     block.NumberU64(),
 			BlockHash:       block.Hash().Bytes(),
@@ -1897,7 +1869,7 @@ func (b *EthAPIBackend) sendStoredL2Block(ctx context.Context) error {
 		}
 
 		if err := b.spClient.Send(ctx, msg); err != nil {
-			log.Error("[SSV] Failed to send L2Block to shared publisher", "err", err, "slot", slot)
+			log.Error("[SSV] Failed to send L2Block to shared publisher", "err", err)
 			return err
 		}
 
@@ -1905,7 +1877,7 @@ func (b *EthAPIBackend) sendStoredL2Block(ctx context.Context) error {
 		// This is important so the consensus layer knows which XTs were committed
 		if b.coordinator != nil && b.coordinator.Consensus() != nil && len(included) > 0 {
 			if err := b.coordinator.Consensus().OnL2BlockCommitted(ctx, l2); err != nil {
-				log.Warn("[SSV] Consensus OnL2BlockCommitted warning", "err", err, "slot", slot)
+				log.Warn("[SSV] Consensus OnL2BlockCommitted warning", "err", err)
 			}
 		}
 
@@ -1913,7 +1885,7 @@ func (b *EthAPIBackend) sendStoredL2Block(ctx context.Context) error {
 	}
 
 	log.Info("[SSV] Successfully submitted L2 blocks",
-		"slot", slot,
+		//"slot", slot,
 		"totalBlocks", len(blocks),
 		"blocksWithXTs", blocksWithXTs)
 
@@ -1925,7 +1897,7 @@ func (b *EthAPIBackend) sendStoredL2Block(ctx context.Context) error {
 	// Use the last block (doesn't matter which one, just need to trigger the transition)
 	if b.coordinator != nil && lastL2Block != nil {
 		if err := b.coordinator.OnBlockBuildingComplete(ctx, lastL2Block, true); err != nil {
-			log.Warn("[SSV] Coordinator OnBlockBuildingComplete warning", "err", err, "slot", slot)
+			log.Warn("[SSV] Coordinator OnBlockBuildingComplete warning", "err", err)
 		}
 	}
 

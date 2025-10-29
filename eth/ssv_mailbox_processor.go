@@ -6,6 +6,9 @@ import (
 	"crypto/ecdsa"
 	"encoding/json"
 	"fmt"
+	spconsensus "github.com/ethereum/go-ethereum/internal/xconsensus"
+	"github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
+	"github.com/ethereum/go-ethereum/internal/xsuperblock/sequencer"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
@@ -16,10 +19,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/eth/tracers/native"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
-	rollupv1 "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/proto/rollup/v1"
-	spconsensus "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/consensus"
-	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/superblock/sequencer"
-	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/transport"
+	transport "github.com/ethereum/go-ethereum/internal/xtransport"
 	"github.com/ethereum/go-ethereum/log"
 
 	"math/big"

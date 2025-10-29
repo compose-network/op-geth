@@ -125,7 +125,7 @@ Installation
 ------------
 
 ```sh
-go get github.com/rcrowley/go-metrics
+go get github.com/rcrowley/go-xmetrics
 ```
 
 StatHat support additionally requires their Go client:
