@@ -32,7 +32,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/core/ssv"
-	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/eth/tracers/native"
 
 	"github.com/ethereum/go-ethereum"
@@ -796,9 +795,6 @@ func (b *EthAPIBackend) SimulateTransaction(
 
 			stageGasPool := new(core.GasPool).AddGas(header.GasLimit)
 			stateDB.SetTxContext(staged.Hash(), stateDB.TxIndex()+1)
-			if wants := staged.Nonce(); stateDB.GetNonce(stageMsg.From) != wants {
-				stateDB.SetNonce(stageMsg.From, wants, tracing.NonceChangeUnspecified)
-			}
 			if _, err := core.ApplyMessage(stagingEVM, stageMsg, stageGasPool); err != nil {
 				log.Warn("[SSV] Failed to pre-apply putInbox transaction", "txHash", staged.Hash(), "err", err)
 				continue
@@ -825,9 +821,6 @@ func (b *EthAPIBackend) SimulateTransaction(
 
 			stageGasPool := new(core.GasPool).AddGas(header.GasLimit)
 			stateDB.SetTxContext(staged.Hash(), stateDB.TxIndex()+1)
-			if wants := staged.Nonce(); stateDB.GetNonce(stageMsg.From) != wants {
-				stateDB.SetNonce(stageMsg.From, wants, tracing.NonceChangeUnspecified)
-			}
 			if _, err := core.ApplyMessage(stagingEVM, stageMsg, stageGasPool); err != nil {
 				log.Warn("[SSV] Failed to pre-apply original transaction", "txHash", staged.Hash(), "err", err)
 				continue
