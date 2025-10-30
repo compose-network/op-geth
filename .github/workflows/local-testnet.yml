@@ -10,7 +10,8 @@ on:
 
 jobs:
   run-testnet:
-    runs-on: [self-hosted, public, isolated]
+    runs-on:
+      group: public-isolated
 
     steps:
       - name: Checkout op-geth repository
