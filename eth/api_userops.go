@@ -570,7 +570,7 @@ func (api *composeUserOpsAPI) BuildSignedUserOpsTx(
 			stateNonce = st.GetNonce(from)
 		}
 	}
-	log.Debug("[SSV] Sequencer nonce snapshot",
+	log.Info("[SSV] Sequencer nonce snapshot",
 		"addr", from.Hex(),
 		"poolNonce", nonce,
 		"stateNonce", stateNonce,

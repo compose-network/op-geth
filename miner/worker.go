@@ -1062,7 +1062,7 @@ func (miner *Miner) commitAccountBasedTransactions(
 	committed := 0
 
 	for account, txs := range accountTxs {
-		log.Debug("[SSV] Processing account transactions", "account", account.Hex(), "count", len(txs))
+		log.Info("[SSV] Processing account transactions", "account", account.Hex(), "count", len(txs))
 
 		for _, lazy := range txs {
 			if interrupt != nil {
@@ -1093,7 +1093,7 @@ func (miner *Miner) commitAccountBasedTransactions(
 
 			env.state.SetTxContext(tx.Hash(), env.tcount)
 			if err := miner.commitTransaction(env, tx); err != nil {
-				log.Debug("[SSV] Transaction failed, skipping", "hash", tx.Hash(), "account", account.Hex(), "err", err)
+				log.Info("[SSV] Transaction failed, skipping", "hash", tx.Hash(), "account", account.Hex(), "err", err)
 				continue
 			}
 
