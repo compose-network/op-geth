@@ -1,16 +1,14 @@
 package sequencer
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"sync"
-	"sync/atomic"
-
+	sbcpproto "github.com/compose-network/specs/compose/proto"
 	"github.com/ethereum/go-ethereum/internal/xconsensus"
 	pb "github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 	xprotocol "github.com/ethereum/go-ethereum/internal/xsuperblock/protocol"
 	"github.com/ethereum/go-ethereum/internal/xtransport"
+	"sync"
 
 	"github.com/rs/zerolog"
 )
@@ -34,8 +32,7 @@ type SequencerCoordinator struct {
 	callbacks     CoordinatorCallbacks
 
 	// Current slot context
-	currentSlot    uint64
-	currentRequest *pb.L2BlockRequest
+	currentSlot uint64
 
 	// Runtime state
 	running bool
@@ -51,7 +48,7 @@ type SequencerCoordinator struct {
 
 // NewSequencerCoordinator creates a new sequencer coordinator
 func NewSequencerCoordinator(
-	baseConsensus xconsensus.Coordinator,
+	consensusCoord xconsensus.Coordinator,
 	config Config,
 	transport xtransport.Client,
 	log zerolog.Logger,
@@ -60,7 +57,7 @@ func NewSequencerCoordinator(
 		config:         config,
 		chainID:        config.ChainID,
 		log:            log.With().Str("component", "sequencer.coordinator").Logger(),
-		consensusCoord: baseConsensus,
+		consensusCoord: consensusCoord,
 		transport:      transport,
 		stopCh:         make(chan struct{}),
 	}
@@ -68,22 +65,21 @@ func NewSequencerCoordinator(
 	// Initialize SCP integration
 	coordinator.scpIntegration = NewSCPIntegration(
 		config.ChainID,
-		baseConsensus,
+		consensusCoord,
 		log,
 	)
 
 	// Initialize protocol handlers
-	sbcpMessageHandler := NewSBCPHandler(coordinator, log)
-	protocolHandler := xprotocol.NewHandler(sbcpMessageHandler, xprotocol.NewBasicValidator(), log)
-	scpHandler := xconsensus.NewProtocolHandler(baseConsensus, log)
+	sbcpHandler := xprotocol.NewSBCPHandler(xprotocol.NewBasicValidator(), log)
+	scpHandler := xconsensus.NewSCPHandler(consensusCoord, log)
 
 	// Initialize message router with protocol handlers
-	coordinator.messageRouter = NewMessageRouter(protocolHandler, scpHandler, log)
+	coordinator.messageRouter = NewMessageRouter(sbcpHandler, scpHandler, log)
 
 	// Bind consensus decision callback directly to the coordinator so lifecycle is unified
 	// and external callers (e.g., SDK hosts) don't need to forward decisions.
-	if baseConsensus != nil {
-		baseConsensus.SetDecisionCallback(coordinator.handleConsensusDecision)
+	if consensusCoord != nil {
+		consensusCoord.SetDecisionCallback(coordinator.handleConsensusDecision)
 	}
 
 	return coordinator
@@ -137,22 +133,22 @@ func (sc *SequencerCoordinator) Stop(ctx context.Context) error {
 }
 
 // HandleMessage routes messages through the message router
-func (sc *SequencerCoordinator) HandleMessage(ctx context.Context, from string, msg *pb.Message) error {
+func (sc *SequencerCoordinator) HandleMessage(ctx context.Context, from string, msg *sbcpproto.Message) error {
 	return sc.messageRouter.Route(ctx, from, msg)
 }
 
 // Helper to extract our transactions
-func (sc *SequencerCoordinator) extractMyTransactions(xtReq *pb.XTRequest) [][]byte {
-	myTxs := make([][]byte, 0)
-
-	for _, txReq := range xtReq.Transactions {
-		if bytes.Equal(txReq.ChainId, sc.chainID) {
-			myTxs = append(myTxs, txReq.Transaction...)
-		}
-	}
-
-	return myTxs
-}
+//func (sc *SequencerCoordinator) extractMyTransactions(xtReq *sbcp.XTRequest) [][]byte {
+//	myTxs := make([][]byte, 0)
+//
+//	for _, txReq := range xtReq.Transactions {
+//		if bytes.Equal(txReq.ChainId, sc.chainID) {
+//			myTxs = append(myTxs, txReq.Transaction...)
+//		}
+//	}
+//
+//	return myTxs
+//}
 
 // sealAndSubmitBlock seals the current block and submits to SP
 //
@@ -163,47 +159,6 @@ func (sc *SequencerCoordinator) extractMyTransactions(xtReq *pb.XTRequest) [][]b
 func (sc *SequencerCoordinator) Consensus() xconsensus.Coordinator {
 	return sc.consensusCoord
 }
-
-func (sc *SequencerCoordinator) GetStats() map[string]interface{} {
-	sc.mu.RLock()
-	defer sc.mu.RUnlock()
-
-	stats := map[string]interface{}{
-		"running":      sc.running,
-		"chain_id":     fmt.Sprintf("%x", sc.chainID),
-		"current_slot": atomic.LoadUint64(&sc.currentSlot),
-	}
-
-	// Add block builder stats
-	//if sc.blockBuilder != nil {
-	//	builderStats := sc.blockBuilder.GetDraftStats()
-	//	stats["block_builder"] = builderStats
-	//}
-
-	// Add SCP stats
-	if sc.scpIntegration != nil {
-		activeContexts := sc.scpIntegration.GetActiveContexts()
-		stats["active_scp_instances"] = len(activeContexts)
-	}
-
-	// Add message router stats
-	if sc.messageRouter != nil {
-		routerStats := sc.messageRouter.GetStats()
-		stats["message_router"] = routerStats
-	}
-
-	return stats
-}
-
-// GetActiveSCPInstanceCount returns the number of active SCP instances
-func (sc *SequencerCoordinator) GetActiveSCPInstanceCount() int {
-	if sc.scpIntegration != nil {
-		return sc.scpIntegration.GetActiveCount()
-	}
-	return 0
-}
-
-// BlockLifecycleManager implementation
 
 // OnBlockBuildingStart is called when block building begins for a slot
 func (sc *SequencerCoordinator) OnBlockBuildingStart(ctx context.Context, slot uint64) error {

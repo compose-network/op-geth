@@ -3,8 +3,8 @@ package tcp
 import (
 	"context"
 	"fmt"
+	sbcpproto "github.com/compose-network/specs/compose/proto"
 	"github.com/ethereum/go-ethereum/internal/xauth"
-	pb "github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 	"github.com/ethereum/go-ethereum/internal/xtransport"
 	"io"
 	"math/rand"
@@ -238,7 +238,7 @@ func (c *client) Disconnect(ctx context.Context) error {
 }
 
 // Send sends a message to the server
-func (c *client) Send(ctx context.Context, msg *pb.Message) error {
+func (c *client) Send(ctx context.Context, msg *sbcpproto.Message) error {
 	c.mu.RLock()
 	conn := c.conn
 	connected := c.connected.Load()
@@ -327,7 +327,7 @@ func (c *client) receiveLoop(ctx context.Context) {
 
 			// Handle ping/pong messages
 			switch msg.Payload.(type) {
-			case *pb.Message_Ping:
+			case *sbcpproto.Message_Ping:
 				// Received ping, send pong
 				c.log.Debug().Msg("Received ping, sending pong")
 				select {
@@ -335,7 +335,7 @@ func (c *client) receiveLoop(ctx context.Context) {
 				default:
 				}
 				continue
-			case *pb.Message_Pong:
+			case *sbcpproto.Message_Pong:
 				// Received pong, connection is alive
 				c.log.Debug().Msg("Received pong")
 				continue
@@ -388,10 +388,10 @@ func (c *client) pingLoop(ctx context.Context) {
 			}
 
 			// Send ping message
-			pingMsg := &pb.Message{
+			pingMsg := &sbcpproto.Message{
 				SenderId: c.id,
-				Payload: &pb.Message_Ping{
-					Ping: &pb.Ping{
+				Payload: &sbcpproto.Message_Ping{
+					Ping: &sbcpproto.Ping{
 						Timestamp: time.Now().UnixNano(),
 					},
 				},
@@ -416,10 +416,10 @@ func (c *client) pingLoop(ctx context.Context) {
 				continue
 			}
 
-			pongMsg := &pb.Message{
+			pongMsg := &sbcpproto.Message{
 				SenderId: c.id,
-				Payload: &pb.Message_Pong{
-					Pong: &pb.Pong{
+				Payload: &sbcpproto.Message_Pong{
+					Pong: &sbcpproto.Pong{
 						Timestamp: time.Now().UnixNano(),
 					},
 				},

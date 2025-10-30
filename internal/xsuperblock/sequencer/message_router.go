@@ -3,17 +3,18 @@ package sequencer
 import (
 	"context"
 	"fmt"
-	"github.com/ethereum/go-ethereum/internal/xconsensus"
-	pb "github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
-	"github.com/ethereum/go-ethereum/internal/xsuperblock/protocol"
+	sbcpproto "github.com/compose-network/specs/compose/proto"
 	"time"
+
+	"github.com/ethereum/go-ethereum/internal/xconsensus"
+	"github.com/ethereum/go-ethereum/internal/xsuperblock/protocol"
 
 	"github.com/rs/zerolog"
 )
 
 type MessageRouter struct {
 	sbcpHandler protocol.Handler
-	scpHandler  xconsensus.ProtocolHandler
+	scpHandler  xconsensus.SCPHandler
 	log         zerolog.Logger
 
 	// Metrics
@@ -22,7 +23,7 @@ type MessageRouter struct {
 
 func NewMessageRouter(
 	sbcpHandler protocol.Handler,
-	scpHandler xconsensus.ProtocolHandler,
+	scpHandler xconsensus.SCPHandler,
 	log zerolog.Logger,
 ) *MessageRouter {
 	return &MessageRouter{
@@ -33,7 +34,7 @@ func NewMessageRouter(
 	}
 }
 
-func (mr *MessageRouter) Route(ctx context.Context, from string, msg *pb.Message) error {
+func (mr *MessageRouter) Route(ctx context.Context, from string, msg *sbcpproto.Message) error {
 	start := time.Now()
 
 	// Classify the protocol

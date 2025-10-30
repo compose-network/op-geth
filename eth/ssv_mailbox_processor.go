@@ -150,17 +150,6 @@ func (mp *MailboxProcessor) AnalyzeTransaction(
 	return simState, nil
 }
 
-func parseCallType(call *MailboxCall) string {
-	if call.IsRead {
-		return "read"
-	}
-	if call.IsWrite {
-		return "write"
-	}
-
-	return "unknown"
-}
-
 func (mp *MailboxProcessor) analyzeTransaction(
 	traceResult *ssv.SSVTraceResult,
 	sentOutboundMsgs []CrossRollupMessage,
@@ -533,69 +522,69 @@ func (mp *MailboxProcessor) sendCIRCMessage(ctx context.Context, msg *CrossRollu
 	return nil
 }
 
-func (mp *MailboxProcessor) waitForCIRCMessage(
-	ctx context.Context,
-	xtID *rollupv1.XtID,
-	sourceChainID string,
-) (*rollupv1.CIRCMessage, error) {
-	// Wait for CIRC message with a bounded timeout to respect SBCP slot cutover.
-	// Hardcoded for 20s slot with 0.90 seal cutover: use ~12s window.
-	timeoutMs := 12000
-	timeout := time.NewTimer(time.Duration(timeoutMs) * time.Millisecond)
-	defer timeout.Stop()
-
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	ticks := 0
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-timeout.C:
-			// Diagnostics: list known CIRC queues for this xtID
-			backend := mp.backend.(*EthAPIBackend)
-			if backend != nil && backend.coordinator != nil && backend.coordinator.Consensus() != nil {
-				if st, ok := backend.coordinator.Consensus().GetState(xtID); ok && st != nil {
-					// Best-effort read (no locking API available here)
-					counts := make(map[string]int)
-					for k, v := range st.CIRCMessages {
-						counts[k] = len(v)
-					}
-					log.Warn("[SSV] Timeout waiting for CIRC message",
-						"xtID", xtID.Hex(),
-						"from", sourceChainID,
-						"queues", counts,
-					)
-				}
-			}
-			return nil, fmt.Errorf("timeout waiting for CIRC message from chain %s", sourceChainID)
-		case <-ticker.C:
-			backend := mp.backend.(*EthAPIBackend)
-			circMsg, err := backend.coordinator.Consensus().ConsumeCIRCMessage(xtID, sourceChainID)
-			if err != nil {
-				// Periodic info to confirm we're still waiting
-				ticks++
-				if ticks%10 == 0 { // ~1s interval
-					log.Info("[SSV] Still waiting for CIRC message",
-						"xtID", xtID.Hex(),
-						"from", sourceChainID,
-						"wait_ms", timeoutMs-(ticks*100),
-						"err", err.Error(),
-					)
-				}
-				continue // Keep waiting
-			}
-
-			log.Info("[SSV] Consumed CIRC message",
-				"from", sourceChainID,
-				"dataLen", len(circMsg.Data[0]),
-			)
-
-			return circMsg, nil
-		}
-	}
-}
+//func (mp *MailboxProcessor) waitForCIRCMessage(
+//	ctx context.Context,
+//	xtID *rollupv1.XtID,
+//	sourceChainID string,
+//) (*rollupv1.CIRCMessage, error) {
+//	// Wait for CIRC message with a bounded timeout to respect SBCP slot cutover.
+//	// Hardcoded for 20s slot with 0.90 seal cutover: use ~12s window.
+//	timeoutMs := 12000
+//	timeout := time.NewTimer(time.Duration(timeoutMs) * time.Millisecond)
+//	defer timeout.Stop()
+//
+//	ticker := time.NewTicker(100 * time.Millisecond)
+//	defer ticker.Stop()
+//	ticks := 0
+//
+//	for {
+//		select {
+//		case <-ctx.Done():
+//			return nil, ctx.Err()
+//		case <-timeout.C:
+//			// Diagnostics: list known CIRC queues for this xtID
+//			backend := mp.backend.(*EthAPIBackend)
+//			if backend != nil && backend.coordinator != nil && backend.coordinator.Consensus() != nil {
+//				if st, ok := backend.coordinator.Consensus().GetState(xtID); ok && st != nil {
+//					// Best-effort read (no locking API available here)
+//					counts := make(map[string]int)
+//					for k, v := range st.CIRCMessages {
+//						counts[k] = len(v)
+//					}
+//					log.Warn("[SSV] Timeout waiting for CIRC message",
+//						"xtID", xtID.Hex(),
+//						"from", sourceChainID,
+//						"queues", counts,
+//					)
+//				}
+//			}
+//			return nil, fmt.Errorf("timeout waiting for CIRC message from chain %s", sourceChainID)
+//		case <-ticker.C:
+//			backend := mp.backend.(*EthAPIBackend)
+//			circMsg, err := backend.coordinator.Consensus().ConsumeCIRCMessage(xtID, sourceChainID)
+//			if err != nil {
+//				// Periodic info to confirm we're still waiting
+//				ticks++
+//				if ticks%10 == 0 { // ~1s interval
+//					log.Info("[SSV] Still waiting for CIRC message",
+//						"xtID", xtID.Hex(),
+//						"from", sourceChainID,
+//						"wait_ms", timeoutMs-(ticks*100),
+//						"err", err.Error(),
+//					)
+//				}
+//				continue // Keep waiting
+//			}
+//
+//			log.Info("[SSV] Consumed CIRC message",
+//				"from", sourceChainID,
+//				"dataLen", len(circMsg.Data[0]),
+//			)
+//
+//			return circMsg, nil
+//		}
+//	}
+//}
 
 func (mp *MailboxProcessor) getCoordinatorAddress(ctx context.Context, addr common.Address) (common.Address, error) {
 	parsedABI, err := abi.JSON(strings.NewReader(mailboxABI))

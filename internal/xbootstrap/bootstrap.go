@@ -2,17 +2,20 @@ package xbootstrap
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
+	sbcpproto "github.com/compose-network/specs/compose/proto"
 	"github.com/ethereum/go-ethereum/internal/xconsensus"
-	pb "github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 	xsequencer "github.com/ethereum/go-ethereum/internal/xsuperblock/sequencer"
 	"github.com/ethereum/go-ethereum/internal/xtransport"
 	"github.com/ethereum/go-ethereum/internal/xtransport/tcp"
 	"math/big"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/compose-network/specs/compose/sbcp"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/rs/zerolog"
 )
@@ -45,6 +48,8 @@ type Config struct {
 
 // Runtime exposes the wired components and lifecycle.
 type Runtime struct {
+	// SBCP v2 sequencer
+	Sequencer sbcp.Sequencer
 	// Coordinator is the sequencer coordinator.
 	Coordinator xsequencer.Coordinator
 	// SPClient is the client for the shared publisher.
@@ -65,6 +70,8 @@ func Setup(cfg Config) (*Runtime, error) {
 		log = zerolog.Nop()
 	}
 
+	sequencer := sbcp.NewSequencer(NewSimpleProver(), 0, 1, sbcp.SettledState{}, log)
+
 	seqCoord, spClient := setupSequencerCoordinator(cfg, log)
 
 	p2pSrv := setupP2PServer(seqCoord, cfg, log)
@@ -72,6 +79,7 @@ func Setup(cfg Config) (*Runtime, error) {
 	peers := setupP2PClients(cfg, log)
 
 	rt := &Runtime{
+		Sequencer:   sequencer,
 		Coordinator: seqCoord,
 		SPClient:    spClient,
 		P2PServer:   p2pSrv,
@@ -83,17 +91,6 @@ func Setup(cfg Config) (*Runtime, error) {
 }
 
 func setupSequencerCoordinator(cfg Config, log zerolog.Logger) (*xsequencer.SequencerCoordinator, xtransport.Client) {
-	// Base consensus (2PC)
-	base := cfg.BaseConsensus
-	if base == nil {
-		nodeID := fmt.Sprintf("sequencer-%d", time.Now().UnixNano())
-		c := xconsensus.DefaultConfig(nodeID)
-		c.Role = xconsensus.Follower
-		c.IsLeader = false
-		c.Timeout = time.Minute
-		base = xconsensus.New(log, c)
-	}
-
 	// SP client
 	spCfg := tcp.DefaultClientConfig()
 	if cfg.SPClientConfig != nil {
@@ -113,10 +110,15 @@ func setupSequencerCoordinator(cfg Config, log zerolog.Logger) (*xsequencer.Sequ
 		SCPTimeout:           10 * time.Second,
 		EnableCIRCValidation: true,
 	}
-	coord := xsequencer.NewSequencerCoordinator(base, seqCfg, spClient, log)
+
+	nodeID := fmt.Sprintf("sequencer-%d", time.Now().UnixNano())
+	c := xconsensus.DefaultConfig(nodeID)
+	c.Timeout = time.Minute
+	consensusCoord := xconsensus.NewConsensusCoord(log, c)
+	coord := xsequencer.NewSequencerCoordinator(consensusCoord, seqCfg, spClient, log)
 
 	// SP message handler routes to coordinator
-	spClient.SetHandler(func(c context.Context, msg *pb.Message) ([]common.Hash, error) {
+	spClient.SetHandler(func(c context.Context, msg *sbcpproto.Message) ([]common.Hash, error) {
 		return nil, coord.HandleMessage(c, msg.SenderId, msg)
 	})
 
@@ -138,7 +140,7 @@ func setupP2PServer(coord *xsequencer.SequencerCoordinator, cfg Config, log zero
 		}
 		p2pSrv = tcp.NewServer(s, log)
 	}
-	p2pSrv.SetHandler(func(c context.Context, from string, msg *pb.Message) error {
+	p2pSrv.SetHandler(func(c context.Context, from string, msg *sbcpproto.Message) error {
 		return coord.HandleMessage(c, from, msg)
 	})
 
@@ -245,33 +247,34 @@ func (r *Runtime) Stop(ctx context.Context) error {
 	return nil
 }
 
-// SendCIRC sends a CIRC message to the peer indicated by DestinationChain.
-func (r *Runtime) SendCIRC(ctx context.Context, circ *pb.CIRCMessage) error {
-	destKey := xconsensus.ChainKeyBytes(circ.DestinationChain)
-	r.log.Info().Str("dest_key", destKey).Str("xt_id", circ.XtId.Hex()).Msg("Sending CIRC message to peer")
+// SendMailboxMessage sends a CIRC message to the peer indicated by DestinationChain.
+func (r *Runtime) SendMailboxMessage(ctx context.Context, mailboxMessage *sbcpproto.MailboxMessage) error {
+	destKey := strconv.FormatUint(mailboxMessage.DestinationChain, 10)
+
+	r.log.Info().Str("dest_key", destKey).Str("xt_id", hex.EncodeToString(mailboxMessage.InstanceId)).Msg("Sending CIRC message to peer")
 
 	peer, ok := r.Peers[destKey]
 	if !ok || peer == nil {
 		r.log.Error().
 			Str("dest_key", destKey).
-			Str("xt_id", circ.XtId.Hex()).
+			Str("instanceID", hex.EncodeToString(mailboxMessage.InstanceId)).
 			Interface("available_peers", getPeerKeys(r.Peers)).
 			Msg("No peer client found for destination chain")
 		return fmt.Errorf("no peer for destination chain %s", destKey)
 	}
 
-	msg := &pb.Message{Payload: &pb.Message_CircMessage{CircMessage: circ}}
+	msg := &sbcpproto.Message{Payload: &sbcpproto.Message_MailboxMessage{MailboxMessage: mailboxMessage}}
 
 	if err := peer.Send(ctx, msg); err != nil {
 		r.log.Error().
 			Err(err).
 			Str("dest_key", destKey).
-			Str("xt_id", circ.XtId.Hex()).
+			Str("instanceID", hex.EncodeToString(mailboxMessage.InstanceId)).
 			Msg("Failed to send CIRC message to peer")
 		return err
 	}
 
-	r.log.Info().Str("dest_key", destKey).Str("xt_id", circ.XtId.Hex()).Msg("CIRC message sent successfully")
+	r.log.Info().Str("dest_key", destKey).Str("xt_id", hex.EncodeToString(mailboxMessage.InstanceId)).Msg("CIRC message sent successfully")
 	return nil
 }
 

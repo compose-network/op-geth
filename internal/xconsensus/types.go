@@ -6,34 +6,11 @@ import (
 	"time"
 )
 
-// Role represents the coordinator role
-type Role int
-
 const (
-	RoleUnknown  = "unknown"
-	RoleFollower = "follower"
-	RoleLeader   = "leader"
-
 	StateUnknownStr = "unknown"
 	StateCommitStr  = "commit"
 	StateAbortStr   = "abort"
 )
-
-const (
-	Follower Role = iota
-	Leader
-)
-
-func (r Role) String() string {
-	switch r {
-	case Follower:
-		return RoleFollower
-	case Leader:
-		return RoleLeader
-	default:
-		return RoleUnknown
-	}
-}
 
 // DecisionState represents 2PC transaction states
 type DecisionState int

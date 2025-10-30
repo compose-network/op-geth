@@ -2,8 +2,8 @@ package xtransport
 
 import (
 	"context"
+	sbcpproto "github.com/compose-network/specs/compose/proto"
 	"github.com/ethereum/go-ethereum/internal/xauth"
-	pb "github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 	"net"
 	"time"
 
@@ -14,8 +14,8 @@ import (
 type Transport interface {
 	Start(ctx context.Context) error
 	Stop(ctx context.Context) error
-	Broadcast(ctx context.Context, msg *pb.Message, excludeID string) error
-	Send(ctx context.Context, clientID string, msg *pb.Message) error
+	Broadcast(ctx context.Context, msg *sbcpproto.Message, excludeID string) error
+	Send(ctx context.Context, clientID string, msg *sbcpproto.Message) error
 	SetHandler(handler ServerMessageHandler)
 	GetConnections() []ConnectionInfo
 }
@@ -27,13 +27,13 @@ type Server interface {
 }
 
 // ServerMessageHandler processes incoming messages
-type ServerMessageHandler func(ctx context.Context, from string, msg *pb.Message) error
+type ServerMessageHandler func(ctx context.Context, from string, msg *sbcpproto.Message) error
 
 // Client interface for outbound connections
 type Client interface {
 	Connect(ctx context.Context, addr string) error
 	Disconnect(ctx context.Context) error
-	Send(ctx context.Context, msg *pb.Message) error
+	Send(ctx context.Context, msg *sbcpproto.Message) error
 	IsConnected() bool
 	GetID() string
 
@@ -49,7 +49,7 @@ type Client interface {
 }
 
 // ClientMessageHandler processes incoming messages
-type ClientMessageHandler func(ctx context.Context, msg *pb.Message) ([]common.Hash, error)
+type ClientMessageHandler func(ctx context.Context, msg *sbcpproto.Message) ([]common.Hash, error)
 
 // Connection represents a network connection with metadata and authentication
 type Connection interface {
@@ -58,8 +58,8 @@ type Connection interface {
 	Info() ConnectionInfo
 	UpdateLastSeen()
 	SetChainID(chainID string)
-	WriteMessage(msg *pb.Message) error
-	ReadMessage() (*pb.Message, error)
+	WriteMessage(msg *sbcpproto.Message) error
+	ReadMessage() (*sbcpproto.Message, error)
 
 	IsAuthenticated() bool
 	GetAuthenticatedID() string // empty if not authenticated

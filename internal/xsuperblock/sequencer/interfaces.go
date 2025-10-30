@@ -2,6 +2,7 @@ package sequencer
 
 import (
 	"context"
+	sbcpproto "github.com/compose-network/specs/compose/proto"
 	"github.com/ethereum/go-ethereum/internal/xconsensus"
 	pb "github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 )
@@ -52,10 +53,7 @@ type Coordinator interface {
 	Stop(ctx context.Context) error
 
 	// Message handling
-	HandleMessage(ctx context.Context, from string, msg *pb.Message) error
-
-	GetStats() map[string]interface{}
-	GetActiveSCPInstanceCount() int
+	HandleMessage(ctx context.Context, from string, msg *sbcpproto.Message) error
 
 	// Consensus access
 	Consensus() xconsensus.Coordinator
@@ -66,19 +64,9 @@ type Coordinator interface {
 	CallbackManager
 }
 
-// BlockBuilderInterface for L2 block construction
-type BlockBuilderInterface interface {
-	StartSlot(slot uint64, request *pb.L2BlockRequest) error
-	AddLocalTransaction(tx []byte) error
-	AddSCPTransactions(xtID string, txs [][]byte, decision bool) error
-	SealBlock(includedXTs [][]byte) (*pb.L2Block, error)
-	GetDraftStats() map[string]interface{}
-	Reset()
-}
-
 // MessageRouterInterface for routing messages
 type MessageRouterInterface interface {
-	Route(ctx context.Context, from string, msg *pb.Message) error
+	Route(ctx context.Context, from string, msg *sbcpproto.Message) error
 }
 
 // SCPIntegrationInterface for SCP coordination

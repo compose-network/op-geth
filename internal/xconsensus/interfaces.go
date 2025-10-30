@@ -2,6 +2,8 @@ package xconsensus
 
 import (
 	"context"
+	"github.com/compose-network/specs/compose"
+	sbcpproto "github.com/compose-network/specs/compose/proto"
 	pb "github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 	"time"
 
@@ -11,16 +13,10 @@ import (
 // Coordinator defines the consensus coordinator interface
 type Coordinator interface {
 	// Transaction lifecycle
-	StartTransaction(ctx context.Context, from string, xtReq *pb.XTRequest) error
-	RecordVote(xtID *pb.XtID, chainID string, vote bool) (DecisionState, error)
-	RecordDecision(xtID *pb.XtID, decision bool) error
-	GetTransactionState(xtID *pb.XtID) (DecisionState, error)
-	GetActiveTransactions() []*pb.XtID
-	GetState(xtID *pb.XtID) (*TwoPCState, bool)
+	StartTransaction(ctx context.Context, from string, xtReq *sbcpproto.XTRequest) error
+	RecordDecision(xtID compose.InstanceID, decision bool) error
 
-	// CIRC message handling
-	RecordCIRCMessage(circMessage *pb.CIRCMessage) error
-	ConsumeCIRCMessage(xtID *pb.XtID, sourceChainID string) (*pb.CIRCMessage, error)
+	RecordMailboxMessage(circMessage *sbcpproto.MailboxMessage) error
 
 	// Callbacks
 	SetStartCallback(fn StartFn)
@@ -46,18 +42,14 @@ type BlockFn func(ctx context.Context, block *types.Block, xtIDs []*pb.XtID) err
 
 // Config holds coordinator configuration
 type Config struct {
-	NodeID   string
-	IsLeader bool
-	Timeout  time.Duration
-	Role     Role
+	NodeID  string
+	Timeout time.Duration
 }
 
 // DefaultConfig returns sensible defaults
 func DefaultConfig(nodeID string) Config {
 	return Config{
-		NodeID:   nodeID,
-		IsLeader: true,
-		Timeout:  time.Minute,
-		Role:     Leader,
+		NodeID:  nodeID,
+		Timeout: time.Minute,
 	}
 }

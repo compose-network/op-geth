@@ -1,7 +1,7 @@
 package xconsensus
 
 import (
-	metrics2 "github.com/ethereum/go-ethereum/internal/xmetrics"
+	"github.com/ethereum/go-ethereum/internal/xmetrics"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -19,7 +19,7 @@ type MetricsRecorder interface {
 
 // Metrics holds all consensus-level metrics
 type Metrics struct {
-	registry *metrics2.ComponentRegistry
+	registry *xmetrics.ComponentRegistry
 
 	TransactionsTotal          *prometheus.CounterVec
 	ActiveTransactions         prometheus.Gauge
@@ -31,7 +31,7 @@ type Metrics struct {
 	DecisionsBroadcast         *prometheus.CounterVec
 	VoteBroadcast              *prometheus.CounterVec
 
-	// New performance metrics
+	// NewConsensusCoord performance metrics
 	StateManagerSize  prometheus.Gauge
 	CallbackLatency   *prometheus.HistogramVec
 	CIRCMessagesTotal *prometheus.CounterVec
@@ -42,7 +42,7 @@ var _ MetricsRecorder = (*Metrics)(nil)
 
 // NewMetrics creates consensus metrics
 func NewMetrics() *Metrics {
-	reg := metrics2.NewComponentRegistry("publisher", "consensus")
+	reg := xmetrics.NewComponentRegistry("publisher", "consensus")
 
 	return &Metrics{
 		registry: reg,
@@ -60,7 +60,7 @@ func NewMetrics() *Metrics {
 		Duration: reg.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "duration_seconds",
 			Help:    "Duration of consensus transactions",
-			Buckets: metrics2.ConsensusBuckets,
+			Buckets: xmetrics.ConsensusBuckets,
 		}, []string{"state"}),
 
 		VotesReceived: reg.NewCounterVec(prometheus.CounterOpts{
@@ -71,7 +71,7 @@ func NewMetrics() *Metrics {
 		VoteLatency: reg.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "vote_latency_seconds",
 			Help:    "Latency from transaction start to vote received",
-			Buckets: metrics2.ConsensusBuckets,
+			Buckets: xmetrics.ConsensusBuckets,
 		}, []string{"chain_id"}),
 
 		Timeouts: reg.NewCounter(prometheus.CounterOpts{
@@ -82,7 +82,7 @@ func NewMetrics() *Metrics {
 		ParticipantsPerTransaction: reg.NewHistogram(prometheus.HistogramOpts{
 			Name:    "participants_per_transaction",
 			Help:    "Number of participants per transaction",
-			Buckets: metrics2.CountBuckets,
+			Buckets: xmetrics.CountBuckets,
 		}),
 
 		DecisionsBroadcast: reg.NewCounterVec(prometheus.CounterOpts{
@@ -103,7 +103,7 @@ func NewMetrics() *Metrics {
 		CallbackLatency: reg.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "callback_latency_seconds",
 			Help:    "Latency of callback executions",
-			Buckets: metrics2.DurationBuckets,
+			Buckets: xmetrics.DurationBuckets,
 		}, []string{"type"}),
 
 		CIRCMessagesTotal: reg.NewCounterVec(prometheus.CounterOpts{

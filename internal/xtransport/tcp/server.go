@@ -3,8 +3,8 @@ package tcp
 import (
 	"context"
 	"fmt"
+	sbcpproto "github.com/compose-network/specs/compose/proto"
 	"github.com/ethereum/go-ethereum/internal/xauth"
-	pb "github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 	"github.com/ethereum/go-ethereum/internal/xtransport"
 	"net"
 	"sync"
@@ -254,7 +254,7 @@ func (s *Server) SetHandler(handler xtransport.ServerMessageHandler) {
 }
 
 // Broadcast sends a message to all clients except excluded
-func (s *Server) Broadcast(ctx context.Context, msg *pb.Message, excludeID string) error {
+func (s *Server) Broadcast(ctx context.Context, msg *sbcpproto.Message, excludeID string) error {
 	// Override sender ID
 	msg.SenderId = "shared-publisher"
 
@@ -267,7 +267,7 @@ func (s *Server) Broadcast(ctx context.Context, msg *pb.Message, excludeID strin
 }
 
 // Send sends a message to a specific client
-func (s *Server) Send(ctx context.Context, clientID string, msg *pb.Message) error {
+func (s *Server) Send(ctx context.Context, clientID string, msg *sbcpproto.Message) error {
 	conn, exists := s.manager.Get(clientID)
 	if !exists {
 		return fmt.Errorf("client %s not found", clientID)

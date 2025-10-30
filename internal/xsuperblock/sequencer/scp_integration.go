@@ -13,7 +13,6 @@ import (
 type SCPContext struct {
 	XtID           *pb.XtID
 	Request        *pb.XTRequest
-	Slot           uint64
 	SequenceNumber uint64
 	MyTransactions [][]byte
 	Decision       *bool
@@ -32,7 +31,6 @@ type SCPIntegration struct {
 	// last decided sequence number for monotonic StartSC enforcement
 	lastDecidedSeq    uint64
 	hasLastDecidedSeq bool
-	currentSlot       uint64
 }
 
 func NewSCPIntegration(
@@ -75,7 +73,6 @@ func (si *SCPIntegration) HandleStartSC(ctx context.Context, startSC *pb.StartSC
 	scpCtx := &SCPContext{
 		XtID:           xtID,
 		Request:        startSC.XtRequest,
-		Slot:           startSC.Slot,
 		SequenceNumber: startSC.XtSequenceNumber,
 		MyTransactions: si.extractMyTransactions(startSC.XtRequest),
 	}
@@ -153,16 +150,6 @@ func (si *SCPIntegration) GetActiveContexts() map[string]*SCPContext {
 	}
 
 	return result
-}
-
-// ResetForSlot clears per-slot SCP tracking
-func (si *SCPIntegration) ResetForSlot(slot uint64) {
-	si.mu.Lock()
-	defer si.mu.Unlock()
-	si.currentSlot = slot
-	si.activeContexts = make(map[string]*SCPContext)
-	si.includedXTs = make(map[string][]byte)
-	si.hasLastDecidedSeq = false
 }
 
 // GetIncludedXTsHex returns hex-encoded xtIDs decided to include in current slot

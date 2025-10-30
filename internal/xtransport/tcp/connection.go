@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/binary"
 	"fmt"
+	sbcpproto "github.com/compose-network/specs/compose/proto"
 	xauth2 "github.com/ethereum/go-ethereum/internal/xauth"
 	pb "github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 	"github.com/ethereum/go-ethereum/internal/xtransport"
@@ -192,8 +193,8 @@ func (c *connection) GetSessionID() string {
 }
 
 // ReadMessage reads a protobuf message
-func (c *connection) ReadMessage() (*pb.Message, error) {
-	var msg pb.Message
+func (c *connection) ReadMessage() (*sbcpproto.Message, error) {
+	var msg sbcpproto.Message
 	if err := c.codec.ReadMessage(c.reader, &msg); err != nil {
 		return nil, err
 	}
@@ -205,7 +206,7 @@ func (c *connection) ReadMessage() (*pb.Message, error) {
 }
 
 // WriteMessage writes a protobuf message
-func (c *connection) WriteMessage(msg *pb.Message) error {
+func (c *connection) WriteMessage(msg *sbcpproto.Message) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 

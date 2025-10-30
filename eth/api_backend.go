@@ -22,6 +22,7 @@ import (
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
+	sbcpproto "github.com/compose-network/specs/compose/proto"
 	spconsensus "github.com/ethereum/go-ethereum/internal/xconsensus"
 	"github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 	xsequencer "github.com/ethereum/go-ethereum/internal/xsuperblock/sequencer"
@@ -637,7 +638,7 @@ func (b *EthAPIBackend) Genesis() *types.Block {
 
 // HandleSPMessage processes messages received from the shared publisher.
 // SSV
-func (b *EthAPIBackend) HandleSPMessage(ctx context.Context, msg *rollupv1.Message) ([]common.Hash, error) {
+func (b *EthAPIBackend) HandleSPMessage(ctx context.Context, msg *sbcpproto.Message) ([]common.Hash, error) {
 	if b.coordinator == nil {
 		return nil, fmt.Errorf("coordinator not configured")
 	}
@@ -646,7 +647,7 @@ func (b *EthAPIBackend) HandleSPMessage(ctx context.Context, msg *rollupv1.Messa
 	// Forward XTRequest to the SP over transport instead of handling locally.
 	if forward, _ := ctx.Value("forward").(bool); forward {
 		switch msg.Payload.(type) {
-		case *rollupv1.Message_XtRequest:
+		case *sbcpproto.Message_XtRequest:
 			if b.spClient == nil {
 				return nil, fmt.Errorf("shared publisher client not configured")
 			}
@@ -1275,66 +1276,6 @@ func (b *EthAPIBackend) clearCommittedSequencerTransactions(committed map[common
 
 func (b *EthAPIBackend) GetPendingOriginalTxs() []*types.Transaction {
 	return b.listTransactionsByKind(sequencerTxOriginal)
-}
-
-// reSimulateTransaction re-simulates a single transaction and checks for success
-// SSV
-func (b *EthAPIBackend) reSimulateTransaction(
-	ctx context.Context,
-	tx *types.Transaction,
-	blockNrOrHash rpc.BlockNumberOrHash,
-	xtID *rollupv1.XtID,
-) (bool, error) {
-	log.Debug("[SSV] Re-simulating transaction",
-		"txHash", tx.Hash().Hex(),
-		"xtID", xtID.Hex())
-
-	// Simulate with SSV tracing to detect mailbox interactions
-	traceResult, err := b.SimulateTransaction(ctx, tx, blockNrOrHash)
-	if err != nil {
-		log.Error("[SSV] Transaction simulation with trace failed - REASON: simulation_trace_error",
-			"txHash", tx.Hash().Hex(),
-			"error", err,
-			"xtID", xtID.Hex(),
-			"failure_reason", "simulation_trace_error")
-		return false, err
-	}
-
-	// Check if execution was successful
-	if traceResult.ExecutionResult.Err != nil {
-		log.Warn("[SSV] Transaction execution failed in re-simulation - REASON: execution_error",
-			"txHash", tx.Hash().Hex(),
-			"executionError", traceResult.ExecutionResult.Err,
-			"xtID", xtID.Hex(),
-			"failure_reason", "execution_error")
-		return false, nil
-	}
-
-	// Validate that the transaction used reasonable gas (not failed silently)
-	if traceResult.ExecutionResult.UsedGas == 0 {
-		log.Warn("[SSV] Transaction used no gas, likely failed silently - REASON: zero_gas_used",
-			"txHash", tx.Hash().Hex(),
-			"xtID", xtID.Hex(),
-			"failure_reason", "zero_gas_used")
-		return false, nil
-	}
-
-	// Check that mailbox operations were traced (indicating they succeeded)
-	if len(traceResult.Operations) == 0 {
-		log.Warn("[SSV] No mailbox operations detected in re-simulation - REASON: no_mailbox_operations",
-			"txHash", tx.Hash().Hex(),
-			"xtID", xtID.Hex(),
-			"failure_reason", "no_mailbox_operations")
-		return false, nil
-	}
-
-	log.Debug("[SSV] Transaction re-simulation successful",
-		"txHash", tx.Hash().Hex(),
-		"gasUsed", traceResult.ExecutionResult.UsedGas,
-		"mailboxOps", len(traceResult.Operations),
-		"xtID", xtID.Hex())
-
-	return true, nil
 }
 
 // waitForPutInboxTransactionsToBeProcessed waits for putInbox transactions to be included

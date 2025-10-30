@@ -1,6 +1,7 @@
 package sequencer
 
 import (
+	sbcpproto "github.com/compose-network/specs/compose/proto"
 	"github.com/ethereum/go-ethereum/internal/xconsensus"
 	pb "github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 	"github.com/ethereum/go-ethereum/internal/xsuperblock/protocol"
@@ -37,7 +38,7 @@ func (p ProtocolType) IsValid() bool {
 }
 
 // ClassifyProtocol determines which high-level protocol a message belongs to
-func ClassifyProtocol(msg *pb.Message) ProtocolType {
+func ClassifyProtocol(msg *sbcpproto.Message) ProtocolType {
 	if msg == nil || msg.Payload == nil {
 		return ProtocolUnknown
 	}
@@ -56,7 +57,7 @@ func ClassifyProtocol(msg *pb.Message) ProtocolType {
 }
 
 // GetMessageTypeString returns a formatted string for logging
-func GetMessageTypeString(msg *pb.Message) string {
+func GetMessageTypeString(msg *sbcpproto.Message) string {
 	protocolType := ClassifyProtocol(msg)
 
 	switch protocolType {
