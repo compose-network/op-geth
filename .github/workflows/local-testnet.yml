@@ -12,6 +12,7 @@ jobs:
   run-testnet:
     runs-on:
       group: public-isolated
+      labels: [self-hosted, public, isolated]
 
     steps:
       - name: Checkout op-geth repository
