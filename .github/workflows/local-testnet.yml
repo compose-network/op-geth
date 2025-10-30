@@ -10,7 +10,8 @@ on:
 
 jobs:
   run-testnet:
-    runs-on: ubuntu-latest
+    runs-on:
+      group: public-isolated
 
     steps:
       - name: Checkout op-geth repository
