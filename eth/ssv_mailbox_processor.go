@@ -191,7 +191,7 @@ func (mp *MailboxProcessor) analyzeTransaction(
 			continue
 		}
 
-		log.Debug("[SSV] Found mailbox operation",
+		log.Info("[SSV] Found mailbox operation",
 			"index", i,
 			"type", op.Type.String(),
 			"address", op.Address.Hex(),
@@ -202,7 +202,7 @@ func (mp *MailboxProcessor) analyzeTransaction(
 		if (op.Type == vm.CALL || op.Type == vm.STATICCALL) && len(op.CallData) >= 4 {
 			call, err := mp.parseMailboxCall(op.CallData)
 			if err != nil {
-				log.Debug("[SSV] Failed to parse mailbox call", "error", err)
+				log.Info("[SSV] Failed to parse mailbox call", "error", err)
 				continue
 			}
 
@@ -299,7 +299,7 @@ func (mp *MailboxProcessor) analyzeTransaction(
 				}
 			}
 		} else if op.Type != vm.CALL && op.Type != vm.STATICCALL {
-			log.Debug("[SSV] Ignoring non-CALL/STATICCALL operation to mailbox", "type", op.Type.String(), "address", op.Address.Hex())
+			log.Info("[SSV] Ignoring non-CALL/STATICCALL operation to mailbox", "type", op.Type.String(), "address", op.Address.Hex())
 		}
 	}
 
@@ -783,7 +783,7 @@ func (mp *MailboxProcessor) reSimulateForACKMessages(
 		return nil, fmt.Errorf("backend not available for re-simulation")
 	}
 
-	log.Debug("[SSV] Re-simulating transaction for ACK detection", "txHash", tx.Hash().Hex(), "xtID", xtID.Hex())
+	log.Info("[SSV] Re-simulating transaction for ACK detection", "txHash", tx.Hash().Hex(), "xtID", xtID.Hex())
 
 	// Re-simulate the transaction against pending state (which should include putInbox transactions)
 	blockNrOrHash := rpc.BlockNumberOrHashWithNumber(rpc.PendingBlockNumber)
