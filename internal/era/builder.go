@@ -84,7 +84,7 @@ type Builder struct {
 	snappy *snappy.Writer
 }
 
-// NewBuilder returns a new Builder instance.
+// NewBuilder returns a new Builder instanceproto.
 func NewBuilder(w io.Writer) *Builder {
 	buf := bytes.NewBuffer(nil)
 	return &Builder{

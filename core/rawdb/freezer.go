@@ -73,7 +73,7 @@ type Freezer struct {
 	closeOnce    sync.Once
 }
 
-// NewFreezer creates a freezer instance for maintaining immutable ordered
+// NewFreezer creates a freezer instanceproto for maintaining immutable ordered
 // data according to the given parameters.
 //
 // The 'tables' argument defines the data tables. If the value of a map

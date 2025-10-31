@@ -3,7 +3,9 @@ package sequencer
 import (
 	"context"
 	sbcpproto "github.com/compose-network/specs/compose/proto"
+	periodproto "github.com/compose-network/specs/compose/sbcp"
 	"github.com/ethereum/go-ethereum/internal/xconsensus"
+	"github.com/ethereum/go-ethereum/internal/xconsensus/instanceproto"
 	pb "github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 )
 
@@ -20,7 +22,7 @@ type CoordinatorCallbacks struct {
 	// or not (vote=false). This callback is used by the coordinator during
 	// StartSC handling and is implemented by the host SDK (e.g., geth backend).
 	SimulateAndVote func(ctx context.Context, xtReq *pb.XTRequest, xtID *pb.XtID) (bool, error)
-	// CleanupAbortedTransaction is called when an SCP instance decides to abort,
+	// CleanupAbortedTransaction is called when an SCP instanceproto decides to abort,
 	// allowing the execution layer to immediately remove staged transactions from
 	// its pending pool. This ensures atomic exclude behavior when blocks are built
 	// before RequestSeal arrives.
@@ -55,6 +57,8 @@ type Coordinator interface {
 
 	// Consensus access
 	ConsensusCoord() xconsensus.Coordinator
+	PeriodSequencer() periodproto.Sequencer
+	InstanceSequencer() instanceproto.Sequencer
 
 	// SDK access
 	BlockLifecycleManager

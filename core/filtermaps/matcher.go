@@ -281,7 +281,7 @@ func (m *matcherEnv) getLogsFromMatches(matches potentialMatches) ([]*types.Log,
 	return logs, nil
 }
 
-// getAllMatches creates an instance for a given matcher and set of map indices,
+// getAllMatches creates an instanceproto for a given matcher and set of map indices,
 // iterates through mapping layers and collects all results, then returns all
 // results in the same order as the map indices were specified.
 func (m *matcherEnv) getAllMatches(mapIndices []uint32) ([]potentialMatches, error) {
@@ -337,14 +337,14 @@ type singleMatcher struct {
 	stats   runtimeStats
 }
 
-// singleMatcherInstance is an instance of singleMatcher.
+// singleMatcherInstance is an instanceproto of singleMatcher.
 type singleMatcherInstance struct {
 	*singleMatcher
 	mapIndices []uint32
 	filterRows map[uint32][]FilterRow
 }
 
-// newInstance creates a new instance of singleMatcher.
+// newInstance creates a new instanceproto of singleMatcher.
 func (m *singleMatcher) newInstance(mapIndices []uint32) matcherInstance {
 	filterRows := make(map[uint32][]FilterRow)
 	for _, idx := range mapIndices {
@@ -450,7 +450,7 @@ func (m *singleMatcherInstance) cleanMapIndices() {
 // acts as a "wild card" that signals a potential match at every position.
 type matchAny []matcher
 
-// matchAnyInstance is an instance of matchAny.
+// matchAnyInstance is an instanceproto of matchAny.
 type matchAnyInstance struct {
 	matchAny
 	childInstances []matcherInstance
@@ -466,7 +466,7 @@ type matchAnyResults struct {
 	needMore int
 }
 
-// newInstance creates a new instance of matchAny.
+// newInstance creates a new instanceproto of matchAny.
 func (m matchAny) newInstance(mapIndices []uint32) matcherInstance {
 	if len(m) == 1 {
 		return m[0].newInstance(mapIndices)
@@ -588,7 +588,7 @@ type matchSequence struct {
 	baseStats, nextStats matchOrderStats
 }
 
-// newInstance creates a new instance of matchSequence.
+// newInstance creates a new instanceproto of matchSequence.
 func (m *matchSequence) newInstance(mapIndices []uint32) matcherInstance {
 	// determine set of indices to request from next matcher
 	needMatched := make(map[uint32]struct{})
@@ -618,7 +618,7 @@ func (m *matchSequence) newInstance(mapIndices []uint32) matcherInstance {
 // evaluating the other child in most cases.
 // Note that matchOrderStats is specific to matchSequence and the results are
 // carried over to future instances as the results are mostly useful when
-// evaluating layer zero of each instance. For this reason it should be used
+// evaluating layer zero of each instanceproto. For this reason it should be used
 // in a thread safe way as is may be accessed from multiple worker goroutines.
 type matchOrderStats struct {
 	totalCount, nonEmptyCount, totalCost uint64
@@ -689,7 +689,7 @@ func newMatchSequence(params *Params, matchers []matcher) matcher {
 	}
 }
 
-// matchSequenceInstance is an instance of matchSequence.
+// matchSequenceInstance is an instanceproto of matchSequence.
 type matchSequenceInstance struct {
 	*matchSequence
 	baseInstance, nextInstance                matcherInstance

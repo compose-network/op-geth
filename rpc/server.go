@@ -58,7 +58,7 @@ type Server struct {
 	recorder Recorder // optional, may be nil
 }
 
-// NewServer creates a new server instance with no registered handlers.
+// NewServer creates a new server instanceproto with no registered handlers.
 func NewServer() *Server {
 	server := &Server{
 		idgen:         randomIDGenerator(),

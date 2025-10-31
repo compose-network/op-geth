@@ -77,7 +77,7 @@ func (d *Downloader) runStateSync(s *stateSync) *stateSync {
 // stateSync schedules requests for downloading a particular state trie defined
 // by a given state root.
 type stateSync struct {
-	d    *Downloader // Downloader instance to access and manage current peerset
+	d    *Downloader // Downloader instanceproto to access and manage current peerset
 	root common.Hash // State root currently being synced
 
 	started    chan struct{} // Started is signalled once the sync loop starts

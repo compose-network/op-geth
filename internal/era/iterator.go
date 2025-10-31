@@ -30,7 +30,7 @@ type Iterator struct {
 	inner *RawIterator
 }
 
-// NewIterator returns a new Iterator instance. Next must be immediately
+// NewIterator returns a new Iterator instanceproto. Next must be immediately
 // called on new iterators to load the first item.
 func NewIterator(e *Era) (*Iterator, error) {
 	inner, err := NewRawIterator(e)
@@ -122,7 +122,7 @@ type RawIterator struct {
 	TotalDifficulty io.Reader
 }
 
-// NewRawIterator returns a new RawIterator instance. Next must be immediately
+// NewRawIterator returns a new RawIterator instanceproto. Next must be immediately
 // called on new iterators to load the first item.
 func NewRawIterator(e *Era) (*RawIterator, error) {
 	return &RawIterator{

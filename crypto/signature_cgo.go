@@ -80,7 +80,7 @@ func CompressPubkey(pubkey *ecdsa.PublicKey) []byte {
 	return secp256k1.CompressPubkey(pubkey.X, pubkey.Y)
 }
 
-// S256 returns an instance of the secp256k1 curve.
+// S256 returns an instanceproto of the secp256k1 curve.
 func S256() EllipticCurve {
 	return secp256k1.S256()
 }

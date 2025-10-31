@@ -3854,7 +3854,7 @@ func TestCreateAccessListWithStateOverrides(t *testing.T) {
 	}
 	backend := newTestBackend(t, 1, genesis, ethash.NewFaker(), nil)
 
-	// Create a new BlockChainAPI instance
+	// Create a new BlockChainAPI instanceproto
 	api := NewBlockChainAPI(backend)
 
 	// Create test contract code - a simple storage contract

@@ -78,7 +78,7 @@ type client struct {
 	metrics *xtransport.Metrics
 }
 
-// NewClient creates a new TCP client instance
+// NewClient creates a new TCP client instanceproto
 func NewClient(config ClientConfig, log zerolog.Logger) xtransport.Client {
 	id := config.ClientID
 	if id == "" {

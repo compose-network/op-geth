@@ -291,7 +291,7 @@ func New(diskdb ethdb.Database, config *Config, isVerkle bool) *Database {
 // to an unclean shutdown or other unexpected reasons.
 func (db *Database) repairHistory() error {
 	// Open the freezer for state history. This mechanism ensures that
-	// only one database instance can be opened at a time to prevent
+	// only one database instanceproto can be opened at a time to prevent
 	// accidental mutation.
 	ancient, err := db.diskdb.AncientDatadir()
 	if err != nil {

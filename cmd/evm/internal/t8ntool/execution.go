@@ -414,7 +414,7 @@ func (pre *Prestate) Apply(vmConfig vm.Config, chainConfig *params.ChainConfig, 
 		execRs.Requests = requests
 	}
 
-	// Re-create statedb instance with new root upon the updated database
+	// Re-create statedb instanceproto with new root upon the updated database
 	// for accessing latest states.
 	statedb, err = state.New(root, statedb.Database())
 	if err != nil {

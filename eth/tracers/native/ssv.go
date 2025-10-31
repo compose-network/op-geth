@@ -244,7 +244,7 @@ func (t *SSVTracer) GetResult() (json.RawMessage, error) {
 	return res, t.reason
 }
 
-/////////// Public API for creating a new SSVTracer instance ///////////
+/////////// Public API for creating a new SSVTracer instanceproto ///////////
 
 func NewSSVTracer(mailboxAddresses []common.Address) *SSVTracer {
 	watchedAddresses := make(map[common.Address]bool)

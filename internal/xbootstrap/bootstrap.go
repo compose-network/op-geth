@@ -6,6 +6,7 @@ import (
 	"fmt"
 	sbcpproto "github.com/compose-network/specs/compose/proto"
 	"github.com/ethereum/go-ethereum/internal/xconsensus"
+	"github.com/ethereum/go-ethereum/internal/xconsensus/instanceproto"
 	xsequencer "github.com/ethereum/go-ethereum/internal/xsuperblock/sequencer"
 	"github.com/ethereum/go-ethereum/internal/xtransport"
 	"github.com/ethereum/go-ethereum/internal/xtransport/tcp"
@@ -71,8 +72,9 @@ func Setup(cfg Config) (*Runtime, error) {
 	}
 
 	periodSequencer := sbcp.NewSequencer(NewSimpleProver(), 0, 1, sbcp.SettledState{}, log)
+	instanceSequencer := instanceproto.NewSequencer(,,log)
 
-	seqCoord, spClient := setupSequencerCoordinator(cfg, periodSequencer, log)
+	seqCoord, spClient := setupSequencerCoordinator(cfg, periodSequencer, instanceSequencer, log)
 
 	p2pSrv := setupP2PServer(seqCoord, cfg, log)
 
@@ -90,7 +92,7 @@ func Setup(cfg Config) (*Runtime, error) {
 	return rt, nil
 }
 
-func setupSequencerCoordinator(cfg Config, periodSequencer sbcp.Sequencer, log zerolog.Logger) (*xsequencer.SequencerCoordinator, xtransport.Client) {
+func setupSequencerCoordinator(cfg Config, periodSequencer sbcp.Sequencer, instanceSequencer instanceproto.Sequencer, log zerolog.Logger) (*xsequencer.SequencerCoordinator, xtransport.Client) {
 	// SP client
 	spCfg := tcp.DefaultClientConfig()
 	if cfg.SPClientConfig != nil {
@@ -115,7 +117,7 @@ func setupSequencerCoordinator(cfg Config, periodSequencer sbcp.Sequencer, log z
 	c := xconsensus.DefaultConfig(nodeID)
 	c.Timeout = time.Minute
 	consensusCoord := xconsensus.NewConsensusCoord(log, c)
-	coord := xsequencer.NewSequencerCoordinator(consensusCoord, periodSequencer, seqCfg, spClient, log)
+	coord := xsequencer.NewSequencerCoordinator(consensusCoord, periodSequencer, instanceSequencer, seqCfg, spClient, log)
 
 	// SP message handler routes to coordinator
 	spClient.SetHandler(func(c context.Context, msg *sbcpproto.Message) ([]common.Hash, error) {

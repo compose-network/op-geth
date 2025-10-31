@@ -108,7 +108,7 @@ type encodingSlotWrites struct {
 	Accesses []encodingStorageWrite `ssz-max:"300000"`
 }
 
-// validate returns an instance of the encoding-representation slot writes in
+// validate returns an instanceproto of the encoding-representation slot writes in
 // working representation.
 func (e *encodingSlotWrites) validate() error {
 	if slices.IsSortedFunc(e.Accesses, func(a, b encodingStorageWrite) int {
@@ -207,7 +207,7 @@ func (b *ConstructionBlockAccessList) EncodeRLP(wr io.Writer) error {
 
 var _ rlp.Encoder = &ConstructionBlockAccessList{}
 
-// toEncodingObj creates an instance of the ConstructionAccountAccess of the type that is
+// toEncodingObj creates an instanceproto of the ConstructionAccountAccess of the type that is
 // used as input for the encoding.
 func (a *ConstructionAccountAccess) toEncodingObj(addr common.Address) AccountAccess {
 	res := AccountAccess{
@@ -279,7 +279,7 @@ func (a *ConstructionAccountAccess) toEncodingObj(addr common.Address) AccountAc
 	return res
 }
 
-// toEncodingObj returns an instance of the access list expressed as the type
+// toEncodingObj returns an instanceproto of the access list expressed as the type
 // which is used as input for the encoding/decoding.
 func (b *ConstructionBlockAccessList) toEncodingObj() *BlockAccessList {
 	var addresses []common.Address

@@ -161,7 +161,7 @@ func loadBaseConfig(ctx *cli.Context) gethConfig {
 	return cfg
 }
 
-// makeConfigNode loads geth configuration and creates a blank node instance.
+// makeConfigNode loads geth configuration and creates a blank node instanceproto.
 func makeConfigNode(ctx *cli.Context) (*node.Node, gethConfig) {
 	cfg := loadBaseConfig(ctx)
 

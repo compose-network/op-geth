@@ -36,7 +36,7 @@ type C struct {
 	abi abi.ABI
 }
 
-// NewC creates a new instance of C.
+// NewC creates a new instanceproto of C.
 func NewC() *C {
 	parsed, err := CMetaData.ParseABI()
 	if err != nil {
@@ -45,8 +45,8 @@ func NewC() *C {
 	return &C{abi: *parsed}
 }
 
-// Instance creates a wrapper for a deployed contract instance at the given address.
-// Use this to create the instance object passed to abigen v2 library functions Call, Transact, etc.
+// Instance creates a wrapper for a deployed contract instanceproto at the given address.
+// Use this to create the instanceproto object passed to abigen v2 library functions Call, Transact, etc.
 func (c *C) Instance(backend bind.ContractBackend, addr common.Address) *bind.BoundContract {
 	return bind.NewBoundContract(addr, c.abi, backend, backend, backend)
 }

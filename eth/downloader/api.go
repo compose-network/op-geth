@@ -174,7 +174,7 @@ type uninstallSyncSubscriptionRequest struct {
 
 // SyncStatusSubscription represents a syncing subscription.
 type SyncStatusSubscription struct {
-	api       *DownloaderAPI   // register subscription in event loop of this api instance
+	api       *DownloaderAPI   // register subscription in event loop of this api instanceproto
 	c         chan interface{} // channel where events are broadcasted to
 	unsubOnce sync.Once        // make sure unsubscribe logic is executed once
 }

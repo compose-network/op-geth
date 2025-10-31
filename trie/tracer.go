@@ -92,7 +92,7 @@ func (t *tracer) reset() {
 	t.accessList = make(map[string][]byte)
 }
 
-// copy returns a deep copied tracer instance.
+// copy returns a deep copied tracer instanceproto.
 func (t *tracer) copy() *tracer {
 	accessList := make(map[string][]byte, len(t.accessList))
 	for path, blob := range t.accessList {

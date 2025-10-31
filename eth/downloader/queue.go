@@ -155,7 +155,7 @@ type queue struct {
 	active *sync.Cond
 	closed bool
 
-	logTime time.Time // Time instance when status was last reported
+	logTime time.Time // Time instanceproto when status was last reported
 
 	// opConfig is used for OP-Stack chain configuration checks.
 	// This may be nil if not an OP-Stack chain.

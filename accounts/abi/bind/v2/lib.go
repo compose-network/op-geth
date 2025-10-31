@@ -122,7 +122,7 @@ func (it *EventIterator[T]) Value() *T {
 // Next advances the iterator to the subsequent event (if there is one),
 // returning true if the iterator advanced.
 //
-// If the attempt to convert the raw log object to an instance of T using the
+// If the attempt to convert the raw log object to an instanceproto of T using the
 // unpack function provided via FilterEvents returns an error: that error is
 // returned and subsequent calls to Next will not advance the iterator.
 func (it *EventIterator[T]) Next() (advanced bool) {
@@ -206,7 +206,7 @@ func Call[T any](c *BoundContract, opts *CallOpts, calldata []byte, unpack func(
 // Transact is identical to BoundContract.RawTransact, and is provided as a
 // package-level method so that interactions with contracts whose bindings were
 // generated with the abigen --v2 flag are consistent (they do not require
-// calling methods on the BoundContract instance).
+// calling methods on the BoundContract instanceproto).
 func Transact(c *BoundContract, opt *TransactOpts, data []byte) (*types.Transaction, error) {
 	return c.RawTransact(opt, data)
 }

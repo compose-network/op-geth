@@ -211,7 +211,7 @@ type MemoryFreezer struct {
 	writeBatch *memoryBatch            // Pre-allocated write batch
 }
 
-// NewMemoryFreezer initializes an in-memory freezer instance.
+// NewMemoryFreezer initializes an in-memory freezer instanceproto.
 func NewMemoryFreezer(readonly bool, tableName map[string]freezerTableConfig) *MemoryFreezer {
 	tables := make(map[string]*memoryTable)
 	for name, cfg := range tableName {

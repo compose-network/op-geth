@@ -6,8 +6,8 @@ import (
 	"github.com/compose-network/specs/compose"
 	sbcpproto "github.com/compose-network/specs/compose/proto"
 	periodproto "github.com/compose-network/specs/compose/sbcp"
-	instanceproto "github.com/compose-network/specs/compose/scp"
 	"github.com/ethereum/go-ethereum/internal/xconsensus"
+	"github.com/ethereum/go-ethereum/internal/xconsensus/instanceproto"
 	pb "github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 	"github.com/ethereum/go-ethereum/internal/xsuperblock/period"
 	"github.com/ethereum/go-ethereum/internal/xtransport"
@@ -36,21 +36,23 @@ type SequencerCoordinator struct {
 	currentSlot uint64
 
 	// Runtime state
-	running         bool
-	stopCh          chan struct{}
-	periodSequencer periodproto.Sequencer
+	running           bool
+	stopCh            chan struct{}
+	periodSequencer   periodproto.Sequencer
+	instanceSequencer instanceproto.Sequencer
 }
 
 // NewSequencerCoordinator creates a new sequencer coordinator
-func NewSequencerCoordinator(consensusCoord xconsensus.Coordinator, periodSequencer sbcp.Sequencer, config Config, transport xtransport.Client, log zerolog.Logger) *SequencerCoordinator {
+func NewSequencerCoordinator(consensusCoord xconsensus.Coordinator, periodSequencer periodproto.Sequencer, instanceSequencer instanceproto.Sequencer, config Config, transport xtransport.Client, log zerolog.Logger) *SequencerCoordinator {
 	coordinator := &SequencerCoordinator{
-		config:          config,
-		chainID:         config.ChainID,
-		log:             log.With().Str("component", "sequencer.coordinator").Logger(),
-		consensusCoord:  consensusCoord,
-		periodSequencer: periodSequencer,
-		transport:       transport,
-		stopCh:          make(chan struct{}),
+		config:            config,
+		chainID:           config.ChainID,
+		log:               log.With().Str("component", "sequencer.coordinator").Logger(),
+		consensusCoord:    consensusCoord,
+		periodSequencer:   periodSequencer,
+		instanceSequencer: instanceSequencer,
+		transport:         transport,
+		stopCh:            make(chan struct{}),
 	}
 
 	// Initialize SCP integration

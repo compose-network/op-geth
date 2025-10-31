@@ -18,7 +18,7 @@
 Package rpc implements bi-directional JSON-RPC 2.0 on multiple transports.
 
 It provides access to the exported methods of an object across a network or other I/O
-connection. After creating a server or client instance, objects can be registered to make
+connection. After creating a server or client instanceproto, objects can be registered to make
 them visible as 'services'. Exported methods that follow specific conventions can be
 called remotely. It also has support for the publish/subscribe pattern.
 
@@ -48,7 +48,7 @@ will be pointing to the given third argument. Since the optional argument is the
 argument the RPC package will also accept 2 integers as arguments. It will pass the mod
 argument as nil to the RPC method.
 
-The server offers the ServeCodec method which accepts a ServerCodec instance. It will read
+The server offers the ServeCodec method which accepts a ServerCodec instanceproto. It will read
 requests from the codec, process the request and sends the response back to the client
 using the codec. The server can execute requests concurrently. Responses can be sent back
 to the client out of order.
@@ -102,8 +102,8 @@ For more information about subscriptions, see https://geth.ethereum.org/docs/int
 
 # Reverse Calls
 
-In any method handler, an instance of rpc.Client can be accessed through the
-ClientFromContext method. Using this client instance, server-to-client method calls can be
+In any method handler, an instanceproto of rpc.Client can be accessed through the
+ClientFromContext method. Using this client instanceproto, server-to-client method calls can be
 performed on the RPC connection.
 */
 package rpc

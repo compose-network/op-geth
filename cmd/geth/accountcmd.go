@@ -181,7 +181,7 @@ For non-interactive use the password can be specified with the -password flag:
     geth account import [options] <keyfile>
 
 Note:
-As you can directly copy your encrypted accounts to another ethereum instance,
+As you can directly copy your encrypted accounts to another ethereum instanceproto,
 this import mechanism is not needed when you transfer an account between
 nodes.
 `,

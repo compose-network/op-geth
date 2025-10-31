@@ -40,7 +40,7 @@ type C1 struct {
 	abi abi.ABI
 }
 
-// NewC1 creates a new instance of C1.
+// NewC1 creates a new instanceproto of C1.
 func NewC1() *C1 {
 	parsed, err := C1MetaData.ParseABI()
 	if err != nil {
@@ -49,8 +49,8 @@ func NewC1() *C1 {
 	return &C1{abi: *parsed}
 }
 
-// Instance creates a wrapper for a deployed contract instance at the given address.
-// Use this to create the instance object passed to abigen v2 library functions Call, Transact, etc.
+// Instance creates a wrapper for a deployed contract instanceproto at the given address.
+// Use this to create the instanceproto object passed to abigen v2 library functions Call, Transact, etc.
 func (c *C1) Instance(backend bind.ContractBackend, addr common.Address) *bind.BoundContract {
 	return bind.NewBoundContract(addr, c.abi, backend, backend, backend)
 }
@@ -118,7 +118,7 @@ type C2 struct {
 	abi abi.ABI
 }
 
-// NewC2 creates a new instance of C2.
+// NewC2 creates a new instanceproto of C2.
 func NewC2() *C2 {
 	parsed, err := C2MetaData.ParseABI()
 	if err != nil {
@@ -127,8 +127,8 @@ func NewC2() *C2 {
 	return &C2{abi: *parsed}
 }
 
-// Instance creates a wrapper for a deployed contract instance at the given address.
-// Use this to create the instance object passed to abigen v2 library functions Call, Transact, etc.
+// Instance creates a wrapper for a deployed contract instanceproto at the given address.
+// Use this to create the instanceproto object passed to abigen v2 library functions Call, Transact, etc.
 func (c *C2) Instance(backend bind.ContractBackend, addr common.Address) *bind.BoundContract {
 	return bind.NewBoundContract(addr, c.abi, backend, backend, backend)
 }
@@ -192,7 +192,7 @@ type L1 struct {
 	abi abi.ABI
 }
 
-// NewL1 creates a new instance of L1.
+// NewL1 creates a new instanceproto of L1.
 func NewL1() *L1 {
 	parsed, err := L1MetaData.ParseABI()
 	if err != nil {
@@ -201,8 +201,8 @@ func NewL1() *L1 {
 	return &L1{abi: *parsed}
 }
 
-// Instance creates a wrapper for a deployed contract instance at the given address.
-// Use this to create the instance object passed to abigen v2 library functions Call, Transact, etc.
+// Instance creates a wrapper for a deployed contract instanceproto at the given address.
+// Use this to create the instanceproto object passed to abigen v2 library functions Call, Transact, etc.
 func (c *L1) Instance(backend bind.ContractBackend, addr common.Address) *bind.BoundContract {
 	return bind.NewBoundContract(addr, c.abi, backend, backend, backend)
 }
@@ -257,7 +257,7 @@ type L2 struct {
 	abi abi.ABI
 }
 
-// NewL2 creates a new instance of L2.
+// NewL2 creates a new instanceproto of L2.
 func NewL2() *L2 {
 	parsed, err := L2MetaData.ParseABI()
 	if err != nil {
@@ -266,8 +266,8 @@ func NewL2() *L2 {
 	return &L2{abi: *parsed}
 }
 
-// Instance creates a wrapper for a deployed contract instance at the given address.
-// Use this to create the instance object passed to abigen v2 library functions Call, Transact, etc.
+// Instance creates a wrapper for a deployed contract instanceproto at the given address.
+// Use this to create the instanceproto object passed to abigen v2 library functions Call, Transact, etc.
 func (c *L2) Instance(backend bind.ContractBackend, addr common.Address) *bind.BoundContract {
 	return bind.NewBoundContract(addr, c.abi, backend, backend, backend)
 }
@@ -322,7 +322,7 @@ type L2b struct {
 	abi abi.ABI
 }
 
-// NewL2b creates a new instance of L2b.
+// NewL2b creates a new instanceproto of L2b.
 func NewL2b() *L2b {
 	parsed, err := L2bMetaData.ParseABI()
 	if err != nil {
@@ -331,8 +331,8 @@ func NewL2b() *L2b {
 	return &L2b{abi: *parsed}
 }
 
-// Instance creates a wrapper for a deployed contract instance at the given address.
-// Use this to create the instance object passed to abigen v2 library functions Call, Transact, etc.
+// Instance creates a wrapper for a deployed contract instanceproto at the given address.
+// Use this to create the instanceproto object passed to abigen v2 library functions Call, Transact, etc.
 func (c *L2b) Instance(backend bind.ContractBackend, addr common.Address) *bind.BoundContract {
 	return bind.NewBoundContract(addr, c.abi, backend, backend, backend)
 }
@@ -384,7 +384,7 @@ type L3 struct {
 	abi abi.ABI
 }
 
-// NewL3 creates a new instance of L3.
+// NewL3 creates a new instanceproto of L3.
 func NewL3() *L3 {
 	parsed, err := L3MetaData.ParseABI()
 	if err != nil {
@@ -393,8 +393,8 @@ func NewL3() *L3 {
 	return &L3{abi: *parsed}
 }
 
-// Instance creates a wrapper for a deployed contract instance at the given address.
-// Use this to create the instance object passed to abigen v2 library functions Call, Transact, etc.
+// Instance creates a wrapper for a deployed contract instanceproto at the given address.
+// Use this to create the instanceproto object passed to abigen v2 library functions Call, Transact, etc.
 func (c *L3) Instance(backend bind.ContractBackend, addr common.Address) *bind.BoundContract {
 	return bind.NewBoundContract(addr, c.abi, backend, backend, backend)
 }
@@ -450,7 +450,7 @@ type L4 struct {
 	abi abi.ABI
 }
 
-// NewL4 creates a new instance of L4.
+// NewL4 creates a new instanceproto of L4.
 func NewL4() *L4 {
 	parsed, err := L4MetaData.ParseABI()
 	if err != nil {
@@ -459,8 +459,8 @@ func NewL4() *L4 {
 	return &L4{abi: *parsed}
 }
 
-// Instance creates a wrapper for a deployed contract instance at the given address.
-// Use this to create the instance object passed to abigen v2 library functions Call, Transact, etc.
+// Instance creates a wrapper for a deployed contract instanceproto at the given address.
+// Use this to create the instanceproto object passed to abigen v2 library functions Call, Transact, etc.
 func (c *L4) Instance(backend bind.ContractBackend, addr common.Address) *bind.BoundContract {
 	return bind.NewBoundContract(addr, c.abi, backend, backend, backend)
 }
@@ -515,7 +515,7 @@ type L4b struct {
 	abi abi.ABI
 }
 
-// NewL4b creates a new instance of L4b.
+// NewL4b creates a new instanceproto of L4b.
 func NewL4b() *L4b {
 	parsed, err := L4bMetaData.ParseABI()
 	if err != nil {
@@ -524,8 +524,8 @@ func NewL4b() *L4b {
 	return &L4b{abi: *parsed}
 }
 
-// Instance creates a wrapper for a deployed contract instance at the given address.
-// Use this to create the instance object passed to abigen v2 library functions Call, Transact, etc.
+// Instance creates a wrapper for a deployed contract instanceproto at the given address.
+// Use this to create the instanceproto object passed to abigen v2 library functions Call, Transact, etc.
 func (c *L4b) Instance(backend bind.ContractBackend, addr common.Address) *bind.BoundContract {
 	return bind.NewBoundContract(addr, c.abi, backend, backend, backend)
 }

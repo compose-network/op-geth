@@ -48,7 +48,7 @@ import (
 // The test works as follows:
 //
 // A list of states are created by applying actions. The state changes between
-// each state instance are tracked and be verified.
+// each state instanceproto are tracked and be verified.
 type stateTest struct {
 	addrs   []common.Address // all account addresses
 	actions [][]testAction   // modifications to the state, grouped by block

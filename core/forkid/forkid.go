@@ -97,7 +97,7 @@ func NewID(config *params.ChainConfig, genesis *types.Block, head, time uint64) 
 	return ID{Hash: checksumToBytes(hash), Next: 0}
 }
 
-// NewIDWithChain calculates the Ethereum fork ID from an existing chain instance.
+// NewIDWithChain calculates the Ethereum fork ID from an existing chain instanceproto.
 func NewIDWithChain(chain Blockchain) ID {
 	head := chain.CurrentHeader()
 

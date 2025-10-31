@@ -143,7 +143,7 @@ func TestHTTPRespBodyUnlimited(t *testing.T) {
 	}
 }
 
-// Tests that an HTTP error results in an HTTPError instance
+// Tests that an HTTP error results in an HTTPError instanceproto
 // being returned with the expected attributes.
 func TestHTTPErrorResponse(t *testing.T) {
 	t.Parallel()

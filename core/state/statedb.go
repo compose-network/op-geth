@@ -72,7 +72,7 @@ func (m *mutation) isDelete() bool {
 // * Accounts
 //
 // Once the state is committed, tries cached in stateDB (including account
-// trie, storage tries) will no longer be functional. A new state instance
+// trie, storage tries) will no longer be functional. A new state instanceproto
 // must be created with new root and updated database for accessing post-
 // commit states.
 type StateDB struct {
@@ -1377,7 +1377,7 @@ func (s *StateDB) commitAndFlush(block uint64, deleteEmptyObjects bool, noStorag
 // Commit writes the state mutations into the configured data stores.
 //
 // Once the state is committed, tries cached in stateDB (including account
-// trie, storage tries) will no longer be functional. A new state instance
+// trie, storage tries) will no longer be functional. A new state instanceproto
 // must be created with new root and updated database for accessing post-
 // commit states.
 //

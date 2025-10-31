@@ -14,7 +14,7 @@ type Logger struct {
 	zerolog.Logger
 }
 
-// New creates a new logger instance.
+// New creates a new logger instanceproto.
 func New(level string, pretty bool) Logger {
 	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
 	zerolog.TimeFieldFormat = time.RFC3339Nano

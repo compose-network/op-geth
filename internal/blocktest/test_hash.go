@@ -36,7 +36,7 @@ type testHasher struct {
 	hasher hash.Hash
 }
 
-// NewHasher returns a new testHasher instance.
+// NewHasher returns a new testHasher instanceproto.
 func NewHasher() *testHasher {
 	return &testHasher{hasher: sha3.NewLegacyKeccak256()}
 }

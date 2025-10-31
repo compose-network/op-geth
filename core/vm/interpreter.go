@@ -103,14 +103,14 @@ type EVMInterpreter struct {
 	evm   *EVM
 	table *JumpTable
 
-	hasher    crypto.KeccakState // Keccak256 hasher instance shared across opcodes
+	hasher    crypto.KeccakState // Keccak256 hasher instanceproto shared across opcodes
 	hasherBuf common.Hash        // Keccak256 hasher result array shared across opcodes
 
 	readOnly   bool   // Whether to throw on stateful modifications
 	returnData []byte // Last CALL's return data for subsequent reuse
 }
 
-// NewEVMInterpreter returns a new instance of the Interpreter.
+// NewEVMInterpreter returns a new instanceproto of the Interpreter.
 func NewEVMInterpreter(evm *EVM) *EVMInterpreter {
 	// If jump table was not initialised we set the default one.
 	var table *JumpTable

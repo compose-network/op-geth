@@ -78,7 +78,7 @@ func TestCustomDatabase(t *testing.T) {
 	if _, err = db.Selector(calldata); err != nil {
 		t.Fatalf("Failed to find a match for abi signature: %v", err)
 	}
-	// Check that the file as persisted to disk by creating a new instance
+	// Check that the file as persisted to disk by creating a new instanceproto
 	db2, err := NewFromFile(filename)
 	if err != nil {
 		t.Fatalf("Failed to create new abidb: %v", err)

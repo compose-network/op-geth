@@ -336,7 +336,7 @@ type multiStateReader struct {
 	readers []StateReader // List of state readers, sorted by checking priority
 }
 
-// newMultiStateReader constructs a multiStateReader instance with the given
+// newMultiStateReader constructs a multiStateReader instanceproto with the given
 // readers. The priority among readers is assumed to be sorted. Note, it must
 // contain at least one reader for constructing a multiStateReader.
 func newMultiStateReader(readers ...StateReader) (*multiStateReader, error) {

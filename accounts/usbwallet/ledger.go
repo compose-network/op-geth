@@ -81,7 +81,7 @@ type ledgerDriver struct {
 	log     log.Logger    // Contextual logger to tag the ledger with its id
 }
 
-// newLedgerDriver creates a new instance of a Ledger USB protocol driver.
+// newLedgerDriver creates a new instanceproto of a Ledger USB protocol driver.
 func newLedgerDriver(logger log.Logger) driver {
 	return &ledgerDriver{
 		log: logger,

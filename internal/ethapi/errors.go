@@ -44,7 +44,7 @@ func (e *revertError) ErrorData() interface{} {
 	return e.reason
 }
 
-// newRevertError creates a revertError instance with the provided revert data.
+// newRevertError creates a revertError instanceproto with the provided revert data.
 func newRevertError(revert []byte) *revertError {
 	err := vm.ErrExecutionReverted
 
@@ -62,7 +62,7 @@ func newRevertError(revert []byte) *revertError {
 // fully finished yet with JSON error code and a binary data blob.
 type TxIndexingError struct{}
 
-// NewTxIndexingError creates a TxIndexingError instance.
+// NewTxIndexingError creates a TxIndexingError instanceproto.
 func NewTxIndexingError() *TxIndexingError { return &TxIndexingError{} }
 
 // Error implement error interface, returning the error message.

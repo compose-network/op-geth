@@ -61,7 +61,7 @@ type trezorDriver struct {
 	log            log.Logger    // Contextual logger to tag the trezor with its id
 }
 
-// newTrezorDriver creates a new instance of a Trezor USB protocol driver.
+// newTrezorDriver creates a new instanceproto of a Trezor USB protocol driver.
 func newTrezorDriver(logger log.Logger) driver {
 	return &trezorDriver{
 		log: logger,

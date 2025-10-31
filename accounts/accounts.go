@@ -55,12 +55,12 @@ type Wallet interface {
 	// encountered.
 	Status() (string, error)
 
-	// Open initializes access to a wallet instance. It is not meant to unlock or
+	// Open initializes access to a wallet instanceproto. It is not meant to unlock or
 	// decrypt account keys, rather simply to establish a connection to hardware
 	// wallets and/or to access derivation seeds.
 	//
 	// The passphrase parameter may or may not be used by the implementation of a
-	// particular wallet instance. The reason there is no passwordless open method
+	// particular wallet instanceproto. The reason there is no passwordless open method
 	// is to strive towards a uniform wallet handling, oblivious to the different
 	// backend providers.
 	//
@@ -68,7 +68,7 @@ type Wallet interface {
 	// resources (especially important when working with hardware wallets).
 	Open(passphrase string) error
 
-	// Close releases any resources held by an open wallet instance.
+	// Close releases any resources held by an open wallet instanceproto.
 	Close() error
 
 	// Accounts retrieves the list of signing accounts the wallet is currently aware
@@ -106,7 +106,7 @@ type Wallet interface {
 	//
 	// If the wallet requires additional authentication to sign the request (e.g.
 	// a password to decrypt the account, or a PIN code to verify the transaction),
-	// an AuthNeededError instance will be returned, containing infos for the user
+	// an AuthNeededError instanceproto will be returned, containing infos for the user
 	// about which fields or actions are needed. The user may retry by providing
 	// the needed details via SignDataWithPassphrase, or by other means (e.g. unlock
 	// the account in a keystore).
@@ -125,7 +125,7 @@ type Wallet interface {
 	//
 	// If the wallet requires additional authentication to sign the request (e.g.
 	// a password to decrypt the account, or a PIN code to verify the transaction),
-	// an AuthNeededError instance will be returned, containing infos for the user
+	// an AuthNeededError instanceproto will be returned, containing infos for the user
 	// about which fields or actions are needed. The user may retry by providing
 	// the needed details via SignTextWithPassphrase, or by other means (e.g. unlock
 	// the account in a keystore).
@@ -143,7 +143,7 @@ type Wallet interface {
 	//
 	// If the wallet requires additional authentication to sign the request (e.g.
 	// a password to decrypt the account, or a PIN code to verify the transaction),
-	// an AuthNeededError instance will be returned, containing infos for the user
+	// an AuthNeededError instanceproto will be returned, containing infos for the user
 	// about which fields or actions are needed. The user may retry by providing
 	// the needed details via SignTxWithPassphrase, or by other means (e.g. unlock
 	// the account in a keystore).
@@ -223,6 +223,6 @@ const (
 // WalletEvent is an event fired by an account backend when a wallet arrival or
 // departure is detected.
 type WalletEvent struct {
-	Wallet Wallet          // Wallet instance arrived or departed
+	Wallet Wallet          // Wallet instanceproto arrived or departed
 	Kind   WalletEventType // Event type that happened in the system
 }

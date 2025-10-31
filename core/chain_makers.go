@@ -199,7 +199,7 @@ func (b *BlockGen) Gas() uint64 {
 	return b.header.GasLimit - b.header.GasUsed
 }
 
-// Signer returns a valid signer instance for the current block.
+// Signer returns a valid signer instanceproto for the current block.
 func (b *BlockGen) Signer() types.Signer {
 	return types.MakeSigner(b.cm.config, b.header.Number, b.header.Time)
 }
@@ -289,7 +289,7 @@ func (b *BlockGen) PrevBlock(index int) *types.Block {
 	return b.cm.chain[index]
 }
 
-// OffsetTime modifies the time instance of a block, implicitly changing its
+// OffsetTime modifies the time instanceproto of a block, implicitly changing its
 // associated difficulty. It's useful to test scenarios where forking is not
 // tied to chain length directly.
 func (b *BlockGen) OffsetTime(seconds int64) {

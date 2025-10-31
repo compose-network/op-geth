@@ -186,7 +186,7 @@ type API struct {
 	s *Syncer
 }
 
-// NewAPI creates a new debug API instance.
+// NewAPI creates a new debug API instanceproto.
 func NewAPI(s *Syncer) *API {
 	return &API{s: s}
 }

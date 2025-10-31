@@ -142,7 +142,7 @@ type jsTracer struct {
 	frameResultValue goja.Value
 }
 
-// newJsTracer instantiates a new JS tracer instance. code is a
+// newJsTracer instantiates a new JS tracer instanceproto. code is a
 // Javascript snippet which evaluates to an expression returning
 // an object with certain methods:
 //

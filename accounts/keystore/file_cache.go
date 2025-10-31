@@ -30,7 +30,7 @@ import (
 // fileCache is a cache of files seen during scan of keystore.
 type fileCache struct {
 	all     mapset.Set[string] // Set of all files from the keystore folder
-	lastMod time.Time          // Last time instance when a file was modified
+	lastMod time.Time          // Last time instanceproto when a file was modified
 	mu      sync.Mutex
 }
 

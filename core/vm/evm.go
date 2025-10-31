@@ -134,7 +134,7 @@ type EVM struct {
 	jumpDests JumpDestCache
 }
 
-// NewEVM constructs an EVM instance with the supplied block context, state
+// NewEVM constructs an EVM instanceproto with the supplied block context, state
 // database and several configs. It meant to be used throughout the entire
 // state transition of a block, with the transaction context switched as
 // needed by calling evm.SetTxContext.

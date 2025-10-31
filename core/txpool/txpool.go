@@ -67,7 +67,7 @@ type TxPool struct {
 	chain    BlockChain
 	signer   types.Signer
 
-	stateLock sync.RWMutex   // The lock for protecting state instance
+	stateLock sync.RWMutex   // The lock for protecting state instanceproto
 	state     *state.StateDB // Current state at the blockchain head
 
 	subs event.SubscriptionScope // Subscription scope to unsubscribe all on shutdown

@@ -358,7 +358,7 @@ type storageTask struct {
 	Last common.Hash // Last account to sync in this interval
 
 	// These fields are internals used during runtime
-	root common.Hash     // Storage root hash for this instance
+	root common.Hash     // Storage root hash for this instanceproto
 	req  *storageRequest // Pending request to fill this task
 
 	genBatch ethdb.Batch // Batch used by the node generator
@@ -502,10 +502,10 @@ type Syncer struct {
 	storageHealed      uint64             // Number of storage slots downloaded during the healing stage
 	storageHealedBytes common.StorageSize // Number of raw storage bytes persisted to disk during the healing stage
 
-	startTime     time.Time // Time instance when snapshot sync started
-	healStartTime time.Time // Time instance when the state healing started
+	startTime     time.Time // Time instanceproto when snapshot sync started
+	healStartTime time.Time // Time instanceproto when the state healing started
 	syncTimeOnce  sync.Once // Ensure that the state sync time is uploaded only once
-	logTime       time.Time // Time instance when status was last reported
+	logTime       time.Time // Time instanceproto when status was last reported
 
 	pend sync.WaitGroup // Tracks network request goroutines for graceful shutdown
 	lock sync.RWMutex   // Protects fields that can change outside of sync (peers, reqs, root)

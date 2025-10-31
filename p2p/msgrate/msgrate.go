@@ -221,7 +221,7 @@ type Trackers struct {
 	// packet and dropped with every new connection.
 	confidence float64
 
-	// tuned is the time instance the tracker recalculated its cached roundtrip
+	// tuned is the time instanceproto the tracker recalculated its cached roundtrip
 	// value and confidence values. A cleaner way would be to have a heartbeat
 	// goroutine do it regularly, but that requires a lot of maintenance to just
 	// run every now and again.

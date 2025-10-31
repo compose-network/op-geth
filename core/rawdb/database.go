@@ -216,7 +216,7 @@ type OpenOptions struct {
 
 // Open creates a high-level database wrapper for the given key-value store.
 func Open(db ethdb.KeyValueStore, opts OpenOptions) (ethdb.Database, error) {
-	// Create the idle freezer instance. If the given ancient directory is empty,
+	// Create the idle freezer instanceproto. If the given ancient directory is empty,
 	// in-memory chain freezer is used (e.g. dev mode); otherwise the regular
 	// file-based freezer is created.
 	chainFreezerDir := opts.Ancient

@@ -22,7 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/compose-network/specs/compose"
-	sbcpproto "github.com/compose-network/specs/compose/proto"
+	composeproto "github.com/compose-network/specs/compose/proto"
 	spconsensus "github.com/ethereum/go-ethereum/internal/xconsensus"
 	"github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 	xsequencer "github.com/ethereum/go-ethereum/internal/xsuperblock/sequencer"
@@ -638,7 +638,7 @@ func (b *EthAPIBackend) Genesis() *types.Block {
 
 // HandleSPMessage processes messages received from the shared publisher.
 // SSV
-func (b *EthAPIBackend) HandleSPMessage(ctx context.Context, msg *sbcpproto.Message) ([]common.Hash, error) {
+func (b *EthAPIBackend) HandleSPMessage(ctx context.Context, msg *composeproto.Message) ([]common.Hash, error) {
 	if b.coordinator == nil {
 		return nil, fmt.Errorf("coordinator not configured")
 	}
@@ -647,7 +647,7 @@ func (b *EthAPIBackend) HandleSPMessage(ctx context.Context, msg *sbcpproto.Mess
 	// Forward XTRequest to the SP over transport instead of handling locally.
 	if forward, _ := ctx.Value("forward").(bool); forward {
 		switch msg.Payload.(type) {
-		case *sbcpproto.Message_XtRequest:
+		case *composeproto.Message_XtRequest:
 			if b.spClient == nil {
 				return nil, fmt.Errorf("shared publisher client not configured")
 			}
@@ -684,7 +684,7 @@ func successfulAll(coordinationStates []*SimulationState) bool {
 func (b *EthAPIBackend) handleSequencerMessage(
 	ctx context.Context,
 	chainID string,
-	msg *sbcpproto.Message,
+	msg *composeproto.Message,
 ) ([]common.Hash, error) {
 	if b.coordinator == nil {
 		return nil, fmt.Errorf("coordinator not configured for sequencer message from chainID %s", chainID)
@@ -713,8 +713,8 @@ func (b *EthAPIBackend) handleSequencerMessage(
 func (b *EthAPIBackend) StartCallbackFn(chainID *big.Int) spconsensus.StartFn {
 	_ = chainID
 
-	return func(ctx context.Context, from string, xtReq *sbcpproto.StartInstance) error {
-		b.coordinator.ConsensusCoord().
+	return func(ctx context.Context, from string, instance *composeproto.StartInstance) error {
+		b.coordinator.InstanceSequencer().StartInstance(instance)
 
 		return nil
 	}
@@ -724,15 +724,15 @@ func (b *EthAPIBackend) StartCallbackFn(chainID *big.Int) spconsensus.StartFn {
 // SSV
 func (b *EthAPIBackend) VoteCallbackFn(chainID *big.Int) spconsensus.VoteFn {
 	return func(ctx context.Context, instanceID *compose.InstanceID, vote bool) error {
-		msgVote := &sbcpproto.Message_Vote{
-			Vote: &sbcpproto.Vote{
+		msgVote := &composeproto.Message_Vote{
+			Vote: &composeproto.Vote{
 				Vote:       vote,
 				InstanceId: instanceID[:],
 				ChainId:    chainID.Uint64(),
 			},
 		}
 
-		spMsg := &sbcpproto.Message{
+		spMsg := &composeproto.Message{
 			SenderId: chainID.String(),
 			Payload:  msgVote,
 		}
@@ -1515,7 +1515,7 @@ func (b *EthAPIBackend) SetSequencerCoordinator(coord xsequencer.Coordinator, sp
 		if client != nil {
 			// Capture chainID in closure to avoid loop variable issues
 			chainID := chainID
-			client.SetHandler(func(ctx context.Context, msg *sbcpproto.Message) ([]common.Hash, error) {
+			client.SetHandler(func(ctx context.Context, msg *composeproto.Message) ([]common.Hash, error) {
 				return b.handleSequencerMessage(ctx, chainID, msg)
 			})
 
@@ -1541,7 +1541,7 @@ func (b *EthAPIBackend) SetSequencerCoordinator(coord xsequencer.Coordinator, sp
 		})
 
 		// Set miner notifier and start
-		b.coordinator.SetMinerNotifier(b)
+		//b.coordinator.SetMinerNotifier(b)
 	}
 }
 

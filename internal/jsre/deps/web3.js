@@ -2941,7 +2941,7 @@ var checkForContractAddress = function(contract, callback){
 };
 
 /**
- * Should be called to create new ContractFactory instance
+ * Should be called to create new ContractFactory instanceproto
  *
  * @method ContractFactory
  * @param {Array} abi
@@ -2958,7 +2958,7 @@ var ContractFactory = function (eth, abi) {
      * @param {Any} contract constructor param2 (optional)
      * @param {Object} contract transaction object (required)
      * @param {Function} callback
-     * @returns {Contract} returns contract instance
+     * @returns {Contract} returns contract instanceproto
      */
     this.new = function () {
         /*jshint maxcomplexity: 7 */
@@ -3078,7 +3078,7 @@ ContractFactory.prototype.getData = function () {
 };
 
 /**
- * Should be called to create new contract instance
+ * Should be called to create new contract instanceproto
  *
  * @method Contract
  * @param {Array} abi
@@ -6712,7 +6712,7 @@ module.exports = transfer;
 	         * @param {WordArray} key The key.
 	         * @param {Object} cfg (Optional) The configuration options to use for this operation.
 	         *
-	         * @return {Cipher} A cipher instance.
+	         * @return {Cipher} A cipher instanceproto.
 	         *
 	         * @static
 	         *
@@ -6730,7 +6730,7 @@ module.exports = transfer;
 	         * @param {WordArray} key The key.
 	         * @param {Object} cfg (Optional) The configuration options to use for this operation.
 	         *
-	         * @return {Cipher} A cipher instance.
+	         * @return {Cipher} A cipher instanceproto.
 	         *
 	         * @static
 	         *
@@ -6898,7 +6898,7 @@ module.exports = transfer;
 	        /**
 	         * Creates this mode for encryption.
 	         *
-	         * @param {Cipher} cipher A block cipher instance.
+	         * @param {Cipher} cipher A block cipher instanceproto.
 	         * @param {Array} iv The IV words.
 	         *
 	         * @static
@@ -6914,7 +6914,7 @@ module.exports = transfer;
 	        /**
 	         * Creates this mode for decryption.
 	         *
-	         * @param {Cipher} cipher A block cipher instance.
+	         * @param {Cipher} cipher A block cipher instanceproto.
 	         * @param {Array} iv The IV words.
 	         *
 	         * @static
@@ -6930,7 +6930,7 @@ module.exports = transfer;
 	        /**
 	         * Initializes a newly created mode.
 	         *
-	         * @param {Cipher} cipher A block cipher instance.
+	         * @param {Cipher} cipher A block cipher instanceproto.
 	         * @param {Array} iv The IV words.
 	         *
 	         * @example
@@ -7643,7 +7643,7 @@ module.exports = transfer;
 	             *
 	             * @example
 	             *
-	             *     var instance = MyType.create();
+	             *     var instanceproto = MyType.create();
 	             */
 	            create: function () {
 	                var instance = this.extend();
@@ -7698,7 +7698,7 @@ module.exports = transfer;
 	             *
 	             * @example
 	             *
-	             *     var clone = instance.clone();
+	             *     var clone = instanceproto.clone();
 	             */
 	            clone: function () {
 	                return this.init.prototype.extend(this);
@@ -8881,7 +8881,7 @@ module.exports = transfer;
 	         *
 	         * @param {WordArray|string} messageUpdate The message to append.
 	         *
-	         * @return {HMAC} This HMAC instance.
+	         * @return {HMAC} This HMAC instanceproto.
 	         *
 	         * @example
 	         *

@@ -81,7 +81,7 @@ func (w *withdrawalQueue) subscribe(ch chan<- newWithdrawalsEvent) event.Subscri
 	return w.subs.Track(sub)
 }
 
-// SimulatedBeacon drives an Ethereum instance as if it were a real beacon
+// SimulatedBeacon drives an Ethereum instanceproto as if it were a real beacon
 // client. It can run in period mode where it mines a new block every period
 // (seconds) or on every transaction via Commit, Fork and AdjustTime.
 type SimulatedBeacon struct {

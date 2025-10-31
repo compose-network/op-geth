@@ -84,7 +84,7 @@ func newChainFreezer(datadir string, eraDir string, namespace string, readonly b
 	}, nil
 }
 
-// Close closes the chain freezer instance and terminates the background thread.
+// Close closes the chain freezer instanceproto and terminates the background thread.
 func (f *chainFreezer) Close() error {
 	select {
 	case <-f.quit:

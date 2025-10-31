@@ -76,7 +76,7 @@ func (d *directory) RegisterJSEval(f jsCtorFn) {
 	d.jsEval = f
 }
 
-// New returns a new instance of a tracer, by iterating through the
+// New returns a new instanceproto of a tracer, by iterating through the
 // registered lookups. Name is either name of an existing tracer
 // or an arbitrary JS code.
 func (d *directory) New(name string, ctx *Context, cfg json.RawMessage, chainConfig *params.ChainConfig) (*Tracer, error) {

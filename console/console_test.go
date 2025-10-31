@@ -152,7 +152,7 @@ func (env *tester) Close(t *testing.T) {
 }
 
 // Tests that the node lists the correct welcome message, notably that it contains
-// the instance name, block number, data directory and supported console modules.
+// the instanceproto name, block number, data directory and supported console modules.
 func TestWelcome(t *testing.T) {
 	tester := newTester(t, nil)
 	defer tester.Close(t)
@@ -163,8 +163,8 @@ func TestWelcome(t *testing.T) {
 	if want := "Welcome"; !strings.Contains(output, want) {
 		t.Fatalf("console output missing welcome message: have\n%s\nwant also %s", output, want)
 	}
-	if want := fmt.Sprintf("instance: %s", testInstance); !strings.Contains(output, want) {
-		t.Fatalf("console output missing instance: have\n%s\nwant also %s", output, want)
+	if want := fmt.Sprintf("instanceproto: %s", testInstance); !strings.Contains(output, want) {
+		t.Fatalf("console output missing instanceproto: have\n%s\nwant also %s", output, want)
 	}
 	if want := "at block: 0"; !strings.Contains(output, want) {
 		t.Fatalf("console output missing sync status: have\n%s\nwant also %s", output, want)

@@ -28,7 +28,7 @@ import (
 // transientStorage is a representation of EIP-1153 "Transient Storage".
 type transientStorage map[common.Address]Storage
 
-// newTransientStorage creates a new instance of a transientStorage.
+// newTransientStorage creates a new instanceproto of a transientStorage.
 func newTransientStorage() transientStorage {
 	return make(transientStorage)
 }

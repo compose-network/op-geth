@@ -296,7 +296,7 @@ func CheckEnvVars(ctx *cli.Context, flags []cli.Flag, prefix string) {
 	}
 }
 
-// CheckExclusive verifies that only a single instance of the provided flags was
+// CheckExclusive verifies that only a single instanceproto of the provided flags was
 // set by the user. Each flag might optionally be followed by a string type to
 // specialize it further.
 func CheckExclusive(ctx *cli.Context, args ...any) {

@@ -759,7 +759,7 @@ type nodeStats struct {
 // reportStats retrieves various stats about the node at the networking layer
 // and reports it to the stats server.
 func (s *Service) reportStats(conn *connWrapper) error {
-	// Gather the syncing infos from the local miner instance
+	// Gather the syncing infos from the local miner instanceproto
 	var (
 		syncing  bool
 		gasprice int

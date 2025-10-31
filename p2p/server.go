@@ -302,12 +302,12 @@ func (srv *Server) Self() *enode.Node {
 	return ln.Node()
 }
 
-// DiscoveryV4 returns the discovery v4 instance, if configured.
+// DiscoveryV4 returns the discovery v4 instanceproto, if configured.
 func (srv *Server) DiscoveryV4() *discover.UDPv4 {
 	return srv.discv4
 }
 
-// DiscoveryV5 returns the discovery v5 instance, if configured.
+// DiscoveryV5 returns the discovery v5 instanceproto, if configured.
 func (srv *Server) DiscoveryV5() *discover.UDPv5 {
 	return srv.discv5
 }

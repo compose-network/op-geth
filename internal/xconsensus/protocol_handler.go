@@ -8,7 +8,7 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// InstanceHandler defines the interface for instance protocol message handling
+// InstanceHandler defines the interface for instanceproto protocol message handling
 type InstanceHandler interface {
 	// Handle processes SCP protocol messages
 	Handle(ctx context.Context, from string, msg *sbcpproto.Message) error

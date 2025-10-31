@@ -27,7 +27,7 @@ type MinerAPI struct {
 	e *Ethereum
 }
 
-// NewMinerAPI creates a new MinerAPI instance.
+// NewMinerAPI creates a new MinerAPI instanceproto.
 func NewMinerAPI(e *Ethereum) *MinerAPI {
 	return &MinerAPI{e}
 }

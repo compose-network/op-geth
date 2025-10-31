@@ -53,7 +53,7 @@ type Call struct {
 	VM *goja.Runtime
 }
 
-// jsTimer is a single timer instance with a callback function
+// jsTimer is a single timer instanceproto with a callback function
 type jsTimer struct {
 	timer    *time.Timer
 	duration time.Duration
@@ -79,7 +79,7 @@ type evalReq struct {
 //   - output: The writer used for logging or printing runtime output.
 //
 // Returns:
-//   - A pointer to the newly created JSRE instance.
+//   - A pointer to the newly created JSRE instanceproto.
 func New(assetPath string, output io.Writer) *JSRE {
 	re := &JSRE{
 		assetPath:     assetPath,

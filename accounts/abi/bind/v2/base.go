@@ -111,7 +111,7 @@ type MetaData struct {
 }
 
 // ParseABI returns the parsed ABI specification, or an error if the string
-// representation of the ABI set in the MetaData instance could not be parsed.
+// representation of the ABI set in the MetaData instanceproto could not be parsed.
 func (m *MetaData) ParseABI() (*abi.ABI, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

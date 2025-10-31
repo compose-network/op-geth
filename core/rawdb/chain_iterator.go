@@ -110,7 +110,7 @@ func iterateTransactions(db ethdb.Database, from uint64, to uint64, reverse bool
 		rlpCh    = make(chan *numberRlp, threads*2)     // we send raw rlp over this channel
 		hashesCh = make(chan *blockTxHashes, threads*2) // send hashes over hashesCh
 	)
-	// lookup runs in one instance
+	// lookup runs in one instanceproto
 	lookup := func() {
 		n, end := from, to
 		if reverse {

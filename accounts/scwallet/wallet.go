@@ -117,7 +117,7 @@ const (
 // requesting accounts like crazy.
 const selfDeriveThrottling = time.Second
 
-// Wallet represents a smartcard wallet instance.
+// Wallet represents a smartcard wallet instanceproto.
 type Wallet struct {
 	Hub       *Hub   // A handle to the Hub that instantiated this wallet.
 	PublicKey []byte // The wallet's public key (used for communication and identification, not signing!)
@@ -134,7 +134,7 @@ type Wallet struct {
 	deriveQuit      chan chan error           // Channel to terminate the self-deriver with
 }
 
-// NewWallet constructs and returns a new Wallet instance.
+// NewWallet constructs and returns a new Wallet instanceproto.
 func NewWallet(hub *Hub, card *pcsc.Card) *Wallet {
 	wallet := &Wallet{
 		Hub:  hub,
@@ -182,7 +182,7 @@ func transmit(card *pcsc.Card, command *commandAPDU) (*responseAPDU, error) {
 }
 
 // applicationInfo encodes information about the smartcard application - its
-// instance UID and public key.
+// instanceproto UID and public key.
 type applicationInfo struct {
 	InstanceUID []byte `asn1:"tag:15"`
 	PublicKey   []byte `asn1:"tag:0"`
@@ -248,7 +248,7 @@ func (w *Wallet) ping() error {
 	return nil
 }
 
-// release releases any resources held by an open wallet instance.
+// release releases any resources held by an open wallet instanceproto.
 func (w *Wallet) release() error {
 	if w.session != nil {
 		return w.session.release()
@@ -332,12 +332,12 @@ func (w *Wallet) Status() (string, error) {
 	}
 }
 
-// Open initializes access to a wallet instance. It is not meant to unlock or
+// Open initializes access to a wallet instanceproto. It is not meant to unlock or
 // decrypt account keys, rather simply to establish a connection to hardware
 // wallets and/or to access derivation seeds.
 //
 // The passphrase parameter may or may not be used by the implementation of a
-// particular wallet instance. The reason there is no passwordless open method
+// particular wallet instanceproto. The reason there is no passwordless open method
 // is to strive towards a uniform wallet handling, oblivious to the different
 // backend providers.
 //
@@ -675,7 +675,7 @@ func (w *Wallet) SelfDerive(bases []accounts.DerivationPath, chain ethereum.Chai
 //
 // If the wallet requires additional authentication to sign the request (e.g.
 // a password to decrypt the account, or a PIN code o verify the transaction),
-// an AuthNeededError instance will be returned, containing infos for the user
+// an AuthNeededError instanceproto will be returned, containing infos for the user
 // about which fields or actions are needed. The user may retry by providing
 // the needed details via SignDataWithPassphrase, or by other means (e.g. unlock
 // the account in a keystore).
@@ -702,7 +702,7 @@ func (w *Wallet) signHash(account accounts.Account, hash []byte) ([]byte, error)
 //
 // If the wallet requires additional authentication to sign the request (e.g.
 // a password to decrypt the account, or a PIN code o verify the transaction),
-// an AuthNeededError instance will be returned, containing infos for the user
+// an AuthNeededError instanceproto will be returned, containing infos for the user
 // about which fields or actions are needed. The user may retry by providing
 // the needed details via SignTxWithPassphrase, or by other means (e.g. unlock
 // the account in a keystore).
@@ -742,7 +742,7 @@ func (w *Wallet) signHashWithPassphrase(account accounts.Account, passphrase str
 //
 // If the wallet requires additional authentication to sign the request (e.g.
 // a password to decrypt the account, or a PIN code o verify the transaction),
-// an AuthNeededError instance will be returned, containing infos for the user
+// an AuthNeededError instanceproto will be returned, containing infos for the user
 // about which fields or actions are needed. The user may retry by providing
 // the needed details via SignHashWithPassphrase, or by other means (e.g. unlock
 // the account in a keystore).

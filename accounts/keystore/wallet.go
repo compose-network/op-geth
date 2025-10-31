@@ -64,7 +64,7 @@ func (w *keystoreWallet) Accounts() []accounts.Account {
 }
 
 // Contains implements accounts.Wallet, returning whether a particular account is
-// or is not wrapped by this wallet instance.
+// or is not wrapped by this wallet instanceproto.
 func (w *keystoreWallet) Contains(account accounts.Account) bool {
 	return account.Address == w.account.Address && (account.URL == (accounts.URL{}) || account.URL == w.account.URL)
 }

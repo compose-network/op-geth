@@ -49,11 +49,11 @@ type driver interface {
 	// encountered.
 	Status() (string, error)
 
-	// Open initializes access to a wallet instance. The passphrase parameter may
-	// or may not be used by the implementation of a particular wallet instance.
+	// Open initializes access to a wallet instanceproto. The passphrase parameter may
+	// or may not be used by the implementation of a particular wallet instanceproto.
 	Open(device io.ReadWriter, passphrase string) error
 
-	// Close releases any resources held by an open wallet instance.
+	// Close releases any resources held by an open wallet instanceproto.
 	Close() error
 
 	// Heartbeat performs a sanity check against the hardware wallet to see if it
@@ -441,7 +441,7 @@ func (w *wallet) selfDerive() {
 }
 
 // Contains implements accounts.Wallet, returning whether a particular account is
-// or is not pinned into this wallet instance. Although we could attempt to resolve
+// or is not pinned into this wallet instanceproto. Although we could attempt to resolve
 // unpinned accounts, that would be an non-negligible hardware operation.
 func (w *wallet) Contains(account accounts.Account) bool {
 	w.stateLock.RLock()

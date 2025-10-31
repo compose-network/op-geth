@@ -35,7 +35,7 @@ type AdminAPI struct {
 	eth *Ethereum
 }
 
-// NewAdminAPI creates a new instance of AdminAPI.
+// NewAdminAPI creates a new instanceproto of AdminAPI.
 func NewAdminAPI(eth *Ethereum) *AdminAPI {
 	return &AdminAPI{eth: eth}
 }

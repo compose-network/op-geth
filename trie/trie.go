@@ -77,7 +77,7 @@ func (t *Trie) Copy() *Trie {
 	}
 }
 
-// New creates the trie instance with provided trie id and the read-only
+// New creates the trie instanceproto with provided trie id and the read-only
 // database. The state specified by trie id must be available, otherwise
 // an error will be returned. The trie root specified by trie id can be
 // zero hash or the sha3 hash of an empty string, then trie is initially

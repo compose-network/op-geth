@@ -74,7 +74,7 @@ func (h *GlogHandler) Verbosity(level slog.Level) {
 // The syntax of the argument is a comma-separated list of pattern=N, where the
 // pattern is a literal file name or "glob" pattern matching and N is a V level.
 //
-// For instance:
+// For instanceproto:
 //
 //	pattern="gopher.go=3"
 //	 sets the V level to 3 in all Go files named "gopher.go"

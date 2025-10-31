@@ -124,7 +124,7 @@ func (b *testBackend) teardown() {
 }
 
 // newTestBackend creates a test backend. OBS: don't forget to invoke tearDown
-// after use, otherwise the blockchain instance will mem-leak via goroutines.
+// after use, otherwise the blockchain instanceproto will mem-leak via goroutines.
 func newTestBackend(t *testing.T, londonBlock *big.Int, cancunBlock *big.Int, pending bool, opStack bool) *testBackend {
 	if londonBlock != nil && cancunBlock != nil && londonBlock.Cmp(cancunBlock) == 1 {
 		panic("cannot define test backend with cancun before london")

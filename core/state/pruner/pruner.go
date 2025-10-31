@@ -80,7 +80,7 @@ type Pruner struct {
 	snaptree    *snapshot.Tree
 }
 
-// NewPruner creates the pruner instance.
+// NewPruner creates the pruner instanceproto.
 func NewPruner(db ethdb.Database, config Config) (*Pruner, error) {
 	headBlock := rawdb.ReadHeadBlock(db)
 	if headBlock == nil {

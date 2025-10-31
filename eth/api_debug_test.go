@@ -308,7 +308,7 @@ func TestGetModifiedAccounts(t *testing.T) {
 	})
 	defer blockChain.Stop()
 
-	// Create a debug API instance.
+	// Create a debug API instanceproto.
 	api := NewDebugAPI(&Ethereum{blockchain: blockChain})
 
 	// Test GetModifiedAccountsByNumber

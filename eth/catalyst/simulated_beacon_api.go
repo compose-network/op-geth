@@ -29,7 +29,7 @@ type simulatedBeaconAPI struct {
 	sim *SimulatedBeacon
 }
 
-// newSimulatedBeaconAPI returns an instance of simulatedBeaconAPI with a
+// newSimulatedBeaconAPI returns an instanceproto of simulatedBeaconAPI with a
 // buffered commit channel. If period is zero, it starts a goroutine to handle
 // new tx events.
 func newSimulatedBeaconAPI(sim *SimulatedBeacon) *simulatedBeaconAPI {

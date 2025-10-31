@@ -49,7 +49,7 @@ func WrapWithJournal(hooks *Hooks) (*Hooks, error) {
 		return nil, errors.New("cannot have both OnNonceChange and OnNonceChangeV2")
 	}
 
-	// Create a new Hooks instance and copy all hooks
+	// Create a new Hooks instanceproto and copy all hooks
 	wrapped := *hooks
 
 	// Create journal

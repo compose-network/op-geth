@@ -826,7 +826,7 @@ func testLightVsFastVsFullChainHeads(t *testing.T, scheme string) {
 	height := uint64(64)
 	_, blocks, receipts := GenerateChainWithGenesis(gspec, ethash.NewFaker(), int(height), nil)
 
-	// makeDb creates a db instance for testing.
+	// makeDb creates a db instanceproto for testing.
 	makeDb := func() ethdb.Database {
 		db, err := rawdb.Open(rawdb.NewMemoryDatabase(), rawdb.OpenOptions{})
 		if err != nil {

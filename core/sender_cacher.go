@@ -28,7 +28,7 @@ var senderCacherOnce = sync.OnceValue(func() *txSenderCacher {
 	return newTxSenderCacher(runtime.NumCPU())
 })
 
-// SenderCacher returns the singleton instance of SenderCacher, initializing it if called for the first time.
+// SenderCacher returns the singleton instanceproto of SenderCacher, initializing it if called for the first time.
 // This function is thread-safe and ensures that initialization happens only once.
 func SenderCacher() *txSenderCacher {
 	return senderCacherOnce()

@@ -43,12 +43,12 @@ func (c *coordinator) RecordMailboxMessage(circMessage *sbcpproto.MailboxMessage
 	panic("implement me")
 }
 
-// NewConsensusCoord creates a new coordinator instance
+// NewConsensusCoord creates a new coordinator instanceproto
 func NewConsensusCoord(log zerolog.Logger, config Config) Coordinator {
 	return newWithMetrics(log, config, NewMetrics())
 }
 
-// newWithMetrics creates a new coordinator instance with custom metrics recorder
+// newWithMetrics creates a new coordinator instanceproto with custom metrics recorder
 // TODO: check best practices for metrics recorder
 func newWithMetrics(log zerolog.Logger, config Config, metrics MetricsRecorder) Coordinator {
 	logger := log.With().
@@ -81,7 +81,7 @@ func (c *coordinator) StartInstance(ctx context.Context, from string, instance *
 		Str("instance_id", hex.EncodeToString(instance.InstanceId)).
 		Int("participating_chains", len(chains)).
 		Dur("timeout", c.config.Timeout).
-		Msg("Started 2PC transaction")
+		Msg("Started 2PC instanceproto")
 
 	// Invoke start callback
 	c.callbackMgr.InvokeStart(ctx, from, instance)

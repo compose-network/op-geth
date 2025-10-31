@@ -1,0 +1,105 @@
+package instanceproto
+
+import (
+	"encoding/hex"
+	"fmt"
+	"github.com/compose-network/specs/compose"
+	composeproto "github.com/compose-network/specs/compose/proto"
+	instanceproto "github.com/compose-network/specs/compose/scp"
+	"github.com/rs/zerolog"
+	"sync"
+)
+
+type Sequencer interface {
+	StartInstance(instance *composeproto.StartInstance) error
+	ProcessMailboxMessage(mailboxMessage *instanceproto.MailboxMessage) error
+	Decide(instance *compose.InstanceID, decision bool) error
+}
+
+type InstanceSequencer struct {
+	instanceMap map[compose.InstanceID]instanceproto.SequencerInstance
+	lock        sync.RWMutex
+	execEngine  instanceproto.ExecutionEngine
+	seqNetwork  instanceproto.SequencerNetwork
+	log         zerolog.Logger
+}
+
+func NewSequencer(executionEngine instanceproto.ExecutionEngine, seqNetwork instanceproto.SequencerNetwork, log zerolog.Logger) Sequencer {
+	is := InstanceSequencer{
+		instanceMap: make(map[compose.InstanceID]instanceproto.SequencerInstance),
+		execEngine:  executionEngine,
+		seqNetwork:  seqNetwork,
+		log:         log,
+	}
+	return &is
+}
+
+func (s *InstanceSequencer) StartInstance(startInstance *composeproto.StartInstance) error {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	instance := convertToSpecInstance(startInstance)
+
+	seqInstance, err := instanceproto.NewSequencerInstance(
+		instance,
+		s.execEngine,
+		s.seqNetwork,
+		compose.StateRoot{},
+		s.log,
+	)
+	if err != nil {
+		return fmt.Errorf("could not create instance from start instance: %w", err)
+	}
+
+	s.instanceMap[instance.ID] = seqInstance
+
+	return seqInstance.Run()
+}
+
+func (s *InstanceSequencer) ProcessMailboxMessage(message *composeproto.MailboxMessage) error {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	seqInstance, ok := s.instanceMap[convertInstanceIDToArray(message.InstanceId)]
+	if !ok {
+		return fmt.Errorf("could not find sequencer instance by %s", hex.EncodeToString(message.InstanceId))
+	}
+
+	return seqInstance.ProcessMailboxMessage(message)
+}
+
+func (s *InstanceSequencer) Decide(instance *compose.InstanceID, decision bool) error {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	delete(s.instanceMap, *instance)
+
+	return
+}
+
+func convertToSpecInstance(instance *composeproto.StartInstance) compose.Instance {
+	xtRequest := instance.XtRequest
+	trs := make([]compose.TransactionRequest, 0)
+
+	for _, xtr := range xtRequest.TransactionRequests {
+		trs = append(trs, compose.TransactionRequest{
+			ChainID:      compose.ChainID(xtr.ChainId),
+			Transactions: xtr.Transaction,
+		})
+	}
+
+	return compose.Instance{
+		ID:             convertInstanceIDToArray(instance.InstanceId),
+		SequenceNumber: compose.SequenceNumber(instance.SequenceNumber),
+		PeriodID:       compose.PeriodID(instance.PeriodId),
+		XTRequest: compose.XTRequest{
+			trs,
+		},
+	}
+}
+
+func convertInstanceIDToArray(instanceIDAsSlice []byte) [32]byte {
+	id := [32]byte{}
+	copy(id[:], instanceIDAsSlice)
+	return id
+}

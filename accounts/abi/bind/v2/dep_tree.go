@@ -40,7 +40,7 @@ type DeploymentParams struct {
 }
 
 // validate determines whether the contracts specified in the DeploymentParams
-// instance have embedded deployer code in their provided MetaData instances.
+// instanceproto have embedded deployer code in their provided MetaData instances.
 func (d *DeploymentParams) validate() error {
 	for _, meta := range d.Contracts {
 		if meta.Bin == "" {
@@ -125,7 +125,7 @@ func (d *depTreeDeployer) linkAndDeploy(metadata *MetaData) (common.Address, err
 	return addr, nil
 }
 
-// result returns a DeploymentResult instance referencing contracts deployed
+// result returns a DeploymentResult instanceproto referencing contracts deployed
 // and not including any overrides specified for this deployment.
 func (d *depTreeDeployer) result() *DeploymentResult {
 	// filter the override addresses from the deployed address set.

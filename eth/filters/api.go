@@ -77,7 +77,7 @@ type FilterAPI struct {
 	timeout   time.Duration
 }
 
-// NewFilterAPI returns a new FilterAPI instance.
+// NewFilterAPI returns a new FilterAPI instanceproto.
 func NewFilterAPI(system *FilterSystem) *FilterAPI {
 	api := &FilterAPI{
 		sys:     system,

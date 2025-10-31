@@ -780,7 +780,7 @@ func doCall(ctx context.Context, b Backend, args TransactionArgs, state *state.S
 }
 
 func applyMessage(ctx context.Context, b Backend, args TransactionArgs, state *state.StateDB, header *types.Header, timeout time.Duration, gp *core.GasPool, blockContext *vm.BlockContext, vmConfig *vm.Config, precompiles vm.PrecompiledContracts, skipChecks bool) (*core.ExecutionResult, error) {
-	// Get a new instance of the EVM.
+	// Get a new instanceproto of the EVM.
 	if err := args.CallDefaults(gp.Gas(), blockContext.BaseFee, b.ChainConfig().ChainID); err != nil {
 		return nil, err
 	}
@@ -1966,7 +1966,7 @@ type DebugAPI struct {
 	b Backend
 }
 
-// NewDebugAPI creates a new instance of DebugAPI.
+// NewDebugAPI creates a new instanceproto of DebugAPI.
 func NewDebugAPI(b Backend) *DebugAPI {
 	return &DebugAPI{b: b}
 }
@@ -2121,7 +2121,7 @@ type NetAPI struct {
 	networkVersion uint64
 }
 
-// NewNetAPI creates a new net API instance.
+// NewNetAPI creates a new net API instanceproto.
 func NewNetAPI(net *p2p.Server, networkVersion uint64) *NetAPI {
 	return &NetAPI{net, networkVersion}
 }

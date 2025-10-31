@@ -61,7 +61,7 @@ const (
 // binary-alphabetical order.
 type Database struct {
 	fn string      // filename for reporting
-	db *leveldb.DB // LevelDB instance
+	db *leveldb.DB // LevelDB instanceproto
 
 	compTimeMeter       *metrics.Meter // Meter for measuring the total time spent in database compaction
 	compReadMeter       *metrics.Meter // Meter for measuring the data read during compaction

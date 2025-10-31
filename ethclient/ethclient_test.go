@@ -886,7 +886,7 @@ func sendTransaction(ec *ethclient.Client) error {
 
 // Here we show how to get the error message of reverted contract call.
 func ExampleRevertErrorData() {
-	// First create an ethclient.Client instance.
+	// First create an ethclient.Client instanceproto.
 	ctx := context.Background()
 	ec, _ := ethclient.DialContext(ctx, exampleNode.HTTPEndpoint())
 

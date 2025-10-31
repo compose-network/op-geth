@@ -107,7 +107,7 @@ func localConsole(ctx *cli.Context) error {
 	return nil
 }
 
-// remoteConsole will connect to a remote geth instance, attaching a JavaScript
+// remoteConsole will connect to a remote geth instanceproto, attaching a JavaScript
 // console to it.
 func remoteConsole(ctx *cli.Context) error {
 	if ctx.Args().Len() > 1 {

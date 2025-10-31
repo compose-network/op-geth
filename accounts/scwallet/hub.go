@@ -75,7 +75,7 @@ type Hub struct {
 	datadir  string
 	pairings map[string]smartcardPairing
 
-	refreshed   time.Time               // Time instance when the list of wallets was last refreshed
+	refreshed   time.Time               // Time instanceproto when the list of wallets was last refreshed
 	wallets     map[string]*Wallet      // Mapping from reader names to wallet instances
 	updateFeed  event.Feed              // Event feed to notify wallet additions/removals
 	updateScope event.SubscriptionScope // Subscription scope tracking current live listeners

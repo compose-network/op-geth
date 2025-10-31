@@ -66,7 +66,7 @@ type Node struct {
 	log           log.Logger
 	keyDir        string        // key store directory
 	keyDirTemp    bool          // If true, key directory will be removed by Stop
-	dirLock       *flock.Flock  // prevents concurrent use of instance directory
+	dirLock       *flock.Flock  // prevents concurrent use of instanceproto directory
 	stop          chan struct{} // Channel to wait for termination notifications
 	server        *p2p.Server   // Currently running P2P networking layer
 	startStopLock sync.Mutex    // Start/Stop are protected by an additional lock
@@ -117,7 +117,7 @@ func New(conf *Config) (*Node, error) {
 		conf.Logger = log.New()
 	}
 
-	// Ensure that the instance name doesn't cause weird conflicts with
+	// Ensure that the instanceproto name doesn't cause weird conflicts with
 	// other files in the data directory.
 	if strings.ContainsAny(conf.Name, `/\`) {
 		return nil, errors.New(`Config.Name must not contain '/' or '\'`)
@@ -151,7 +151,7 @@ func New(conf *Config) (*Node, error) {
 	// Register built-in APIs.
 	node.rpcAPIs = append(node.rpcAPIs, node.apis()...)
 
-	// Acquire the instance directory lock.
+	// Acquire the instanceproto directory lock.
 	if err := node.openDataDir(); err != nil {
 		return nil, err
 	}
@@ -507,7 +507,7 @@ func (n *Node) doClose(errs []error) error {
 		}
 	}
 
-	// Release instance directory lock.
+	// Release instanceproto directory lock.
 	n.closeDataDir()
 
 	// Unblock n.Wait.
@@ -527,7 +527,7 @@ func (n *Node) doClose(errs []error) error {
 // openEndpoints starts all network and RPC endpoints.
 func (n *Node) openEndpoints() error {
 	// start networking endpoints
-	n.log.Info("Starting peer-to-peer node", "instance", n.server.Name)
+	n.log.Info("Starting peer-to-peer node", "instanceproto", n.server.Name)
 	if err := n.server.Start(); err != nil {
 		return convertFileLockError(err)
 	}
@@ -600,8 +600,8 @@ func (n *Node) openDataDir() error {
 	if err := os.MkdirAll(instdir, 0700); err != nil {
 		return err
 	}
-	// Lock the instance directory to prevent concurrent use by another instance as well as
-	// accidental use of the instance directory as a database.
+	// Lock the instanceproto directory to prevent concurrent use by another instanceproto as well as
+	// accidental use of the instanceproto directory as a database.
 	n.dirLock = flock.New(filepath.Join(instdir, "LOCK"))
 
 	if locked, err := n.dirLock.TryLock(); err != nil {
@@ -613,7 +613,7 @@ func (n *Node) openDataDir() error {
 }
 
 func (n *Node) closeDataDir() {
-	// Release instance directory lock.
+	// Release instanceproto directory lock.
 	if n.dirLock != nil && n.dirLock.Locked() {
 		n.dirLock.Unlock()
 		n.dirLock = nil
@@ -978,7 +978,7 @@ func (n *Node) DataDir() string {
 	return n.config.DataDir
 }
 
-// InstanceDir retrieves the instance directory used by the protocol stack.
+// InstanceDir retrieves the instanceproto directory used by the protocol stack.
 func (n *Node) InstanceDir() string {
 	return n.config.instanceDir()
 }
@@ -1032,7 +1032,7 @@ func (n *Node) EventMux() *event.TypeMux {
 }
 
 // OpenDatabase opens an existing database with the given name (or creates one if no
-// previous can be found) from within the node's instance directory. If the node has no
+// previous can be found) from within the node's instanceproto directory. If the node has no
 // data directory, an in-memory database is returned.
 func (n *Node) OpenDatabaseWithOptions(name string, opt DatabaseOptions) (ethdb.Database, error) {
 	n.lock.Lock()
@@ -1062,7 +1062,7 @@ func (n *Node) OpenDatabaseWithOptions(name string, opt DatabaseOptions) (ethdb.
 }
 
 // OpenDatabase opens an existing database with the given name (or creates one if no
-// previous can be found) from within the node's instance directory.
+// previous can be found) from within the node's instanceproto directory.
 // If the node has no data directory, an in-memory database is returned.
 // Deprecated: use OpenDatabaseWithOptions instead.
 func (n *Node) OpenDatabase(name string, cache, handles int, namespace string, readonly bool) (ethdb.Database, error) {
@@ -1088,7 +1088,7 @@ func (n *Node) OpenDatabaseWithFreezer(name string, cache, handles int, ancient 
 	})
 }
 
-// ResolvePath returns the absolute path of a resource in the instance directory.
+// ResolvePath returns the absolute path of a resource in the instanceproto directory.
 func (n *Node) ResolvePath(x string) string {
 	return n.config.ResolvePath(x)
 }

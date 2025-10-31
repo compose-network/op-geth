@@ -382,7 +382,7 @@ func (ks *KeyStore) expire(addr common.Address, u *unlocked, timeout time.Durati
 		// just quit
 	case <-t.C:
 		ks.mu.Lock()
-		// only drop if it's still the same key instance that dropLater
+		// only drop if it's still the same key instanceproto that dropLater
 		// was launched with. we can check that using pointer equality
 		// because the map stores a new pointer every time the key is
 		// unlocked.

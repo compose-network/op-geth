@@ -43,7 +43,7 @@ type DebugAPI struct {
 	eth *Ethereum
 }
 
-// NewDebugAPI creates a new DebugAPI instance.
+// NewDebugAPI creates a new DebugAPI instanceproto.
 func NewDebugAPI(eth *Ethereum) *DebugAPI {
 	return &DebugAPI{eth: eth}
 }

@@ -33,7 +33,7 @@ type ShutdownTracker struct {
 	stopCh chan struct{}
 }
 
-// NewShutdownTracker creates a new ShutdownTracker instance and has
+// NewShutdownTracker creates a new ShutdownTracker instanceproto and has
 // no other side-effect.
 func NewShutdownTracker(db ethdb.Database) *ShutdownTracker {
 	return &ShutdownTracker{

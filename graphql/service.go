@@ -105,7 +105,7 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// New constructs a new GraphQL service instance.
+// New constructs a new GraphQL service instanceproto.
 func New(stack *node.Node, backend ethapi.Backend, filterSystem *filters.FilterSystem, cors, vhosts []string) error {
 	_, err := newHandler(stack, backend, filterSystem, cors, vhosts)
 	return err
