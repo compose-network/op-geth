@@ -200,7 +200,7 @@ func New(conf *Config) (*Node, error) {
 		ssvLogger.Info().
 			//Str("public_key", fmt.Sprintf("%x", authManager.PublicKeyBytes())).
 			//Str("address", authManager.Address()).
-			Msg("Sequencer initialized with key")
+			Msg("PeriodSequencer initialized with key")
 	}
 
 	if conf.CoordinatorKey == "" {

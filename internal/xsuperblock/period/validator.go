@@ -1,4 +1,4 @@
-package protocol
+package period
 
 import (
 	"fmt"

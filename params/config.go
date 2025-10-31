@@ -536,13 +536,13 @@ func (c *ChainConfig) Description() string {
 	banner += fmt.Sprintf("Chain ID:  %v (%s)\n", c.ChainID, network)
 	switch {
 	case c.Optimism != nil:
-		banner += "Consensus: Optimism\n"
+		banner += "ConsensusCoord: Optimism\n"
 	case c.Ethash != nil:
-		banner += "Consensus: Beacon (proof-of-stake), merged from Ethash (proof-of-work)\n"
+		banner += "ConsensusCoord: Beacon (proof-of-stake), merged from Ethash (proof-of-work)\n"
 	case c.Clique != nil:
-		banner += "Consensus: Beacon (proof-of-stake), merged from Clique (proof-of-authority)\n"
+		banner += "ConsensusCoord: Beacon (proof-of-stake), merged from Clique (proof-of-authority)\n"
 	default:
-		banner += "Consensus: unknown\n"
+		banner += "ConsensusCoord: unknown\n"
 	}
 	banner += "\n"
 

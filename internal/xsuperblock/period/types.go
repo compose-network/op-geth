@@ -1,4 +1,4 @@
-package protocol
+package period
 
 import (
 	"fmt"
@@ -54,8 +54,8 @@ func ClassifyMessage(msg *sbcpproto.Message) (MessageType, bool) {
 	return 0, false
 }
 
-// IsSBCPMessage returns true if the message belongs to SBCP protocol
-func IsSBCPMessage(msg *sbcpproto.Message) bool {
+// IsPeriodProtoMessage returns true if the message belongs to SBCP protocol
+func IsPeriodProtoMessage(msg *sbcpproto.Message) bool {
 	_, ok := ClassifyMessage(msg)
 	return ok
 }

@@ -54,7 +54,7 @@ const (
 
 // Transaction is an Ethereum transaction.
 type Transaction struct {
-	inner TxData    // Consensus contents of a transaction
+	inner TxData    // ConsensusCoord contents of a transaction
 	time  time.Time // Time first seen locally (spam avoidance)
 
 	// caches

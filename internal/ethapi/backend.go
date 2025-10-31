@@ -19,8 +19,7 @@ package ethapi
 
 import (
 	"context"
-	"github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
-
+	sbcpproto "github.com/compose-network/specs/compose/proto"
 	"github.com/ethereum/go-ethereum/core/ssv"
 	"math/big"
 	"time"
@@ -95,7 +94,7 @@ type Backend interface {
 	Genesis() *types.Block
 
 	// Shared publisher API
-	HandleSPMessage(ctx context.Context, msg *rollupv1.Message) ([]common.Hash, error)
+	HandleSPMessage(ctx context.Context, msg *sbcpproto.Message) ([]common.Hash, error)
 	SimulateTransaction(ctx context.Context, tx *types.Transaction, blockNrOrHash rpc.BlockNumberOrHash) (*ssv.SSVTraceResult, error)
 	// GetMailboxAddresses returns the list of mailbox contract addresses to watch
 	GetMailboxAddresses() []common.Address

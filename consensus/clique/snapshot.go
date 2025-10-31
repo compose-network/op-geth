@@ -52,7 +52,7 @@ type sigLRU = lru.Cache[common.Hash, common.Address]
 
 // Snapshot is the state of the authorization voting at a given point in time.
 type Snapshot struct {
-	config   *params.CliqueConfig // Consensus engine parameters to fine tune behavior
+	config   *params.CliqueConfig // ConsensusCoord engine parameters to fine tune behavior
 	sigcache *sigLRU              // Cache of recent block signatures to speed up ecrecover
 
 	Number  uint64                      `json:"number"`  // Block number where the snapshot was created

@@ -112,7 +112,7 @@ type newPayloadResult struct {
 	sidecars []*types.BlobTxSidecar // collected blobs of blob transactions
 	stateDB  *state.StateDB         // StateDB after executing the transactions
 	receipts []*types.Receipt       // Receipts collected during construction
-	requests [][]byte               // Consensus layer requests collected during block construction
+	requests [][]byte               // ConsensusCoord layer requests collected during block construction
 	witness  *stateless.Witness     // Witness is an optional stateless proof
 }
 
@@ -176,7 +176,7 @@ func (miner *Miner) generateWork(genParam *generateParams, witness bool) *newPay
 	}
 
 	//sequencerBalance := work.state.GetBalance(common.HexToAddress("0x0f10aF865F68F5aA1dDB7c5b5A1a0f396232C6Be"))
-	//fmt.Println("[Before] Sequencer balance: ", sequencerBalance.String())
+	//fmt.Println("[Before] PeriodSequencer balance: ", sequencerBalance.String())
 
 	misc.EnsureCreate2Deployer(miner.chainConfig, work.header.Time, work.state)
 
@@ -903,7 +903,7 @@ func (miner *Miner) fillTransactionsWithSequencerOrdering(interrupt *atomic.Int3
 			if err != nil {
 				log.Error("[SSV] Failed to initialise sequencer simulation environment", "err", err)
 			} else if err := miner.applySequencerBundle(simEnv, orderedSequencerTxs); err != nil {
-				log.Error("[SSV] Sequencer transaction bundle rejected during simulation",
+				log.Error("[SSV] PeriodSequencer transaction bundle rejected during simulation",
 					"err", err, "attempted", len(orderedSequencerTxs))
 				if notifyErr := backend.OnBlockBuildingComplete(env.rpcCtx, nil, false, false); notifyErr != nil {
 					log.Warn("[SSV] Failed to notify backend about bundle failure", "err", notifyErr)

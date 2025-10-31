@@ -55,7 +55,7 @@ func ClassifyMessage(msg *sbcpproto.Message) MessageType {
 	}
 }
 
-// IsSCPMessage returns true if the message belongs to SCP protocol
-func IsSCPMessage(msg *sbcpproto.Message) bool {
+// IsInstanceProtoMessage returns true if the message belongs to SCP protocol
+func IsInstanceProtoMessage(msg *sbcpproto.Message) bool {
 	return ClassifyMessage(msg) != MsgUnknown
 }

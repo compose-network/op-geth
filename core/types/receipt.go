@@ -54,7 +54,7 @@ const (
 
 // Receipt represents the results of a transaction.
 type Receipt struct {
-	// Consensus fields: These fields are defined by the Yellow Paper
+	// ConsensusCoord fields: These fields are defined by the Yellow Paper
 	Type              uint8  `json:"type,omitempty"`
 	PostState         []byte `json:"root"`
 	Status            uint64 `json:"status"`

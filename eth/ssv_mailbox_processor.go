@@ -6,10 +6,8 @@ import (
 	"crypto/ecdsa"
 	"encoding/json"
 	"fmt"
-	spconsensus "github.com/ethereum/go-ethereum/internal/xconsensus"
-	"github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
-	"github.com/ethereum/go-ethereum/internal/xsuperblock/sequencer"
-
+	"github.com/compose-network/specs/compose"
+	sbcpproto "github.com/compose-network/specs/compose/proto"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -19,15 +17,16 @@ import (
 	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/eth/tracers/native"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
+	spconsensus "github.com/ethereum/go-ethereum/internal/xconsensus"
+	"github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
+	"github.com/ethereum/go-ethereum/internal/xsuperblock/sequencer"
 	transport "github.com/ethereum/go-ethereum/internal/xtransport"
 	"github.com/ethereum/go-ethereum/log"
 
+	"github.com/ethereum/go-ethereum/rpc"
 	"math/big"
 	"strconv"
 	"strings"
-	"time"
-
-	"github.com/ethereum/go-ethereum/rpc"
 )
 
 const mailboxABI = `[{"type":"constructor","inputs":[{"name":"_coordinator","type":"address","internalType":"address"}],"stateMutability":"nonpayable"},{"type":"function","name":"COORDINATOR","inputs":[],"outputs":[{"name":"","type":"address","internalType":"address"}],"stateMutability":"view"},{"type":"function","name":"chainIDsInbox","inputs":[{"name":"","type":"uint256","internalType":"uint256"}],"outputs":[{"name":"","type":"uint256","internalType":"uint256"}],"stateMutability":"view"},{"type":"function","name":"chainIDsOutbox","inputs":[{"name":"","type":"uint256","internalType":"uint256"}],"outputs":[{"name":"","type":"uint256","internalType":"uint256"}],"stateMutability":"view"},{"type":"function","name":"computeKey","inputs":[{"name":"id","type":"uint256","internalType":"uint256"}],"outputs":[{"name":"","type":"bytes32","internalType":"bytes32"}],"stateMutability":"view"},{"type":"function","name":"createdKeys","inputs":[{"name":"key","type":"bytes32","internalType":"bytes32"}],"outputs":[{"name":"used","type":"bool","internalType":"bool"}],"stateMutability":"view"},{"type":"function","name":"getKey","inputs":[{"name":"chainMessageSender","type":"uint256","internalType":"uint256"},{"name":"chainMessageRecipient","type":"uint256","internalType":"uint256"},{"name":"sender","type":"address","internalType":"address"},{"name":"receiver","type":"address","internalType":"address"},{"name":"sessionId","type":"uint256","internalType":"uint256"},{"name":"label","type":"bytes","internalType":"bytes"}],"outputs":[{"name":"key","type":"bytes32","internalType":"bytes32"}],"stateMutability":"pure"},{"type":"function","name":"inbox","inputs":[{"name":"key","type":"bytes32","internalType":"bytes32"}],"outputs":[{"name":"message","type":"bytes","internalType":"bytes"}],"stateMutability":"view"},{"type":"function","name":"inboxRootPerChain","inputs":[{"name":"chainId","type":"uint256","internalType":"uint256"}],"outputs":[{"name":"inboxRoot","type":"bytes32","internalType":"bytes32"}],"stateMutability":"view"},{"type":"function","name":"messageHeaderListInbox","inputs":[{"name":"","type":"uint256","internalType":"uint256"}],"outputs":[{"name":"chainSrc","type":"uint256","internalType":"uint256"},{"name":"chainDest","type":"uint256","internalType":"uint256"},{"name":"sender","type":"address","internalType":"address"},{"name":"receiver","type":"address","internalType":"address"},{"name":"sessionId","type":"uint256","internalType":"uint256"},{"name":"label","type":"bytes","internalType":"bytes"}],"stateMutability":"view"},{"type":"function","name":"messageHeaderListOutbox","inputs":[{"name":"","type":"uint256","internalType":"uint256"}],"outputs":[{"name":"chainSrc","type":"uint256","internalType":"uint256"},{"name":"chainDest","type":"uint256","internalType":"uint256"},{"name":"sender","type":"address","internalType":"address"},{"name":"receiver","type":"address","internalType":"address"},{"name":"sessionId","type":"uint256","internalType":"uint256"},{"name":"label","type":"bytes","internalType":"bytes"}],"stateMutability":"view"},{"type":"function","name":"outbox","inputs":[{"name":"key","type":"bytes32","internalType":"bytes32"}],"outputs":[{"name":"message","type":"bytes","internalType":"bytes"}],"stateMutability":"view"},{"type":"function","name":"outboxRootPerChain","inputs":[{"name":"chainId","type":"uint256","internalType":"uint256"}],"outputs":[{"name":"outboxRoot","type":"bytes32","internalType":"bytes32"}],"stateMutability":"view"},{"type":"function","name":"putInbox","inputs":[{"name":"chainMessageSender","type":"uint256","internalType":"uint256"},{"name":"sender","type":"address","internalType":"address"},{"name":"receiver","type":"address","internalType":"address"},{"name":"sessionId","type":"uint256","internalType":"uint256"},{"name":"label","type":"bytes","internalType":"bytes"},{"name":"data","type":"bytes","internalType":"bytes"}],"outputs":[],"stateMutability":"nonpayable"},{"type":"function","name":"read","inputs":[{"name":"chainMessageSender","type":"uint256","internalType":"uint256"},{"name":"sender","type":"address","internalType":"address"},{"name":"sessionId","type":"uint256","internalType":"uint256"},{"name":"label","type":"bytes","internalType":"bytes"}],"outputs":[{"name":"message","type":"bytes","internalType":"bytes"}],"stateMutability":"view"},{"type":"function","name":"write","inputs":[{"name":"chainMessageRecipient","type":"uint256","internalType":"uint256"},{"name":"receiver","type":"address","internalType":"address"},{"name":"sessionId","type":"uint256","internalType":"uint256"},{"name":"label","type":"bytes","internalType":"bytes"},{"name":"data","type":"bytes","internalType":"bytes"}],"outputs":[],"stateMutability":"nonpayable"},{"type":"event","name":"NewInboxKey","inputs":[{"name":"index","type":"uint256","indexed":true,"internalType":"uint256"},{"name":"key","type":"bytes32","indexed":false,"internalType":"bytes32"}],"anonymous":false},{"type":"event","name":"NewOutboxKey","inputs":[{"name":"index","type":"uint256","indexed":true,"internalType":"uint256"},{"name":"key","type":"bytes32","indexed":false,"internalType":"bytes32"}],"anonymous":false},{"type":"error","name":"InvalidCoordinator","inputs":[]},{"type":"error","name":"MessageNotFound","inputs":[]}]`
@@ -478,22 +477,22 @@ func (mp *MailboxProcessor) handleCrossRollupCoordination(
 	return sentMsgs, circDeps, nil
 }
 
-func (mp *MailboxProcessor) sendCIRCMessage(ctx context.Context, msg *CrossRollupMessage, xtID *rollupv1.XtID) error {
+func (mp *MailboxProcessor) sendCIRCMessage(ctx context.Context, msg *CrossRollupMessage, instanceID *compose.InstanceID) error {
 	// Build CIRC payload
-	circMsg := &rollupv1.CIRCMessage{
+	circMsg := &sbcpproto.MailboxMessage{
 		SourceChain:      new(big.Int).SetUint64(msg.SourceChainID).Bytes(),
 		DestinationChain: new(big.Int).SetUint64(msg.DestChainID).Bytes(),
-		Source:           [][]byte{msg.Sender.Bytes()},
-		Receiver:         [][]byte{msg.Receiver.Bytes()},
-		XtId:             xtID,
+		Source:           msg.Sender.Bytes(),
+		Receiver:         msg.Receiver.Bytes(),
+		InstanceId:       instanceID[:],
 		Label:            string(msg.Label),
 		Data:             [][]byte{msg.Data},
 	}
 
-	spMsg := &rollupv1.Message{
+	spMsg := &sbcpproto.Message{
 		SenderId: strconv.FormatUint(mp.chainID, 10),
-		Payload: &rollupv1.Message_CircMessage{
-			CircMessage: circMsg,
+		Payload: &sbcpproto.Message_MailboxMessage{
+			MailboxMessage: circMsg,
 		},
 	}
 
@@ -544,8 +543,8 @@ func (mp *MailboxProcessor) sendCIRCMessage(ctx context.Context, msg *CrossRollu
 //		case <-timeout.C:
 //			// Diagnostics: list known CIRC queues for this xtID
 //			backend := mp.backend.(*EthAPIBackend)
-//			if backend != nil && backend.coordinator != nil && backend.coordinator.Consensus() != nil {
-//				if st, ok := backend.coordinator.Consensus().GetState(xtID); ok && st != nil {
+//			if backend != nil && backend.coordinator != nil && backend.coordinator.ConsensusCoord() != nil {
+//				if st, ok := backend.coordinator.ConsensusCoord().GetState(xtID); ok && st != nil {
 //					// Best-effort read (no locking API available here)
 //					counts := make(map[string]int)
 //					for k, v := range st.CIRCMessages {
@@ -561,7 +560,7 @@ func (mp *MailboxProcessor) sendCIRCMessage(ctx context.Context, msg *CrossRollu
 //			return nil, fmt.Errorf("timeout waiting for CIRC message from chain %s", sourceChainID)
 //		case <-ticker.C:
 //			backend := mp.backend.(*EthAPIBackend)
-//			circMsg, err := backend.coordinator.Consensus().ConsumeCIRCMessage(xtID, sourceChainID)
+//			circMsg, err := backend.coordinator.ConsensusCoord().ConsumeCIRCMessage(xtID, sourceChainID)
 //			if err != nil {
 //				// Periodic info to confirm we're still waiting
 //				ticks++

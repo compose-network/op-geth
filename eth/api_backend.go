@@ -17,11 +17,11 @@
 package eth
 
 import (
-	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
+	"github.com/compose-network/specs/compose"
 	sbcpproto "github.com/compose-network/specs/compose/proto"
 	spconsensus "github.com/ethereum/go-ethereum/internal/xconsensus"
 	"github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
@@ -80,7 +80,7 @@ type EthAPIBackend struct {
 	mailboxAddresses []common.Address
 	mailboxByChainID map[uint64]common.Address
 
-	// SSV: Sequencer transaction management
+	// SSV: PeriodSequencer transaction management
 	sequencerTxMutex sync.RWMutex
 	pendingXTEntries []sequencerTxEntry
 	pendingByHash    map[common.Hash]int // Maps transaction hash to index in pendingXTEntries for O(1) lookups
@@ -297,7 +297,7 @@ func (b *EthAPIBackend) StateAndHeaderByNumber(
 		if block != nil && state != nil {
 			//state.TxIndex() == 1
 			//sequencerBalance := state.GetBalance(common.HexToAddress("0x0f10aF865F68F5aA1dDB7c5b5A1a0f396232C6Be"))
-			//fmt.Println("[AFTER] Sequencer balance: ", sequencerBalance.String())
+			//fmt.Println("[AFTER] PeriodSequencer balance: ", sequencerBalance.String())
 			return state, block.Header(), nil
 		} else {
 			number = rpc.LatestBlockNumber // fall back to latest state
@@ -684,7 +684,7 @@ func successfulAll(coordinationStates []*SimulationState) bool {
 func (b *EthAPIBackend) handleSequencerMessage(
 	ctx context.Context,
 	chainID string,
-	msg *rollupv1.Message,
+	msg *sbcpproto.Message,
 ) ([]common.Hash, error) {
 	if b.coordinator == nil {
 		return nil, fmt.Errorf("coordinator not configured for sequencer message from chainID %s", chainID)
@@ -712,8 +712,10 @@ func (b *EthAPIBackend) handleSequencerMessage(
 // SSV
 func (b *EthAPIBackend) StartCallbackFn(chainID *big.Int) spconsensus.StartFn {
 	_ = chainID
-	return func(ctx context.Context, from string, xtReq *rollupv1.XTRequest) error {
-		log.Warn("[SSV] Suppressing StartCallback XTRequest forward (SBCP-only)", "from", from)
+
+	return func(ctx context.Context, from string, xtReq *sbcpproto.StartInstance) error {
+		b.coordinator.ConsensusCoord().
+
 		return nil
 	}
 }
@@ -721,16 +723,16 @@ func (b *EthAPIBackend) StartCallbackFn(chainID *big.Int) spconsensus.StartFn {
 // VoteCallbackFn returns a function that can be used to send votes for cross-chain transactions.
 // SSV
 func (b *EthAPIBackend) VoteCallbackFn(chainID *big.Int) spconsensus.VoteFn {
-	return func(ctx context.Context, xtID *rollupv1.XtID, vote bool) error {
-		msgVote := &rollupv1.Message_Vote{
-			Vote: &rollupv1.Vote{
-				Vote:          vote,
-				XtId:          xtID,
-				SenderChainId: chainID.Bytes(),
+	return func(ctx context.Context, instanceID *compose.InstanceID, vote bool) error {
+		msgVote := &sbcpproto.Message_Vote{
+			Vote: &sbcpproto.Vote{
+				Vote:       vote,
+				InstanceId: instanceID[:],
+				ChainId:    chainID.Uint64(),
 			},
 		}
 
-		spMsg := &rollupv1.Message{
+		spMsg := &sbcpproto.Message{
 			SenderId: chainID.String(),
 			Payload:  msgVote,
 		}
@@ -875,7 +877,7 @@ func (b *EthAPIBackend) SimulateTransaction(
 // SSV
 func (b *EthAPIBackend) SubmitSequencerTransaction(ctx context.Context, tx *types.Transaction, isPutInbox bool) error {
 	if err := b.validateSequencerTransaction(tx); err != nil {
-		log.Error("[SSV] Sequencer transaction validation failed", "err", err, "txHash", tx.Hash().Hex())
+		log.Error("[SSV] PeriodSequencer transaction validation failed", "err", err, "txHash", tx.Hash().Hex())
 		return fmt.Errorf("sequencer transaction validation failed: %w", err)
 	}
 
@@ -1104,7 +1106,7 @@ func (b *EthAPIBackend) validateSequencerTransaction(tx *types.Transaction) erro
 	}
 
 	if !isMailboxTx {
-		log.Warn("[SSV] Sequencer transaction not targeting mailbox",
+		log.Warn("[SSV] PeriodSequencer transaction not targeting mailbox",
 			"to", tx.To().Hex(),
 			"expected", mailboxAddrs)
 	}
@@ -1115,10 +1117,10 @@ func (b *EthAPIBackend) validateSequencerTransaction(tx *types.Transaction) erro
 	}
 
 	if tx.Gas() > 1000000 { // TODO: update this
-		log.Warn("[SSV] Sequencer transaction has high gas limit", "gas", tx.Gas())
+		log.Warn("[SSV] PeriodSequencer transaction has high gas limit", "gas", tx.Gas())
 	}
 
-	log.Debug("[SSV] Sequencer transaction validated",
+	log.Debug("[SSV] PeriodSequencer transaction validated",
 		"txHash", tx.Hash().Hex(),
 		"to", tx.To().Hex(),
 		"gas", tx.Gas(),
@@ -1513,20 +1515,21 @@ func (b *EthAPIBackend) SetSequencerCoordinator(coord xsequencer.Coordinator, sp
 		if client != nil {
 			// Capture chainID in closure to avoid loop variable issues
 			chainID := chainID
-			client.SetHandler(func(ctx context.Context, msg *rollupv1.Message) ([]common.Hash, error) {
+			client.SetHandler(func(ctx context.Context, msg *sbcpproto.Message) ([]common.Hash, error) {
 				return b.handleSequencerMessage(ctx, chainID, msg)
 			})
 
-			log.Info("[SSV] Sequencer client handler set", "peerChainID", chainID)
+			log.Info("[SSV] PeriodSequencer client handler set", "peerChainID", chainID)
 		}
 	}
 
 	if b.coordinator != nil {
 		// Wire consensus callbacks for SCP → coordinator integration
-		if b.coordinator.Consensus() != nil {
+		if b.coordinator.ConsensusCoord() != nil {
 			chainID := b.ChainConfig().ChainID
-			b.coordinator.Consensus().SetStartCallback(b.StartCallbackFn(chainID))
-			b.coordinator.Consensus().SetVoteCallback(b.VoteCallbackFn(chainID))
+			b.coordinator.ConsensusCoord().SetStartCallback(b.StartCallbackFn(chainID))
+			b.coordinator.ConsensusCoord().SetSimulateCallback(b.SimulateTransaction(chainID))
+			b.coordinator.ConsensusCoord().SetVoteCallback(b.VoteCallbackFn(chainID))
 		}
 
 		// Register SBCP callbacks
@@ -1599,94 +1602,6 @@ func (b *EthAPIBackend) NotifySlotStart(startSlot *rollupv1.StartSlot) error {
 	return nil
 }
 
-// NotifyRequestSeal notifies the backend when RequestSeal is received from coordinator.
-// SSV
-func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *rollupv1.RequestSeal) error {
-	log.Info("[SSV] Notify miner: RequestSeal", "slot", requestSeal.Slot, "included_xts", len(requestSeal.IncludedXts))
-
-	// Clean up non-included transactions FIRST, before storing RequestSeal info
-	// This ensures transactions rejected by SCP cannot be included in blocks built during Submission state
-	included := make(map[string]struct{}, len(requestSeal.IncludedXts))
-	for _, xt := range requestSeal.IncludedXts {
-		included[hexutil.Encode(xt)] = struct{}{}
-	}
-
-	// Collect ALL pending transaction keys
-	b.sequencerTxMutex.RLock()
-	pendingKeys := make(map[string]struct{})
-	totalPending := len(b.pendingXTEntries)
-	for _, entry := range b.pendingXTEntries {
-		if entry.xtID != "" {
-			pendingKeys[entry.xtID] = struct{}{}
-		}
-	}
-	b.sequencerTxMutex.RUnlock()
-
-	log.Info("[SSV] RequestSeal cleanup check",
-		"slot", requestSeal.Slot,
-		"totalPending", totalPending,
-		"pendingWithXtID", len(pendingKeys),
-		"includedXts", len(included))
-
-	// Drop transactions NOT in the included list
-	totalDroppedPut := 0
-	totalDroppedOriginal := 0
-	for key := range pendingKeys {
-		if _, ok := included[key]; ok {
-			log.Info("[SSV] Keeping transaction (included in RequestSeal)", "xtID", key)
-			continue
-		}
-
-		removedPut, removedOriginal := b.dropTransactionsForXtKey(key)
-		totalDroppedPut += removedPut
-		totalDroppedOriginal += removedOriginal
-		if removedPut+removedOriginal > 0 {
-			log.Info("[SSV] Dropped staged sequencer transactions after RequestSeal abort",
-				"xtID", key,
-				"putInboxRemoved", removedPut,
-				"originalRemoved", removedOriginal)
-		} else {
-			log.Warn("[SSV] RequestSeal cleanup: no transactions found for xtID", "xtID", key)
-		}
-	}
-
-	if totalDroppedPut+totalDroppedOriginal > 0 {
-		log.Info("[SSV] RequestSeal cleanup completed",
-			"slot", requestSeal.Slot,
-			"totalDroppedPut", totalDroppedPut,
-			"totalDroppedOriginal", totalDroppedOriginal)
-	}
-
-	// Store RequestSeal info after cleanup
-	b.rsMutex.Lock()
-	b.lastRequestSealIncluded = make([][]byte, len(requestSeal.IncludedXts))
-	for i, xt := range requestSeal.IncludedXts {
-		// copy to avoid aliasing
-		dup := make([]byte, len(xt))
-		copy(dup, xt)
-		b.lastRequestSealIncluded[i] = dup
-	}
-	b.lastRequestSealSlot = requestSeal.Slot
-	b.rsMutex.Unlock()
-
-	// Send ALL stored blocks if available
-	b.pendingBlockMutex.RLock()
-	hasStoredBlocks := len(b.pendingBlocks) > 0
-	blockCount := len(b.pendingBlocks)
-	b.pendingBlockMutex.RUnlock()
-
-	if hasStoredBlocks {
-		log.Info("[SSV] Sending stored blocks after RequestSeal", "slot", requestSeal.Slot, "blockCount", blockCount)
-		if err := b.sendStoredL2Block(ctx); err != nil {
-			log.Error("[SSV] Failed to send stored L2Blocks after RequestSeal", "err", err, "slot", requestSeal.Slot)
-		}
-	} else {
-		log.Info("[SSV] RequestSeal received with no stored blocks yet (will build now)", "slot", requestSeal.Slot)
-	}
-
-	return nil
-}
-
 // NotifyStateChange notifies the miner of sequencer state changes
 // SSV
 //func (b *EthAPIBackend) NotifyStateChange(from, to sequencer.State, slot uint64) error {
@@ -1725,134 +1640,6 @@ func (b *EthAPIBackend) cleanupAbortedTransactionCallback(ctx context.Context, x
 			"putInboxRemoved", removedPut,
 			"originalRemoved", removedOriginal)
 	}
-	return nil
-}
-
-// sendStoredL2Block sends the stored block as L2Block message
-// SSV
-func (b *EthAPIBackend) sendStoredL2Block(ctx context.Context) error {
-	b.pendingBlockMutex.Lock()
-	blocks := make([]*types.Block, len(b.pendingBlocks))
-	copy(blocks, b.pendingBlocks)
-	//slot := b.pendingBlockSlot
-	// Clear after copying
-	b.pendingBlocks = nil
-	b.pendingBlockMutex.Unlock()
-
-	if len(blocks) == 0 {
-		return fmt.Errorf("no stored blocks to send")
-	}
-
-	// Get RequestSeal inclusion list
-	b.rsMutex.RLock()
-	requestSealIncluded := make([][]byte, len(b.lastRequestSealIncluded))
-	for i := range b.lastRequestSealIncluded {
-		dup := make([]byte, len(b.lastRequestSealIncluded[i]))
-		copy(dup, b.lastRequestSealIncluded[i])
-		requestSealIncluded[i] = dup
-	}
-	b.rsMutex.RUnlock()
-
-	// Get committed cross-chain tx hashes (tracked during block building)
-	b.committedTxsMutex.RLock()
-	crossChainTxHashes := make(map[common.Hash]bool)
-	for hash := range b.committedTxHashes {
-		crossChainTxHashes[hash] = true
-	}
-	b.committedTxsMutex.RUnlock()
-
-	log.Info("[SSV] Submitting L2 blocks to shared publisher",
-		//"slot", slot,
-		"blockCount", len(blocks),
-		"committedXTs", len(crossChainTxHashes))
-
-	var lastL2Block *rollupv1.L2Block
-	blocksWithXTs := 0
-
-	// Send ALL blocks built during this slot
-	for _, block := range blocks {
-		// Determine IncludedXts by checking if block contains cross-chain txs
-		// If block has any cross-chain txs, use RequestSeal list; otherwise empty
-		var included [][]byte
-		hasXTs := false
-		for _, tx := range block.Transactions() {
-			if crossChainTxHashes[tx.Hash()] {
-				hasXTs = true
-				break
-			}
-		}
-		if hasXTs {
-			included = requestSealIncluded
-			blocksWithXTs++
-		} else {
-			included = [][]byte{}
-		}
-		// RLP encode the block
-		var buf bytes.Buffer
-		if err := block.EncodeRLP(&buf); err != nil {
-			log.Error("[SSV] Failed to RLP encode block", "err", err, "blockHash", block.Hash().Hex())
-			return err
-		}
-
-		l2 := &rollupv1.L2Block{
-			//Slot:            slot,
-			ChainId:         b.ChainConfig().ChainID.Bytes(),
-			BlockNumber:     block.NumberU64(),
-			BlockHash:       block.Hash().Bytes(),
-			ParentBlockHash: block.ParentHash().Bytes(),
-			IncludedXts:     included,
-			Block:           buf.Bytes(),
-		}
-
-		msg := &rollupv1.Message{
-			SenderId: b.ChainConfig().ChainID.String(),
-			Payload:  &rollupv1.Message_L2Block{L2Block: l2},
-		}
-
-		if err := b.spClient.Send(ctx, msg); err != nil {
-			log.Error("[SSV] Failed to send L2Block to shared publisher", "err", err)
-			return err
-		}
-
-		// Mark included XTs as sent in consensus layer for EACH block with XTs
-		// This is important so the consensus layer knows which XTs were committed
-		if b.coordinator != nil && b.coordinator.Consensus() != nil && len(included) > 0 {
-			if err := b.coordinator.Consensus().OnL2BlockCommitted(ctx, l2); err != nil {
-				log.Warn("[SSV] Consensus OnL2BlockCommitted warning", "err", err)
-			}
-		}
-
-		lastL2Block = l2
-	}
-
-	log.Info("[SSV] Successfully submitted L2 blocks",
-		//"slot", slot,
-		"totalBlocks", len(blocks),
-		"blocksWithXTs", blocksWithXTs)
-
-	if len(crossChainTxHashes) > 0 {
-		b.clearCommittedSequencerTransactions(crossChainTxHashes)
-	}
-
-	// Call OnBlockBuildingComplete ONCE after all blocks sent (for state transition)
-	// Use the last block (doesn't matter which one, just need to trigger the transition)
-	if b.coordinator != nil && lastL2Block != nil {
-		if err := b.coordinator.OnBlockBuildingComplete(ctx, lastL2Block, true); err != nil {
-			log.Warn("[SSV] Coordinator OnBlockBuildingComplete warning", "err", err)
-		}
-	}
-
-	// After sending all blocks, reset RequestSeal state
-	b.rsMutex.Lock()
-	b.lastRequestSealIncluded = nil
-	b.lastRequestSealSlot = 0
-	b.rsMutex.Unlock()
-
-	// Clear committed tx hashes for next slot
-	b.committedTxsMutex.Lock()
-	b.committedTxHashes = make(map[common.Hash]bool)
-	b.committedTxsMutex.Unlock()
-
 	return nil
 }
 

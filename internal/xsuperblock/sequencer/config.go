@@ -8,7 +8,7 @@ import (
 type Config struct {
 	ChainID []byte `json:"chain_id"`
 
-	// Sequencer-specific settings
+	// PeriodSequencer-specific settings
 	BlockTimeout         time.Duration `json:"block_timeout"`
 	MaxLocalTxs          int           `json:"max_local_txs"`
 	SCPTimeout           time.Duration `json:"scp_timeout"`

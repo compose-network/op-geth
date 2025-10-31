@@ -1,8 +1,8 @@
 package sequencer
 
 import (
-	"context"
 	"fmt"
+	"github.com/compose-network/specs/compose"
 	"github.com/ethereum/go-ethereum/internal/xconsensus"
 	pb "github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 	"sync"
@@ -47,52 +47,11 @@ func NewSCPIntegration(
 	}
 }
 
-func (si *SCPIntegration) HandleStartSC(ctx context.Context, startSC *pb.StartSC) error {
-	xtID := &pb.XtID{Hash: startSC.XtId}
-	xtIDStr := xtID.Hex()
-
+func (si *SCPIntegration) HandleDecision(xtID *compose.InstanceID, decision bool) error {
 	si.mu.Lock()
 	defer si.mu.Unlock()
 
-	// Ensure local consensus state exists for this xT so CIRC
-	// messages can be recorded/consumed by the sequencer's coordinator
-	if err := si.consensus.StartTransaction(ctx, "sequencer", startSC.XtRequest); err != nil {
-		// Do not fail the flow – log and continue to avoid blocking SBCP.
-		// CIRC Record/Consume will clearly error if state is missing.
-		si.log.Error().
-			Err(err).
-			Str("xt_id", xtIDStr).
-			Msg("Failed to start local 2PC state for StartSC")
-	} else {
-		si.log.Debug().
-			Str("xt_id", xtIDStr).
-			Msg("Initialized local 2PC state for StartSC")
-	}
-
-	// Create SCP context
-	scpCtx := &SCPContext{
-		XtID:           xtID,
-		Request:        startSC.XtRequest,
-		SequenceNumber: startSC.XtSequenceNumber,
-		MyTransactions: si.extractMyTransactions(startSC.XtRequest),
-	}
-
-	si.activeContexts[xtIDStr] = scpCtx
-
-	si.log.Info().
-		Str("xt_id", xtIDStr).
-		Uint64("sequence", startSC.XtSequenceNumber).
-		Int("my_txs", len(scpCtx.MyTransactions)).
-		Msg("Started SCP context")
-
-	return nil
-}
-
-func (si *SCPIntegration) HandleDecision(xtID *pb.XtID, decision bool) error {
-	si.mu.Lock()
-	defer si.mu.Unlock()
-
-	xtIDStr := xtID.Hex()
+	xtIDStr := xtID.String()
 
 	scpCtx, exists := si.activeContexts[xtIDStr]
 	if !exists {
@@ -138,41 +97,4 @@ func (si *SCPIntegration) extractMyTransactions(xtReq *pb.XTRequest) [][]byte {
 	}
 
 	return myTxs
-}
-
-func (si *SCPIntegration) GetActiveContexts() map[string]*SCPContext {
-	si.mu.RLock()
-	defer si.mu.RUnlock()
-
-	result := make(map[string]*SCPContext)
-	for k, v := range si.activeContexts {
-		result[k] = v
-	}
-
-	return result
-}
-
-// GetIncludedXTsHex returns hex-encoded xtIDs decided to include in current slot
-func (si *SCPIntegration) GetIncludedXTsHex() []string {
-	si.mu.RLock()
-	defer si.mu.RUnlock()
-	out := make([]string, 0, len(si.includedXTs))
-	for k := range si.includedXTs {
-		out = append(out, k)
-	}
-	return out
-}
-
-// GetLastDecidedSequenceNumber returns the last decided sequence and whether it exists
-func (si *SCPIntegration) GetLastDecidedSequenceNumber() (uint64, bool) {
-	si.mu.RLock()
-	defer si.mu.RUnlock()
-	return si.lastDecidedSeq, si.hasLastDecidedSeq
-}
-
-// GetActiveCount returns the number of in-flight SCP instances
-func (si *SCPIntegration) GetActiveCount() int {
-	si.mu.RLock()
-	defer si.mu.RUnlock()
-	return len(si.activeContexts)
 }

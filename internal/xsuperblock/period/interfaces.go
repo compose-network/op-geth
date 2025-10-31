@@ -1,4 +1,4 @@
-package protocol
+package period
 
 import (
 	"context"
@@ -6,16 +6,13 @@ import (
 	sbcpproto "github.com/compose-network/specs/compose/proto"
 )
 
-// Handler defines the interface for SBCP protocol message handling
-type Handler interface {
+// PeriodHandler defines the interface for SBCP protocol message handling
+type PeriodHandler interface {
 	// Handle processes SBCP protocol messages
 	Handle(ctx context.Context, from string, msg *sbcpproto.Message) error
 
-	// CanHandle returns true if this sbcpHandler can process the message
+	// CanHandle returns true if this periodHandler can process the message
 	CanHandle(msg *sbcpproto.Message) bool
-
-	// GetProtocolName returns the protocol name for logging/debugging
-	GetProtocolName() string
 }
 
 // MessageHandler defines handlers for specific SBCP message types

@@ -3,10 +3,13 @@ package sequencer
 import (
 	"context"
 	"fmt"
+	"github.com/compose-network/specs/compose"
 	sbcpproto "github.com/compose-network/specs/compose/proto"
+	periodproto "github.com/compose-network/specs/compose/sbcp"
+	instanceproto "github.com/compose-network/specs/compose/scp"
 	"github.com/ethereum/go-ethereum/internal/xconsensus"
 	pb "github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
-	xprotocol "github.com/ethereum/go-ethereum/internal/xsuperblock/protocol"
+	"github.com/ethereum/go-ethereum/internal/xsuperblock/period"
 	"github.com/ethereum/go-ethereum/internal/xtransport"
 	"sync"
 
@@ -27,39 +30,27 @@ type SequencerCoordinator struct {
 	consensusCoord xconsensus.Coordinator
 	transport      xtransport.Client
 
-	// Miner integration (SDK)
-	minerNotifier MinerNotifier
-	callbacks     CoordinatorCallbacks
+	callbacks CoordinatorCallbacks
 
 	// Current slot context
 	currentSlot uint64
 
 	// Runtime state
-	running bool
-	stopCh  chan struct{}
-
-	// Queue StartSC messages that arrive while an SCP instance is active
-	// TODO: rethink
-	pendingStartSCs []struct {
-		from  string
-		start *pb.StartSC
-	}
+	running         bool
+	stopCh          chan struct{}
+	periodSequencer periodproto.Sequencer
 }
 
 // NewSequencerCoordinator creates a new sequencer coordinator
-func NewSequencerCoordinator(
-	consensusCoord xconsensus.Coordinator,
-	config Config,
-	transport xtransport.Client,
-	log zerolog.Logger,
-) *SequencerCoordinator {
+func NewSequencerCoordinator(consensusCoord xconsensus.Coordinator, periodSequencer sbcp.Sequencer, config Config, transport xtransport.Client, log zerolog.Logger) *SequencerCoordinator {
 	coordinator := &SequencerCoordinator{
-		config:         config,
-		chainID:        config.ChainID,
-		log:            log.With().Str("component", "sequencer.coordinator").Logger(),
-		consensusCoord: consensusCoord,
-		transport:      transport,
-		stopCh:         make(chan struct{}),
+		config:          config,
+		chainID:         config.ChainID,
+		log:             log.With().Str("component", "sequencer.coordinator").Logger(),
+		consensusCoord:  consensusCoord,
+		periodSequencer: periodSequencer,
+		transport:       transport,
+		stopCh:          make(chan struct{}),
 	}
 
 	// Initialize SCP integration
@@ -70,11 +61,11 @@ func NewSequencerCoordinator(
 	)
 
 	// Initialize protocol handlers
-	sbcpHandler := xprotocol.NewSBCPHandler(xprotocol.NewBasicValidator(), log)
-	scpHandler := xconsensus.NewSCPHandler(consensusCoord, log)
+	periodHandler := period.NewPeriodHandler(period.NewBasicValidator(), log)
+	instanceHandler := xconsensus.NewInstanceHandler(consensusCoord, log)
 
 	// Initialize message router with protocol handlers
-	coordinator.messageRouter = NewMessageRouter(sbcpHandler, scpHandler, log)
+	coordinator.messageRouter = NewMessageRouter(periodHandler, instanceHandler, log)
 
 	// Bind consensus decision callback directly to the coordinator so lifecycle is unified
 	// and external callers (e.g., SDK hosts) don't need to forward decisions.
@@ -104,7 +95,7 @@ func (sc *SequencerCoordinator) Start(ctx context.Context) error {
 
 	sc.log.Info().
 		Str("chain_id", fmt.Sprintf("%x", sc.chainID)).
-		Msg("Sequencer coordinator started")
+		Msg("PeriodSequencer coordinator started")
 
 	return nil
 }
@@ -128,7 +119,7 @@ func (sc *SequencerCoordinator) Stop(ctx context.Context) error {
 
 	sc.running = false
 
-	sc.log.Info().Msg("Sequencer coordinator stopped")
+	sc.log.Info().Msg("PeriodSequencer coordinator stopped")
 	return nil
 }
 
@@ -137,27 +128,17 @@ func (sc *SequencerCoordinator) HandleMessage(ctx context.Context, from string, 
 	return sc.messageRouter.Route(ctx, from, msg)
 }
 
-// Helper to extract our transactions
-//func (sc *SequencerCoordinator) extractMyTransactions(xtReq *sbcp.XTRequest) [][]byte {
-//	myTxs := make([][]byte, 0)
-//
-//	for _, txReq := range xtReq.Transactions {
-//		if bytes.Equal(txReq.ChainId, sc.chainID) {
-//			myTxs = append(myTxs, txReq.Transaction...)
-//		}
-//	}
-//
-//	return myTxs
-//}
-
-// sealAndSubmitBlock seals the current block and submits to SP
-//
-
-// Interface implementations
-
 // Consensus returns the underlying consensus coordinator
-func (sc *SequencerCoordinator) Consensus() xconsensus.Coordinator {
+func (sc *SequencerCoordinator) ConsensusCoord() xconsensus.Coordinator {
 	return sc.consensusCoord
+}
+
+func (sc *SequencerCoordinator) PeriodSequencer() periodproto.Sequencer {
+	return sc.periodSequencer
+}
+
+func (sc *SequencerCoordinator) InstanceSequencer() instanceproto.Sequencer {
+	return sc.instanceSequencer
 }
 
 // OnBlockBuildingStart is called when block building begins for a slot
@@ -212,31 +193,23 @@ func (sc *SequencerCoordinator) PrepareTransactionsForBlock(ctx context.Context,
 //
 // After processing the decision, if the coordinator has returned to Building-Free state and there
 // are queued cross-chain transactions waiting, the next one is automatically started.
-func (sc *SequencerCoordinator) handleConsensusDecision(ctx context.Context, xtID *pb.XtID, decision bool) error {
+func (sc *SequencerCoordinator) handleConsensusDecision(ctx context.Context, instanceID *compose.InstanceID, decision bool) error {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 
 	sc.log.Info().
-		Str("xt_id", xtID.Hex()).
+		Str("xt_id", instanceID.String()).
 		Bool("decision", decision).
 		Msg("Processing consensus decision at coordinator")
 
 	// HandleDecision is idempotent - if RequestSeal already processed this, it's a no-op
-	if err := sc.scpIntegration.HandleDecision(xtID, decision); err != nil {
+	if err := sc.scpIntegration.HandleDecision(instanceID, decision); err != nil {
 		// If context not found, it means RequestSeal already handled this decision
 		sc.log.Debug().
 			Err(err).
-			Str("xt_id", xtID.Hex()).
+			Str("xt_id", instanceID.String()).
 			Msg("SCP context already processed (likely by RequestSeal)")
 		return nil
-	}
-
-	// For aborted transactions, immediately invoke cleanup callback to remove from pending pool.
-	// This ensures the transaction cannot be committed in blocks built before RequestSeal arrives.
-	if !decision && sc.callbacks.CleanupAbortedTransaction != nil {
-		if err := sc.callbacks.CleanupAbortedTransaction(ctx, xtID); err != nil {
-			sc.log.Warn().Err(err).Str("xt_id", xtID.Hex()).Msg("Cleanup callback failed for aborted transaction")
-		}
 	}
 
 	return nil
@@ -249,13 +222,4 @@ func (sc *SequencerCoordinator) SetCallbacks(callbacks CoordinatorCallbacks) {
 
 	sc.callbacks = callbacks
 	sc.log.Debug().Msg("Coordinator callbacks set")
-}
-
-// SetMinerNotifier sets the miner notifier
-func (sc *SequencerCoordinator) SetMinerNotifier(notifier MinerNotifier) {
-	sc.mu.Lock()
-	defer sc.mu.Unlock()
-
-	sc.minerNotifier = notifier
-	sc.log.Debug().Msg("Miner notifier set")
 }

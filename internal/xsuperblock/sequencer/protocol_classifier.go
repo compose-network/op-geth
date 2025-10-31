@@ -3,17 +3,16 @@ package sequencer
 import (
 	sbcpproto "github.com/compose-network/specs/compose/proto"
 	"github.com/ethereum/go-ethereum/internal/xconsensus"
-	pb "github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
-	"github.com/ethereum/go-ethereum/internal/xsuperblock/protocol"
+	"github.com/ethereum/go-ethereum/internal/xsuperblock/period"
 )
 
 // ProtocolType represents the high-level protocol classification
 type ProtocolType int
 
 const (
-	ProtocolUnknown ProtocolType = iota
-	ProtocolSBCP                 // Superblock Construction Protocol
-	ProtocolSCP                  // Synchronous Composability Protocol
+	ProtocolUnknown  ProtocolType = iota
+	PeriodProtocol                // Superblock Construction Protocol
+	InstanceProtocol              // Synchronous Composability Protocol
 )
 
 const unknownString = "Unknown"
@@ -23,10 +22,10 @@ func (p ProtocolType) String() string {
 	switch p {
 	case ProtocolUnknown:
 		return unknownString
-	case ProtocolSBCP:
-		return "SBCP"
-	case ProtocolSCP:
-		return "SCP"
+	case PeriodProtocol:
+		return "PERIOD"
+	case InstanceProtocol:
+		return "INSTANCE"
 	}
 	// Fallback for unrecognized values
 	return unknownString
@@ -34,7 +33,7 @@ func (p ProtocolType) String() string {
 
 // IsValid returns true if a protocol type is valid
 func (p ProtocolType) IsValid() bool {
-	return p > ProtocolUnknown && p <= ProtocolSCP
+	return p > ProtocolUnknown && p <= InstanceProtocol
 }
 
 // ClassifyProtocol determines which high-level protocol a message belongs to
@@ -44,41 +43,35 @@ func ClassifyProtocol(msg *sbcpproto.Message) ProtocolType {
 	}
 
 	// Check SBCP first (superblock construction messages)
-	if protocol.IsSBCPMessage(msg) {
-		return ProtocolSBCP
+	if period.IsPeriodProtoMessage(msg) {
+		return PeriodProtocol
 	}
 
 	// Check SCP (cross-chain consensus messages)
-	if xconsensus.IsSCPMessage(msg) {
-		return ProtocolSCP
+	if xconsensus.IsInstanceProtoMessage(msg) {
+		return InstanceProtocol
 	}
 
 	return ProtocolUnknown
 }
 
-// GetMessageTypeString returns a formatted string for logging
-func GetMessageTypeString(msg *sbcpproto.Message) string {
+func LogMessageTypeString(msg *sbcpproto.Message) string {
 	protocolType := ClassifyProtocol(msg)
 
 	switch protocolType {
 	case ProtocolUnknown:
 		return unknownString
-	case ProtocolSBCP:
-		msgType, ok := protocol.ClassifyMessage(msg)
+	case PeriodProtocol:
+		msgType, ok := period.ClassifyMessage(msg)
 		if !ok {
 			return unknownString
 		}
 
 		return msgType.String()
-	case ProtocolSCP:
+	case InstanceProtocol:
 		msgType := xconsensus.ClassifyMessage(msg)
 		return msgType.String()
 	}
 	// Fallback for unrecognized values
 	return unknownString
-}
-
-// IsProtocolMessage returns true if the message belongs to any known protocol
-func IsProtocolMessage(msg *pb.Message) bool {
-	return ClassifyProtocol(msg) != ProtocolUnknown
 }

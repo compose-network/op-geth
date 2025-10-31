@@ -49,7 +49,7 @@ type Config struct {
 // Runtime exposes the wired components and lifecycle.
 type Runtime struct {
 	// SBCP v2 sequencer
-	Sequencer sbcp.Sequencer
+	PeriodSequencer sbcp.Sequencer
 	// Coordinator is the sequencer coordinator.
 	Coordinator xsequencer.Coordinator
 	// SPClient is the client for the shared publisher.
@@ -70,27 +70,27 @@ func Setup(cfg Config) (*Runtime, error) {
 		log = zerolog.Nop()
 	}
 
-	sequencer := sbcp.NewSequencer(NewSimpleProver(), 0, 1, sbcp.SettledState{}, log)
+	periodSequencer := sbcp.NewSequencer(NewSimpleProver(), 0, 1, sbcp.SettledState{}, log)
 
-	seqCoord, spClient := setupSequencerCoordinator(cfg, log)
+	seqCoord, spClient := setupSequencerCoordinator(cfg, periodSequencer, log)
 
 	p2pSrv := setupP2PServer(seqCoord, cfg, log)
 
 	peers := setupP2PClients(cfg, log)
 
 	rt := &Runtime{
-		Sequencer:   sequencer,
-		Coordinator: seqCoord,
-		SPClient:    spClient,
-		P2PServer:   p2pSrv,
-		Peers:       peers,
-		log:         log,
-		cfg:         cfg,
+		PeriodSequencer: periodSequencer,
+		Coordinator:     seqCoord,
+		SPClient:        spClient,
+		P2PServer:       p2pSrv,
+		Peers:           peers,
+		log:             log,
+		cfg:             cfg,
 	}
 	return rt, nil
 }
 
-func setupSequencerCoordinator(cfg Config, log zerolog.Logger) (*xsequencer.SequencerCoordinator, xtransport.Client) {
+func setupSequencerCoordinator(cfg Config, periodSequencer sbcp.Sequencer, log zerolog.Logger) (*xsequencer.SequencerCoordinator, xtransport.Client) {
 	// SP client
 	spCfg := tcp.DefaultClientConfig()
 	if cfg.SPClientConfig != nil {
@@ -102,7 +102,7 @@ func setupSequencerCoordinator(cfg Config, log zerolog.Logger) (*xsequencer.Sequ
 
 	spClient := tcp.NewClient(spCfg, log)
 
-	// Sequencer coordinator (SBCP)
+	// PeriodSequencer coordinator (SBCP)
 	seqCfg := xsequencer.Config{
 		ChainID:              cfg.ChainID,
 		BlockTimeout:         30 * time.Second,
@@ -115,7 +115,7 @@ func setupSequencerCoordinator(cfg Config, log zerolog.Logger) (*xsequencer.Sequ
 	c := xconsensus.DefaultConfig(nodeID)
 	c.Timeout = time.Minute
 	consensusCoord := xconsensus.NewConsensusCoord(log, c)
-	coord := xsequencer.NewSequencerCoordinator(consensusCoord, seqCfg, spClient, log)
+	coord := xsequencer.NewSequencerCoordinator(consensusCoord, periodSequencer, seqCfg, spClient, log)
 
 	// SP message handler routes to coordinator
 	spClient.SetHandler(func(c context.Context, msg *sbcpproto.Message) ([]common.Hash, error) {
@@ -243,7 +243,7 @@ func (r *Runtime) Stop(ctx context.Context) error {
 		}
 	}
 
-	r.log.Info().Msg("Sequencer runtime stopped")
+	r.log.Info().Msg("PeriodSequencer runtime stopped")
 	return nil
 }
 

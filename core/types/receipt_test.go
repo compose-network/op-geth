@@ -1100,7 +1100,7 @@ func TestBedrockDepositReceiptUnchanged(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, expectedRlp, rlp)
 
-	// Consensus values should be unchanged after reparsing
+	// ConsensusCoord values should be unchanged after reparsing
 	parsed := new(Receipt)
 	err = parsed.UnmarshalBinary(rlp)
 	require.NoError(t, err)

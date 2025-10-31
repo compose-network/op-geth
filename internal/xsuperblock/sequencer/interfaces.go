@@ -10,7 +10,6 @@ import (
 // MinerNotifier defines the interface for notifying miner about sequencer events
 type MinerNotifier interface {
 	NotifySlotStart(startSlot *pb.StartSlot) error
-	NotifyRequestSeal(ctx context.Context, requestSeal *pb.RequestSeal) error
 }
 
 // CoordinatorCallbacks defines callback functions for cross-component communication
@@ -43,7 +42,6 @@ type TransactionManager interface {
 // CallbackManager handles callback registration and miner notifications
 type CallbackManager interface {
 	SetCallbacks(callbacks CoordinatorCallbacks)
-	SetMinerNotifier(notifier MinerNotifier)
 }
 
 // Coordinator defines the sequencer coordinator interface
@@ -56,7 +54,7 @@ type Coordinator interface {
 	HandleMessage(ctx context.Context, from string, msg *sbcpproto.Message) error
 
 	// Consensus access
-	Consensus() xconsensus.Coordinator
+	ConsensusCoord() xconsensus.Coordinator
 
 	// SDK access
 	BlockLifecycleManager
@@ -67,15 +65,4 @@ type Coordinator interface {
 // MessageRouterInterface for routing messages
 type MessageRouterInterface interface {
 	Route(ctx context.Context, from string, msg *sbcpproto.Message) error
-}
-
-// SCPIntegrationInterface for SCP coordination
-type SCPIntegrationInterface interface {
-	HandleStartSC(ctx context.Context, startSC *pb.StartSC) error
-	HandleDecision(xtID *pb.XtID, decision bool) error
-	GetActiveContexts() map[string]*SCPContext
-	ResetForSlot(slot uint64)
-	GetIncludedXTsHex() []string
-	GetLastDecidedSequenceNumber() (uint64, bool)
-	GetActiveCount() int
 }

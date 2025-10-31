@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	pb "github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
+	sbcpproto "github.com/compose-network/specs/compose/proto"
 	"github.com/ethereum/go-ethereum/internal/xtransport"
 	"io"
 	"net"
@@ -129,13 +129,13 @@ func (ct *ConnectionTask) Execute(ctx context.Context) {
 
 			// Handle ping/pong messages at transport level
 			switch payload := msg.Payload.(type) {
-			case *pb.Message_Ping:
+			case *sbcpproto.Message_Ping:
 				// Received ping, send pong
 				log.Debug().Msg("Received ping from client, sending pong")
-				pongMsg := &pb.Message{
+				pongMsg := &sbcpproto.Message{
 					SenderId: "server",
-					Payload: &pb.Message_Pong{
-						Pong: &pb.Pong{
+					Payload: &sbcpproto.Message_Pong{
+						Pong: &sbcpproto.Pong{
 							Timestamp: payload.Ping.Timestamp,
 						},
 					},
@@ -144,7 +144,7 @@ func (ct *ConnectionTask) Execute(ctx context.Context) {
 					log.Debug().Err(err).Msg("Failed to send pong")
 				}
 				continue
-			case *pb.Message_Pong:
+			case *sbcpproto.Message_Pong:
 				// Received pong, connection is alive
 				log.Debug().Msg("Received pong from client")
 				continue
