@@ -10,9 +10,7 @@ on:
 
 jobs:
   run-testnet:
-    runs-on:
-      group: public-isolated
-
+    runs-on: public-isolated
     steps:
       - name: Checkout op-geth repository
         uses: actions/checkout@v4
