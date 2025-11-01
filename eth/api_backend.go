@@ -710,13 +710,9 @@ func (b *EthAPIBackend) handleSequencerMessage(
 
 // StartCallbackFn returns a function that can be used to send transaction bundles to the shared publisher.
 // SSV
-func (b *EthAPIBackend) StartCallbackFn(chainID *big.Int) spconsensus.StartFn {
-	_ = chainID
-
+func (b *EthAPIBackend) StartCallbackFn() spconsensus.StartFn {
 	return func(ctx context.Context, from string, instance *composeproto.StartInstance) error {
-		b.coordinator.InstanceSequencer().StartInstance(instance)
-
-		return nil
+		return b.coordinator.InstanceSequencer().StartInstance(instance)
 	}
 }
 
@@ -1527,8 +1523,8 @@ func (b *EthAPIBackend) SetSequencerCoordinator(coord xsequencer.Coordinator, sp
 		// Wire consensus callbacks for SCP → coordinator integration
 		if b.coordinator.ConsensusCoord() != nil {
 			chainID := b.ChainConfig().ChainID
-			b.coordinator.ConsensusCoord().SetStartCallback(b.StartCallbackFn(chainID))
-			b.coordinator.ConsensusCoord().SetSimulateCallback(b.SimulateTransaction(chainID))
+			b.coordinator.ConsensusCoord().SetStartCallback(b.StartCallbackFn())
+			//b.coordinator.ConsensusCoord().SetSimulateCallback(b.SimulateTransaction(chainID))
 			b.coordinator.ConsensusCoord().SetVoteCallback(b.VoteCallbackFn(chainID))
 		}
 
@@ -1722,23 +1718,24 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 			"dependencies", len(simState.Dependencies),
 			"outbound", len(simState.OutboundMessages))
 
-		sentMsgs, fulfilledDeps, err := mailboxProcessor.handleCrossRollupCoordination(ctx, simState, xtID)
-		if err != nil {
-			return false, fmt.Errorf("failed to handle cross-rollup coordination: %w", err)
-		}
+		log.Info("[SSV] Skip legacy: mailboxProcessor.handleCrossRollupCoordination")
+		//sentMsgs, fulfilledDeps, err := mailboxProcessor.handleCrossRollupCoordination(ctx, simState, xtID)
+		//if err != nil {
+		//	return false, fmt.Errorf("failed to handle cross-rollup coordination: %w", err)
+		//}
 
-		log.Info(
-			"[SSV] Cross-rollup coordination completed",
-			"xtID",
-			xtID.Hex(),
-			"sent",
-			len(sentMsgs),
-			"received",
-			len(fulfilledDeps),
-		)
-
-		allSentMsgs = append(allSentMsgs, sentMsgs...)
-		allFulfilledDeps = append(allFulfilledDeps, fulfilledDeps...)
+		//log.Info(
+		//	"[SSV] Cross-rollup coordination completed",
+		//	"xtID",
+		//	xtID.Hex(),
+		//	"sent",
+		//	len(sentMsgs),
+		//	"received",
+		//	len(fulfilledDeps),
+		//)
+		//
+		//allSentMsgs = append(allSentMsgs, sentMsgs...)
+		//allFulfilledDeps = append(allFulfilledDeps, fulfilledDeps...)
 	}
 
 	// Create putInbox transactions for fulfilled dependencies
@@ -1822,10 +1819,11 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 					"sessionId", outMsg.SessionID,
 					"label", string(outMsg.Label))
 
-				if err := mailboxProcessor.sendCIRCMessage(ctx, &outMsg, xtID); err != nil {
-					log.Error("[SSV] Failed to send ACK CIRC message", "error", err, "xtID", xtID.Hex())
-					continue
-				}
+				log.Info("[SSV] Skip Legacy call: mailboxProcessor.sendCIRCMessage")
+				//if err := mailboxProcessor.sendCIRCMessage(ctx, &outMsg, xtID); err != nil {
+				//	log.Error("[SSV] Failed to send ACK CIRC message", "error", err, "xtID", xtID.Hex())
+				//	continue
+				//}
 			}
 
 			if len(newSimState.OutboundMessages) > 0 {

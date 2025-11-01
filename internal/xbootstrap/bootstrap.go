@@ -7,6 +7,8 @@ import (
 	sbcpproto "github.com/compose-network/specs/compose/proto"
 	"github.com/ethereum/go-ethereum/internal/xconsensus"
 	"github.com/ethereum/go-ethereum/internal/xconsensus/instanceproto"
+	"github.com/ethereum/go-ethereum/internal/xnetwork"
+	"github.com/ethereum/go-ethereum/internal/xsimulation"
 	xsequencer "github.com/ethereum/go-ethereum/internal/xsuperblock/sequencer"
 	"github.com/ethereum/go-ethereum/internal/xtransport"
 	"github.com/ethereum/go-ethereum/internal/xtransport/tcp"
@@ -72,7 +74,9 @@ func Setup(cfg Config) (*Runtime, error) {
 	}
 
 	periodSequencer := sbcp.NewSequencer(NewSimpleProver(), 0, 1, sbcp.SettledState{}, log)
-	instanceSequencer := instanceproto.NewSequencer(,,log)
+	simulationEngine := xsimulation.NewSimulationEngine()
+	sequencerNetwork := xnetwork.NewSequencerNetwork()
+	instanceSequencer := instanceproto.NewSequencer(simulationEngine, sequencerNetwork, log)
 
 	seqCoord, spClient := setupSequencerCoordinator(cfg, periodSequencer, instanceSequencer, log)
 

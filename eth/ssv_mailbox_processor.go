@@ -6,8 +6,8 @@ import (
 	"crypto/ecdsa"
 	"encoding/json"
 	"fmt"
-	"github.com/compose-network/specs/compose"
-	sbcpproto "github.com/compose-network/specs/compose/proto"
+	//"github.com/compose-network/specs/compose"
+	//sbcpproto "github.com/compose-network/specs/compose/proto"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -17,15 +17,14 @@ import (
 	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/eth/tracers/native"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
-	spconsensus "github.com/ethereum/go-ethereum/internal/xconsensus"
-	"github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
+	//spconsensus "github.com/ethereum/go-ethereum/internal/xconsensus"
 	"github.com/ethereum/go-ethereum/internal/xsuperblock/sequencer"
 	transport "github.com/ethereum/go-ethereum/internal/xtransport"
 	"github.com/ethereum/go-ethereum/log"
 
 	"github.com/ethereum/go-ethereum/rpc"
 	"math/big"
-	"strconv"
+	//"strconv"
 	"strings"
 )
 
@@ -426,100 +425,100 @@ func (mp *MailboxProcessor) parseWriteCall(data []byte) (*MailboxCall, error) {
 	return call, nil
 }
 
-func (mp *MailboxProcessor) handleCrossRollupCoordination(
-	ctx context.Context,
-	simState *SimulationState,
-	xtID *rollupv1.XtID,
-) ([]CrossRollupMessage, []CrossRollupDependency, error) {
-	sentMsgs := make([]CrossRollupMessage, 0)
-	// Send outbound CIRC messages
-	for _, outMsg := range simState.OutboundMessages {
-		if err := mp.sendCIRCMessage(ctx, &outMsg, xtID); err != nil {
-			return nil, nil, fmt.Errorf("failed to send CIRC message: %w", err)
-		}
+//func (mp *MailboxProcessor) handleCrossRollupCoordination(
+//	ctx context.Context,
+//	simState *SimulationState,
+//	xtID *rollupv1.XtID,
+//) ([]CrossRollupMessage, []CrossRollupDependency, error) {
+//	sentMsgs := make([]CrossRollupMessage, 0)
+//	// Send outbound CIRC messages
+//	for _, outMsg := range simState.OutboundMessages {
+//		if err := mp.sendCIRCMessage(ctx, &outMsg, xtID); err != nil {
+//			return nil, nil, fmt.Errorf("failed to send CIRC message: %w", err)
+//		}
+//
+//		sentMsgs = append(sentMsgs, outMsg)
+//	}
+//
+//	circDeps := make([]CrossRollupDependency, 0)
+//
+//	for _, dep := range simState.Dependencies {
+//		sourceBytes := new(big.Int).SetUint64(dep.SourceChainID).Bytes()
+//		sourceKey := spconsensus.ChainKeyBytes(sourceBytes)
+//		circMsg, err := mp.waitForCIRCMessage(ctx, xtID, sourceKey)
+//		if err != nil {
+//			return nil, nil, fmt.Errorf("failed to wait for CIRC message: %w", err)
+//		}
+//
+//		// Populate dependency with authoritative fields from the CIRC message.
+//		// The Mailbox key uses (chainSrc, chainId, sender, receiver, sessionId, label),
+//		// where 'sender' in the outbox is msg.sender of the contract that performed write(...).
+//		// Ensure we mirror exactly what the source chain wrote so putInbox matches read(...).
+//		if len(circMsg.Source) > 0 {
+//			dep.Sender = common.BytesToAddress(circMsg.Source[0])
+//		}
+//		if len(circMsg.Receiver) > 0 {
+//			dep.Receiver = common.BytesToAddress(circMsg.Receiver[0])
+//		}
+//		dep.Data = circMsg.Data[0]
+//		circDeps = append(circDeps, dep)
+//	}
+//
+//	log.Info(
+//		"[SSV] Cross-rollup coordination completed",
+//		"xtID",
+//		xtID.Hex(),
+//		"sent",
+//		len(sentMsgs),
+//		"received",
+//		len(circDeps),
+//	)
+//	return sentMsgs, circDeps, nil
+//}
 
-		sentMsgs = append(sentMsgs, outMsg)
-	}
-
-	circDeps := make([]CrossRollupDependency, 0)
-
-	for _, dep := range simState.Dependencies {
-		sourceBytes := new(big.Int).SetUint64(dep.SourceChainID).Bytes()
-		sourceKey := spconsensus.ChainKeyBytes(sourceBytes)
-		circMsg, err := mp.waitForCIRCMessage(ctx, xtID, sourceKey)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to wait for CIRC message: %w", err)
-		}
-
-		// Populate dependency with authoritative fields from the CIRC message.
-		// The Mailbox key uses (chainSrc, chainId, sender, receiver, sessionId, label),
-		// where 'sender' in the outbox is msg.sender of the contract that performed write(...).
-		// Ensure we mirror exactly what the source chain wrote so putInbox matches read(...).
-		if len(circMsg.Source) > 0 {
-			dep.Sender = common.BytesToAddress(circMsg.Source[0])
-		}
-		if len(circMsg.Receiver) > 0 {
-			dep.Receiver = common.BytesToAddress(circMsg.Receiver[0])
-		}
-		dep.Data = circMsg.Data[0]
-		circDeps = append(circDeps, dep)
-	}
-
-	log.Info(
-		"[SSV] Cross-rollup coordination completed",
-		"xtID",
-		xtID.Hex(),
-		"sent",
-		len(sentMsgs),
-		"received",
-		len(circDeps),
-	)
-	return sentMsgs, circDeps, nil
-}
-
-func (mp *MailboxProcessor) sendCIRCMessage(ctx context.Context, msg *CrossRollupMessage, instanceID *compose.InstanceID) error {
-	// Build CIRC payload
-	circMsg := &sbcpproto.MailboxMessage{
-		SourceChain:      new(big.Int).SetUint64(msg.SourceChainID).Bytes(),
-		DestinationChain: new(big.Int).SetUint64(msg.DestChainID).Bytes(),
-		Source:           msg.Sender.Bytes(),
-		Receiver:         msg.Receiver.Bytes(),
-		InstanceId:       instanceID[:],
-		Label:            string(msg.Label),
-		Data:             [][]byte{msg.Data},
-	}
-
-	spMsg := &sbcpproto.Message{
-		SenderId: strconv.FormatUint(mp.chainID, 10),
-		Payload: &sbcpproto.Message_MailboxMessage{
-			MailboxMessage: circMsg,
-		},
-	}
-
-	backend, ok := mp.backend.(*EthAPIBackend)
-	if !ok {
-		return fmt.Errorf("backend not available")
-	}
-
-	destChainID := spconsensus.ChainKeyUint64(msg.DestChainID)
-	sequencerClient := backend.sequencerClients[destChainID]
-	if sequencerClient == nil {
-		// Collect available peer keys for diagnostics
-		keys := make([]string, 0, len(backend.sequencerClients))
-		for k := range backend.sequencerClients {
-			keys = append(keys, k)
-		}
-		log.Error("[SSV] Missing sequencer client for destination chain",
-			"want", destChainID,
-			"available", keys,
-		)
-		return fmt.Errorf("no client for destination chain %s", destChainID)
-	}
-	if err := sequencerClient.Send(ctx, spMsg); err != nil {
-		return err
-	}
-	return nil
-}
+//func (mp *MailboxProcessor) sendCIRCMessage(ctx context.Context, msg *CrossRollupMessage, instanceID *compose.InstanceID) error {
+//	// Build CIRC payload
+//	circMsg := &sbcpproto.MailboxMessage{
+//		SourceChain:      new(big.Int).SetUint64(msg.SourceChainID).Bytes(),
+//		DestinationChain: new(big.Int).SetUint64(msg.DestChainID).Bytes(),
+//		Source:           msg.Sender.Bytes(),
+//		Receiver:         msg.Receiver.Bytes(),
+//		InstanceId:       instanceID[:],
+//		Label:            string(msg.Label),
+//		Data:             [][]byte{msg.Data},
+//	}
+//
+//	spMsg := &sbcpproto.Message{
+//		SenderId: strconv.FormatUint(mp.chainID, 10),
+//		Payload: &sbcpproto.Message_MailboxMessage{
+//			MailboxMessage: circMsg,
+//		},
+//	}
+//
+//	backend, ok := mp.backend.(*EthAPIBackend)
+//	if !ok {
+//		return fmt.Errorf("backend not available")
+//	}
+//
+//	destChainID := spconsensus.ChainKeyUint64(msg.DestChainID)
+//	sequencerClient := backend.sequencerClients[destChainID]
+//	if sequencerClient == nil {
+//		// Collect available peer keys for diagnostics
+//		keys := make([]string, 0, len(backend.sequencerClients))
+//		for k := range backend.sequencerClients {
+//			keys = append(keys, k)
+//		}
+//		log.Error("[SSV] Missing sequencer client for destination chain",
+//			"want", destChainID,
+//			"available", keys,
+//		)
+//		return fmt.Errorf("no client for destination chain %s", destChainID)
+//	}
+//	if err := sequencerClient.Send(ctx, spMsg); err != nil {
+//		return err
+//	}
+//	return nil
+//}
 
 //func (mp *MailboxProcessor) waitForCIRCMessage(
 //	ctx context.Context,
@@ -721,57 +720,4 @@ func (mp *MailboxProcessor) isMailboxAddress(addr common.Address) bool {
 		}
 	}
 	return false
-}
-
-// reSimulateForACKMessages re-simulates the transaction after putInbox creation
-func (mp *MailboxProcessor) reSimulateForACKMessages(
-	ctx context.Context,
-	tx *types.Transaction,
-	xtID *rollupv1.XtID,
-	alreadySentMsgs []CrossRollupMessage,
-) ([]CrossRollupMessage, error) {
-	backend, ok := mp.backend.(*EthAPIBackend)
-	if !ok {
-		return nil, fmt.Errorf("backend not available for re-simulation")
-	}
-
-	log.Debug("[SSV] Re-simulating transaction for ACK detection", "txHash", tx.Hash().Hex(), "xtID", xtID.Hex())
-
-	// Re-simulate the transaction against pending state (which should include putInbox transactions)
-	blockNrOrHash := rpc.BlockNumberOrHashWithNumber(rpc.PendingBlockNumber)
-	traceResult, err := backend.SimulateTransaction(ctx, tx, blockNrOrHash)
-	if err != nil {
-		return nil, fmt.Errorf("failed to re-simulate transaction: %w", err)
-	}
-
-	// Analyze the re-simulation result for new outbound messages
-	emptyDeps := make([]CrossRollupDependency, 0) // No dependencies needed for re-simulation
-	simState, err := mp.analyzeTransaction(traceResult, alreadySentMsgs, emptyDeps, tx.Hash().Hex())
-	if err != nil {
-		return nil, fmt.Errorf("failed to analyze re-simulation: %w", err)
-	}
-
-	newOutboundMsgs := make([]CrossRollupMessage, 0)
-
-	// Send any new outbound messages detected in re-simulation
-	for _, outMsg := range simState.OutboundMessages {
-		log.Info("[SSV] Detected new ACK message in re-simulation",
-			"xtID", xtID.Hex(),
-			"srcChain", outMsg.SourceChainID,
-			"destChain", outMsg.DestChainID,
-			"sessionId", outMsg.SessionID,
-			"label", string(outMsg.Label))
-
-		if err := mp.sendCIRCMessage(ctx, &outMsg, xtID); err != nil {
-			log.Error("[SSV] Failed to send ACK CIRC message", "error", err, "xtID", xtID.Hex())
-			return nil, fmt.Errorf("failed to send ACK CIRC message: %w", err)
-		}
-
-		newOutboundMsgs = append(newOutboundMsgs, outMsg)
-	}
-
-	if len(newOutboundMsgs) > 0 {
-		log.Info("[SSV] Successfully sent ACK CIRC messages", "xtID", xtID.Hex(), "count", len(newOutboundMsgs))
-	}
-	return newOutboundMsgs, nil
 }

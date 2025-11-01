@@ -21,7 +21,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
+	composeproto "github.com/compose-network/specs/compose/proto"
 	gomath "math"
 	"math/big"
 	"strings"
@@ -1766,13 +1766,13 @@ func (api *TransactionAPI) SendTransaction(ctx context.Context, args Transaction
 // SendXTransaction processes a transaction request encapsulated in a hex-encoded protocol message.
 // SSV
 func (api *TransactionAPI) SendXTransaction(ctx context.Context, input hexutil.Bytes) ([]common.Hash, error) {
-	var msg rollupv1.Message
+	var msg composeproto.Message
 	if err := proto.Unmarshal(input, &msg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal xtReq input: %v", err)
 	}
 
 	switch payload := msg.Payload.(type) {
-	case *rollupv1.Message_XtRequest:
+	case *composeproto.Message_XtRequest:
 		ctx = context.WithValue(ctx, "forward", true)
 		return api.b.HandleSPMessage(ctx, &msg)
 	default:

@@ -12,8 +12,8 @@ import (
 
 type Sequencer interface {
 	StartInstance(instance *composeproto.StartInstance) error
-	ProcessMailboxMessage(mailboxMessage *instanceproto.MailboxMessage) error
-	Decide(instance *compose.InstanceID, decision bool) error
+	ProcessMailboxMessage(instanceID compose.InstanceID, mailboxMessage *instanceproto.MailboxMessage) error
+	Decide(instance compose.InstanceID, decision bool) error
 }
 
 type InstanceSequencer struct {
@@ -56,25 +56,25 @@ func (s *InstanceSequencer) StartInstance(startInstance *composeproto.StartInsta
 	return seqInstance.Run()
 }
 
-func (s *InstanceSequencer) ProcessMailboxMessage(message *composeproto.MailboxMessage) error {
+func (s *InstanceSequencer) ProcessMailboxMessage(instanceID compose.InstanceID, message *instanceproto.MailboxMessage) error {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	seqInstance, ok := s.instanceMap[convertInstanceIDToArray(message.InstanceId)]
+	seqInstance, ok := s.instanceMap[instanceID]
 	if !ok {
-		return fmt.Errorf("could not find sequencer instance by %s", hex.EncodeToString(message.InstanceId))
+		return fmt.Errorf("could not find sequencer instance by %s", hex.EncodeToString(instanceID[:]))
 	}
 
-	return seqInstance.ProcessMailboxMessage(message)
+	return seqInstance.ProcessMailboxMessage(*message)
 }
 
-func (s *InstanceSequencer) Decide(instance *compose.InstanceID, decision bool) error {
+func (s *InstanceSequencer) Decide(instance compose.InstanceID, decision bool) error {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	delete(s.instanceMap, *instance)
+	delete(s.instanceMap, instance)
 
-	return
+	return nil
 }
 
 func convertToSpecInstance(instance *composeproto.StartInstance) compose.Instance {
