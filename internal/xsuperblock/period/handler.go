@@ -56,5 +56,6 @@ func (h *periodHandler) validateMessage(msgType MessageType, msg *sbcpproto.Mess
 
 // handleMessage routes the message to the appropriate periodHandler
 func (h *periodHandler) handleMessage(ctx context.Context, from string, msgType MessageType, msg *sbcpproto.Message) error {
+	// TODO: finish against spec
 	return fmt.Errorf("no periodHandler for message type %s", msgType)
 }

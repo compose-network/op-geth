@@ -13,10 +13,11 @@ import (
 
 // CallbackManager manages coordinator callbacks with error handling and timeouts
 type CallbackManager struct {
-	startFn    StartFn
-	voteFn     VoteFn
-	decisionFn DecisionFn
-	blockFn    BlockFn
+	startFn      StartFn
+	voteFn       VoteFn
+	mailboxMsgFn MailboxMsgFn
+	decisionFn   DecisionFn
+	blockFn      BlockFn
 
 	timeout time.Duration
 	log     zerolog.Logger
@@ -38,6 +39,11 @@ func (cm *CallbackManager) SetStartCallback(fn StartFn) {
 // SetVoteCallback sets the vote callback
 func (cm *CallbackManager) SetVoteCallback(fn VoteFn) {
 	cm.voteFn = fn
+}
+
+// Set sets the vote callback
+func (cm *CallbackManager) SetMailboxMsgCallback(fn MailboxMsgFn) {
+	cm.mailboxMsgFn = fn
 }
 
 // SetBlockCallback sets the block callback

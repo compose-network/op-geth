@@ -47,13 +47,13 @@ func (mr *MessageRouter) Route(ctx context.Context, from string, msg *sbcpproto.
 	switch protocolType {
 	case PeriodProtocol:
 		if !mr.periodHandler.CanHandle(msg) {
-			return fmt.Errorf("SBCP handler cannot process message from %s", from)
+			return fmt.Errorf("Period proto handler cannot process message from %s", from)
 		}
 		err = mr.periodHandler.Handle(ctx, from, msg)
 
 	case InstanceProtocol:
 		if !mr.instanceHandler.CanHandle(msg) {
-			return fmt.Errorf("SCP handler cannot process message from %s", from)
+			return fmt.Errorf("Instance proto handler cannot process message from %s", from)
 		}
 		err = mr.instanceHandler.Handle(ctx, from, msg)
 

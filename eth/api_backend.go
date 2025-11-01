@@ -712,9 +712,20 @@ func (b *EthAPIBackend) handleSequencerMessage(
 // SSV
 func (b *EthAPIBackend) StartCallbackFn() spconsensus.StartFn {
 	return func(ctx context.Context, from string, instance *composeproto.StartInstance) error {
+		//b.coordinator.PeriodSequencer().OnStartInstance()
 		return b.coordinator.InstanceSequencer().StartInstance(instance)
 	}
 }
+
+// TODO :revert
+//func (b *EthAPIBackend) MailboxMsgCallbackFn() spconsensus.MailboxMsgFn {
+//	return func(ctx context.Context, from string, mailboxMsg *composeproto.MailboxMessage) error {
+//		TODO: add conversion
+//return b.coordinator.InstanceSequencer().ProcessMailboxMessage(mailboxMsg)
+//}
+//}
+
+// TODO: decided
 
 // VoteCallbackFn returns a function that can be used to send votes for cross-chain transactions.
 // SSV
@@ -1524,6 +1535,7 @@ func (b *EthAPIBackend) SetSequencerCoordinator(coord xsequencer.Coordinator, sp
 		if b.coordinator.ConsensusCoord() != nil {
 			chainID := b.ChainConfig().ChainID
 			b.coordinator.ConsensusCoord().SetStartCallback(b.StartCallbackFn())
+			//b.coordinator.ConsensusCoord().SetMailboxMsgCallback(b.(chainID))
 			//b.coordinator.ConsensusCoord().SetSimulateCallback(b.SimulateTransaction(chainID))
 			b.coordinator.ConsensusCoord().SetVoteCallback(b.VoteCallbackFn(chainID))
 		}

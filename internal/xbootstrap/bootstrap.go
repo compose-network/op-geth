@@ -51,8 +51,6 @@ type Config struct {
 
 // Runtime exposes the wired components and lifecycle.
 type Runtime struct {
-	// SBCP v2 sequencer
-	PeriodSequencer sbcp.Sequencer
 	// Coordinator is the sequencer coordinator.
 	Coordinator xsequencer.Coordinator
 	// SPClient is the client for the shared publisher.
@@ -85,13 +83,12 @@ func Setup(cfg Config) (*Runtime, error) {
 	peers := setupP2PClients(cfg, log)
 
 	rt := &Runtime{
-		PeriodSequencer: periodSequencer,
-		Coordinator:     seqCoord,
-		SPClient:        spClient,
-		P2PServer:       p2pSrv,
-		Peers:           peers,
-		log:             log,
-		cfg:             cfg,
+		Coordinator: seqCoord,
+		SPClient:    spClient,
+		P2PServer:   p2pSrv,
+		Peers:       peers,
+		log:         log,
+		cfg:         cfg,
 	}
 	return rt, nil
 }

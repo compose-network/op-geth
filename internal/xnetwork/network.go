@@ -5,12 +5,6 @@ import (
 	instanceproto "github.com/compose-network/specs/compose/scp"
 )
 
-//
-// type SequencerNetwork interface {
-// 	SendMailboxMessage(recipient compose.ChainID, msg MailboxMessage)
-// 	SendVote(vote bool)
-// }
-
 type sequencerNetwork struct {
 }
 

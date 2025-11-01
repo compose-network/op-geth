@@ -34,8 +34,8 @@ type coordinator struct {
 }
 
 func (c *coordinator) RecordDecision(xtID compose.InstanceID, decision bool) error {
-	//TODO implement me
-	panic("implement me")
+	//c.callbackMgr.InvokeVote()
+	return nil
 }
 
 func (c *coordinator) RecordMailboxMessage(circMessage *sbcpproto.MailboxMessage) error {
@@ -105,6 +105,10 @@ func (c *coordinator) SetStartCallback(fn StartFn) {
 // SetVoteCallback sets the vote callback
 func (c *coordinator) SetVoteCallback(fn VoteFn) {
 	c.callbackMgr.SetVoteCallback(fn)
+}
+
+func (c *coordinator) SetMailboxMsgCallback(fn MailboxMsgFn) {
+	c.callbackMgr.SetMailboxMsgCallback(fn)
 }
 
 func (c *coordinator) SetDecisionCallback(fn DecisionFn) {
