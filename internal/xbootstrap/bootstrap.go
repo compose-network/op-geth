@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/compose-network/specs/compose"
 	sbcpproto "github.com/compose-network/specs/compose/proto"
 	"github.com/ethereum/go-ethereum/internal/xconsensus"
 	"github.com/ethereum/go-ethereum/internal/xconsensus/instanceproto"
@@ -71,9 +72,14 @@ func Setup(cfg Config) (*Runtime, error) {
 		log = zerolog.Nop()
 	}
 
+	localChainID := compose.ChainID(0)
+	if len(cfg.ChainID) > 0 {
+		localChainID = compose.ChainID(new(big.Int).SetBytes(cfg.ChainID).Uint64())
+	}
+
 	periodSequencer := sbcp.NewSequencer(NewSimpleProver(), 0, 1, sbcp.SettledState{}, log)
 	simulationEngine := xsimulation.NewSimulationEngine()
-	sequencerNetwork := xnetwork.NewSequencerNetwork()
+	sequencerNetwork := xnetwork.NewSequencerNetwork(context.Background(), localChainID, log)
 	instanceSequencer := instanceproto.NewSequencer(simulationEngine, sequencerNetwork, log)
 
 	seqCoord, spClient := setupSequencerCoordinator(cfg, periodSequencer, instanceSequencer, log)
@@ -90,6 +96,30 @@ func Setup(cfg Config) (*Runtime, error) {
 		log:         log,
 		cfg:         cfg,
 	}
+
+	sequencerNetwork.SetVoteSender(func(ctx context.Context, instanceID compose.InstanceID, chainID compose.ChainID, vote bool) error {
+		if spClient == nil {
+			return fmt.Errorf("shared publisher client not configured")
+		}
+
+		msg := &sbcpproto.Message{
+			SenderId: strconv.FormatUint(uint64(chainID), 10),
+			Payload: &sbcpproto.Message_Vote{
+				Vote: &sbcpproto.Vote{
+					InstanceId: append([]byte(nil), instanceID[:]...),
+					ChainId:    uint64(chainID),
+					Vote:       vote,
+				},
+			},
+		}
+
+		return spClient.Send(ctx, msg)
+	})
+
+	sequencerNetwork.SetMailboxSender(func(ctx context.Context, mailboxMessage *sbcpproto.MailboxMessage) error {
+		return rt.SendMailboxMessage(ctx, mailboxMessage)
+	})
+
 	return rt, nil
 }
 

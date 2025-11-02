@@ -16,6 +16,10 @@ type Sequencer interface {
 	Decide(instance compose.InstanceID, decision bool) error
 }
 
+type sequencerNetworkFactory interface {
+	ForInstance(instance compose.Instance) instanceproto.SequencerNetwork
+}
+
 type InstanceSequencer struct {
 	instanceMap map[compose.InstanceID]instanceproto.SequencerInstance
 	lock        sync.RWMutex
@@ -31,6 +35,7 @@ func NewSequencer(executionEngine instanceproto.ExecutionEngine, seqNetwork inst
 		seqNetwork:  seqNetwork,
 		log:         log,
 	}
+
 	return &is
 }
 
@@ -39,11 +44,16 @@ func (s *InstanceSequencer) StartInstance(startInstance *composeproto.StartInsta
 	defer s.lock.Unlock()
 
 	instance := convertToSpecInstance(startInstance)
+	network := s.seqNetwork
+
+	if factory, ok := s.seqNetwork.(sequencerNetworkFactory); ok {
+		network = factory.ForInstance(instance)
+	}
 
 	seqInstance, err := instanceproto.NewSequencerInstance(
 		instance,
 		s.execEngine,
-		s.seqNetwork,
+		network,
 		compose.StateRoot{},
 		s.log,
 	)
