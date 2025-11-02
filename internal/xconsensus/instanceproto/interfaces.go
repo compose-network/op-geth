@@ -72,6 +72,15 @@ func (s *InstanceSequencer) Decide(instance compose.InstanceID, decision bool) e
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
+	seqInstance, ok := s.instanceMap[instance]
+	if !ok {
+		return fmt.Errorf("could not find sequencer instance by %s", hex.EncodeToString(instance[:]))
+	}
+
+	if err := seqInstance.ProcessDecidedMessage(decision); err != nil {
+		return fmt.Errorf("failed to process decided message: %w", err)
+	}
+
 	delete(s.instanceMap, instance)
 
 	return nil

@@ -34,13 +34,22 @@ type coordinator struct {
 }
 
 func (c *coordinator) RecordDecision(xtID compose.InstanceID, decision bool) error {
-	//c.callbackMgr.InvokeVote()
+	c.callbackMgr.InvokeDecision(&xtID, decision)
 	return nil
 }
 
 func (c *coordinator) RecordMailboxMessage(circMessage *sbcpproto.MailboxMessage) error {
-	//TODO implement me
-	panic("implement me")
+	if circMessage == nil {
+		return fmt.Errorf("nil mailbox message")
+	}
+
+	instanceID, err := BytesToInstanceID(circMessage.InstanceId)
+	if err != nil {
+		return fmt.Errorf("invalid instance id: %w", err)
+	}
+
+	c.callbackMgr.InvokeMailboxMessage(&instanceID, circMessage)
+	return nil
 }
 
 // NewConsensusCoord creates a new coordinator instanceproto

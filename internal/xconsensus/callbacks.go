@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"github.com/compose-network/specs/compose"
-	sbcpproto "github.com/compose-network/specs/compose/proto"
+	composeproto "github.com/compose-network/specs/compose/proto"
 	"time"
 
 	"github.com/ethereum/go-ethereum/core/types"
@@ -56,7 +56,7 @@ func (cm *CallbackManager) SetDecisionCallback(fn DecisionFn) {
 }
 
 // InvokeStart calls the start callback with timeout and error handling
-func (cm *CallbackManager) InvokeStart(ctx context.Context, from string, instance *sbcpproto.StartInstance) {
+func (cm *CallbackManager) InvokeStart(ctx context.Context, from string, instance *composeproto.StartInstance) {
 	if cm.startFn == nil {
 		return
 	}
@@ -85,6 +85,29 @@ func (cm *CallbackManager) InvokeVote(instanceID *compose.InstanceID, vote bool,
 
 	cm.invokeCallback("vote", instanceID, func(ctx context.Context) error {
 		return cm.voteFn(ctx, instanceID, vote)
+	})
+}
+
+// InvokeMailboxMessage routes mailbox messages to the registered callback
+func (cm *CallbackManager) InvokeMailboxMessage(instanceID *compose.InstanceID, mailboxMsg *composeproto.MailboxMessage) {
+	if cm.mailboxMsgFn == nil || instanceID == nil || mailboxMsg == nil {
+		return
+	}
+
+	msgCopy := *mailboxMsg
+	cm.invokeCallback("mailbox", instanceID, func(ctx context.Context) error {
+		return cm.mailboxMsgFn(ctx, instanceID, msgCopy)
+	})
+}
+
+// InvokeDecision routes decided events to the registered callback
+func (cm *CallbackManager) InvokeDecision(instanceID *compose.InstanceID, decision bool) {
+	if cm.decisionFn == nil || instanceID == nil {
+		return
+	}
+
+	cm.invokeCallback("decision", instanceID, func(ctx context.Context) error {
+		return cm.decisionFn(ctx, instanceID, decision)
 	})
 }
 

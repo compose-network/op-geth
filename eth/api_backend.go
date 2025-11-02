@@ -21,8 +21,10 @@ import (
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
+
 	"github.com/compose-network/specs/compose"
 	composeproto "github.com/compose-network/specs/compose/proto"
+	instanceproto "github.com/compose-network/specs/compose/scp"
 	spconsensus "github.com/ethereum/go-ethereum/internal/xconsensus"
 	"github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 	xsequencer "github.com/ethereum/go-ethereum/internal/xsuperblock/sequencer"
@@ -717,15 +719,36 @@ func (b *EthAPIBackend) StartCallbackFn() spconsensus.StartFn {
 	}
 }
 
-// TODO :revert
-//func (b *EthAPIBackend) MailboxMsgCallbackFn() spconsensus.MailboxMsgFn {
-//	return func(ctx context.Context, from string, mailboxMsg *composeproto.MailboxMessage) error {
-//		TODO: add conversion
-//return b.coordinator.InstanceSequencer().ProcessMailboxMessage(mailboxMsg)
-//}
-//}
+func (b *EthAPIBackend) MailboxMsgCallbackFn() spconsensus.MailboxMsgFn {
+	return func(ctx context.Context, instanceID *compose.InstanceID, mailboxMsg composeproto.MailboxMessage) error {
+		if instanceID == nil {
+			return fmt.Errorf("mailbox callback received nil instance ID")
+		}
+		if b.coordinator == nil || b.coordinator.InstanceSequencer() == nil {
+			return fmt.Errorf("instance sequencer not configured")
+		}
 
-// TODO: decided
+		specMsg, err := convertMailboxMessage(&mailboxMsg)
+		if err != nil {
+			return fmt.Errorf("failed to convert mailbox message: %w", err)
+		}
+
+		return b.coordinator.InstanceSequencer().ProcessMailboxMessage(*instanceID, &specMsg)
+	}
+}
+
+func (b *EthAPIBackend) DecisionCallbackFn() spconsensus.DecisionFn {
+	return func(ctx context.Context, instanceID *compose.InstanceID, decision bool) error {
+		if instanceID == nil {
+			return fmt.Errorf("decision callback received nil instance ID")
+		}
+		if b.coordinator == nil || b.coordinator.InstanceSequencer() == nil {
+			return fmt.Errorf("instance sequencer not configured")
+		}
+
+		return b.coordinator.InstanceSequencer().Decide(*instanceID, decision)
+	}
+}
 
 // VoteCallbackFn returns a function that can be used to send votes for cross-chain transactions.
 // SSV
@@ -745,6 +768,63 @@ func (b *EthAPIBackend) VoteCallbackFn(chainID *big.Int) spconsensus.VoteFn {
 		}
 		return b.spClient.Send(ctx, spMsg)
 	}
+}
+
+func convertMailboxMessage(msg *composeproto.MailboxMessage) (instanceproto.MailboxMessage, error) {
+	var specMsg instanceproto.MailboxMessage
+
+	source, err := bytesToEthAddress(msg.Source)
+	if err != nil {
+		return specMsg, fmt.Errorf("invalid mailbox sender: %w", err)
+	}
+
+	receiver, err := bytesToEthAddress(msg.Receiver)
+	if err != nil {
+		return specMsg, fmt.Errorf("invalid mailbox receiver: %w", err)
+	}
+
+	header := instanceproto.MailboxMessageHeader{
+		SourceChainID: compose.ChainID(msg.SourceChain),
+		DestChainID:   compose.ChainID(msg.DestinationChain),
+		Sender:        source,
+		Receiver:      receiver,
+		SessionID:     compose.SessionID(msg.SessionId),
+		Label:         msg.Label,
+	}
+
+	specMsg.MailboxMessageHeader = header
+	specMsg.Data = mergeMailboxDataChunks(msg.Data)
+
+	return specMsg, nil
+}
+
+func bytesToEthAddress(data []byte) (compose.EthAddress, error) {
+	var addr compose.EthAddress
+	if len(data) != len(addr) {
+		return addr, fmt.Errorf("expected %d-byte address, got %d bytes", len(addr), len(data))
+	}
+	copy(addr[:], data)
+	return addr, nil
+}
+
+func mergeMailboxDataChunks(chunks [][]byte) []byte {
+	if len(chunks) == 0 {
+		return nil
+	}
+	if len(chunks) == 1 {
+		return append([]byte(nil), chunks[0]...)
+	}
+
+	total := 0
+	for _, c := range chunks {
+		total += len(c)
+	}
+
+	merged := make([]byte, 0, total)
+	for _, c := range chunks {
+		merged = append(merged, c...)
+	}
+	return merged
 }
 
 func (b *EthAPIBackend) SimulateTransaction(
@@ -1535,8 +1615,8 @@ func (b *EthAPIBackend) SetSequencerCoordinator(coord xsequencer.Coordinator, sp
 		if b.coordinator.ConsensusCoord() != nil {
 			chainID := b.ChainConfig().ChainID
 			b.coordinator.ConsensusCoord().SetStartCallback(b.StartCallbackFn())
-			//b.coordinator.ConsensusCoord().SetMailboxMsgCallback(b.(chainID))
-			//b.coordinator.ConsensusCoord().SetSimulateCallback(b.SimulateTransaction(chainID))
+			b.coordinator.ConsensusCoord().SetMailboxMsgCallback(b.MailboxMsgCallbackFn())
+			b.coordinator.ConsensusCoord().SetDecisionCallback(b.DecisionCallbackFn())
 			b.coordinator.ConsensusCoord().SetVoteCallback(b.VoteCallbackFn(chainID))
 		}
 
