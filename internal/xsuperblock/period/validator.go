@@ -2,6 +2,9 @@ package period
 
 import (
 	"fmt"
+
+	"github.com/compose-network/specs/compose"
+	sbcpproto "github.com/compose-network/specs/compose/proto"
 	pb "github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 )
 
@@ -11,6 +14,28 @@ type basicValidator struct{}
 // NewBasicValidator creates a new basic SBCP message validator
 func NewBasicValidator() Validator {
 	return &basicValidator{}
+}
+
+// ValidateStartPeriod performs basic StartPeriod validation.
+func (v *basicValidator) ValidateStartPeriod(msg *sbcpproto.StartPeriod) error {
+	if msg == nil {
+		return fmt.Errorf("start period message is nil")
+	}
+
+	return nil
+}
+
+// ValidateRollback performs basic Rollback validation.
+func (v *basicValidator) ValidateRollback(msg *sbcpproto.Rollback) error {
+	if msg == nil {
+		return fmt.Errorf("rollback message is nil")
+	}
+
+	if len(msg.LastFinalizedSuperblockHash) != len(compose.SuperBlockHash{}) {
+		return fmt.Errorf("invalid superblock hash length: got %d, want %d", len(msg.LastFinalizedSuperblockHash), len(compose.SuperBlockHash{}))
+	}
+
+	return nil
 }
 
 // validateXTRequest validates cross-chain transaction requests

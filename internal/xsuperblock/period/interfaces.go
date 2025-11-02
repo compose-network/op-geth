@@ -17,9 +17,12 @@ type PeriodHandler interface {
 
 // MessageHandler defines handlers for specific SBCP message types
 type MessageHandler interface {
-	// TODO: handle specific messages like StartPeriod
+	OnStartPeriod(ctx context.Context, from string, msg *sbcpproto.StartPeriod) error
+	OnRollback(ctx context.Context, from string, msg *sbcpproto.Rollback) error
 }
 
 // Validator defines message validation interface
 type Validator interface {
+	ValidateStartPeriod(msg *sbcpproto.StartPeriod) error
+	ValidateRollback(msg *sbcpproto.Rollback) error
 }

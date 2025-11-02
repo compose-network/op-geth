@@ -42,6 +42,8 @@ type SequencerCoordinator struct {
 	instanceSequencer instanceproto.Sequencer
 }
 
+var _ period.MessageHandler = (*SequencerCoordinator)(nil)
+
 // NewSequencerCoordinator creates a new sequencer coordinator
 func NewSequencerCoordinator(consensusCoord xconsensus.Coordinator, periodSequencer periodproto.Sequencer, instanceSequencer instanceproto.Sequencer, config Config, transport xtransport.Client, log zerolog.Logger) *SequencerCoordinator {
 	coordinator := &SequencerCoordinator{
@@ -63,7 +65,7 @@ func NewSequencerCoordinator(consensusCoord xconsensus.Coordinator, periodSequen
 	)
 
 	// Initialize protocol handlers
-	periodHandler := period.NewPeriodHandler(period.NewBasicValidator(), log)
+	periodHandler := period.NewPeriodHandler(period.NewBasicValidator(), coordinator, log)
 	instanceHandler := xconsensus.NewInstanceHandler(consensusCoord, log)
 
 	// Initialize message router with protocol handlers
@@ -213,6 +215,70 @@ func (sc *SequencerCoordinator) handleConsensusDecision(ctx context.Context, ins
 			Msg("SCP context already processed (likely by RequestSeal)")
 		return nil
 	}
+
+	return nil
+}
+
+func (sc *SequencerCoordinator) OnStartPeriod(ctx context.Context, from string, msg *sbcpproto.StartPeriod) error {
+	if msg == nil {
+		return fmt.Errorf("start period message is nil")
+	}
+
+	if sc.periodSequencer == nil {
+		return fmt.Errorf("period sequencer not configured")
+	}
+
+	periodID := compose.PeriodID(msg.GetPeriodId())
+	targetSuperblock := compose.SuperblockNumber(msg.GetSuperblockNumber())
+
+	sc.log.Info().
+		Str("from", from).
+		Uint64("period_id", uint64(periodID)).
+		Uint64("target_superblock", uint64(targetSuperblock)).
+		Msg("Processing StartPeriod message")
+
+	if err := sc.periodSequencer.StartPeriod(periodID, targetSuperblock); err != nil {
+		return fmt.Errorf("period sequencer start period: %w", err)
+	}
+
+	return nil
+}
+
+func (sc *SequencerCoordinator) OnRollback(ctx context.Context, from string, msg *sbcpproto.Rollback) error {
+	if msg == nil {
+		return fmt.Errorf("rollback message is nil")
+	}
+
+	if sc.periodSequencer == nil {
+		return fmt.Errorf("period sequencer not configured")
+	}
+
+	if len(msg.LastFinalizedSuperblockHash) != len(compose.SuperBlockHash{}) {
+		return fmt.Errorf("invalid superblock hash length: %d", len(msg.LastFinalizedSuperblockHash))
+	}
+
+	var hash compose.SuperBlockHash
+	copy(hash[:], msg.LastFinalizedSuperblockHash)
+
+	superblockNumber := compose.SuperblockNumber(msg.GetLastFinalizedSuperblockNumber())
+	periodID := compose.PeriodID(msg.GetPeriodId())
+
+	sc.log.Info().
+		Str("from", from).
+		Uint64("superblock_number", uint64(superblockNumber)).
+		Uint64("period_id", uint64(periodID)).
+		Msg("Processing Rollback message")
+
+	header, err := sc.periodSequencer.Rollback(superblockNumber, hash, periodID)
+	if err != nil {
+		return fmt.Errorf("period sequencer rollback: %w", err)
+	}
+
+	// TODO wire op-geth to restart using the provided block header as head
+
+	sc.log.Info().
+		Uint64("head_block_number", uint64(header.Number)).
+		Msg("Rollback completed")
 
 	return nil
 }
