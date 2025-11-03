@@ -675,6 +675,49 @@ func TestSimulateSCPBundlePingSatisfiedByPutInbox(t *testing.T) {
 	assertStateUnchanged(t, state, initialRoot)
 }
 
+func TestSimulateSCPBundleDuplicatePingWriteError(t *testing.T) {
+	backend, stateFactory, _, header := setupSimulationTestBackend(t)
+	state := stateFactory()
+
+	caller := newTestAccount(t, state)
+	otherChain := uint64(891)
+	sessionID := uint64(14)
+	pongSender := common.HexToAddress("0x7700000000000000000000000000000000000077")
+	pingReceiver := common.HexToAddress("0x7800000000000000000000000000000000000078")
+	payload := []byte("ping-dup")
+
+	txA := caller.SignPingTx(t, backend, 0, otherChain, pongSender, pingReceiver, sessionID, payload)
+	txB := caller.SignPingTx(t, backend, 1, otherChain, pongSender, pingReceiver, sessionID, payload)
+
+	initialRoot := state.IntermediateRoot(false)
+	reply := instanceproto.MailboxMessage{
+		MailboxMessageHeader: instanceproto.MailboxMessageHeader{
+			SourceChainID: compose.ChainID(otherChain),
+			DestChainID:   compose.ChainID(backend.ChainConfig().ChainID.Uint64()),
+			Sender:        composeAddressFromCommon(pongSender),
+			Receiver:      composeAddressFromCommon(pingPongContractAddr),
+			SessionID:     compose.SessionID(sessionID),
+			Label:         "PONG",
+		},
+		Data: []byte("pong-response"),
+	}
+	request := instanceproto.SimulationRequest{
+		PutInboxMessages: []instanceproto.MailboxMessage{reply},
+		Transactions:     [][]byte{txA, txB},
+		Snapshot:         hashToComposeRoot(initialRoot),
+	}
+
+	missing, writes, err := runBundleSimulationWithError(t, backend, state, header, request)
+	if err == nil || !strings.Contains(err.Error(), "transaction 1 reverted") {
+		t.Fatalf("expected second ping to revert, got missing=%v writes=%v err=%v", missing, writes, err)
+	}
+	requireNoMissing(t, missing, "expected no missing header when pong provided")
+	if writes != nil {
+		t.Fatalf("expected no writes returned after revert, got %d", len(writes))
+	}
+	assertStateUnchanged(t, state, initialRoot)
+}
+
 func TestSimulateSCPBundlePongSatisfiedByPutInbox(t *testing.T) {
 	backend, stateFactory, _, header := setupSimulationTestBackend(t)
 	state := stateFactory()
