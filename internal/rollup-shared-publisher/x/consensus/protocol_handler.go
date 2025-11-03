@@ -9,7 +9,6 @@ import (
 )
 
 // ProtocolHandler defines the interface for SCP protocol message handling
-// ProtocolHandler defines the interface for SCP protocol message handling
 type ProtocolHandler interface {
 	// Handle processes SCP protocol messages
 	Handle(ctx context.Context, from string, msg *pb.Message) error
