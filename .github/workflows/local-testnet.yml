@@ -46,15 +46,21 @@ jobs:
 
       - name: Install make
         run: |
-          # Install make from source to user's local bin
-          mkdir -p $HOME/.local/bin
-          cd /tmp
-          curl -L http://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz -o make-4.4.1.tar.gz
-          tar -xzf make-4.4.1.tar.gz
-          cd make-4.4.1
-          ./configure --prefix=$HOME/.local
-          make && make install
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          # Use Go to install a simple make alternative (remake) or check if make exists
+          if ! command -v make &> /dev/null; then
+            echo "Installing make from GNU mirror using HTTPS..."
+            mkdir -p $HOME/.local/bin
+            cd /tmp
+            curl -L https://ftpmirror.gnu.org/make/make-4.4.1.tar.gz -o make-4.4.1.tar.gz
+            tar -xzf make-4.4.1.tar.gz
+            cd make-4.4.1
+            ./configure --prefix=$HOME/.local
+            ./build.sh && ./make install
+            echo "$HOME/.local/bin" >> $GITHUB_PATH
+          else
+            echo "make is already installed"
+            make --version
+          fi
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
