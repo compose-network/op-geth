@@ -36,10 +36,25 @@ jobs:
       - name: Install Just
         uses: extractions/setup-just@v2
 
-      - name: Install jq and make
+      - name: Install jq
         run: |
-          apt-get update
-          apt-get install -y jq make
+          # Install jq to user's local bin without needing root
+          mkdir -p $HOME/.local/bin
+          curl -L https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o $HOME/.local/bin/jq
+          chmod +x $HOME/.local/bin/jq
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install make
+        run: |
+          # Install make from source to user's local bin
+          mkdir -p $HOME/.local/bin
+          cd /tmp
+          wget http://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz
+          tar -xzf make-4.4.1.tar.gz
+          cd make-4.4.1
+          ./configure --prefix=$HOME/.local
+          make && make install
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
