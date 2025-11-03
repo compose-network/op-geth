@@ -11,16 +11,19 @@ import (
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/state"
 	runtime2 "github.com/ethereum/go-ethereum/core/vm/runtime"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/trie"
 )
 
 // LoadMailboxRuntimeForCoordinator executes the compiled Mailbox.sol bytecode with the
-// provided coordinator address and returns the deployed runtime along with the ABI.
+// provided coordinator address and returns the deployed runtime, initial storage, and ABI.
 // It relies on the Forge artifact located at ./Mailbox.json.
 // The helper is meant for tests and experimentation; callers can install the returned
-// runtime in a StateDB and interact with it using the ABI.
-func LoadMailboxRuntimeForCoordinator(t *testing.T, coordinator common.Address) ([]byte, abi.ABI) {
+// runtime and storage in a StateDB and interact with it using the ABI.
+func LoadMailboxRuntimeForCoordinator(t *testing.T, coordinator common.Address) ([]byte, map[common.Hash]common.Hash, abi.ABI) {
 	t.Helper()
 
 	abiInstance, creationBytecode := mailboxArtifact(t)
@@ -37,7 +40,7 @@ func LoadMailboxRuntimeForCoordinator(t *testing.T, coordinator common.Address) 
 		ChainConfig: runtimeChainConfig(),
 	}
 
-	code, _, _, err := runtime2.Create(input, cfg)
+	code, addr, _, err := runtime2.Create(input, cfg)
 	if err != nil {
 		t.Fatalf("execute mailbox constructor: %v", err)
 	}
@@ -45,7 +48,39 @@ func LoadMailboxRuntimeForCoordinator(t *testing.T, coordinator common.Address) 
 		t.Fatalf("mailbox runtime empty after constructor execution")
 	}
 
-	return code, abiInstance
+	if cfg.State == nil {
+		t.Fatalf("runtime state missing after mailbox constructor execution")
+	}
+	if _, err := cfg.State.Commit(0, true, false); err != nil {
+		t.Fatalf("commit mailbox state: %v", err)
+	}
+	initStorage := dumpContractStorage(t, cfg.State, addr)
+
+	return code, initStorage, abiInstance
+}
+
+func dumpContractStorage(t *testing.T, stateDB *state.StateDB, addr common.Address) map[common.Hash]common.Hash {
+	storageTrie, err := stateDB.OpenStorageTrie(addr)
+	if err != nil {
+		t.Fatalf("open mailbox storage trie: %v", err)
+	}
+	iter, err := storageTrie.NodeIterator(nil)
+	if err != nil {
+		t.Fatalf("iterate mailbox storage trie: %v", err)
+	}
+	storage := make(map[common.Hash]common.Hash)
+	for it := trie.NewIterator(iter); it.Next(); {
+		_, content, _, err := rlp.Split(it.Value)
+		if err != nil {
+			t.Fatalf("decode mailbox storage slot: %v", err)
+		}
+		key := storageTrie.GetKey(it.Key)
+		if key == nil {
+			continue
+		}
+		storage[common.BytesToHash(key)] = common.BytesToHash(content)
+	}
+	return storage
 }
 
 func mailboxArtifact(t *testing.T) (abi.ABI, []byte) {
@@ -87,13 +122,7 @@ func mailboxArtifact(t *testing.T) (abi.ABI, []byte) {
 }
 
 func runtimeChainConfig() *params.ChainConfig {
-	shanghai := new(uint64)
-	cancun := new(uint64)
-	*shanghai = 0
-	*cancun = 0
-	return &params.ChainConfig{
-		ChainID:      big.NewInt(99),
-		ShanghaiTime: shanghai,
-		CancunTime:   cancun,
-	}
+	cfg := *params.AllDevChainProtocolChanges
+	cfg.ChainID = big.NewInt(99)
+	return &cfg
 }

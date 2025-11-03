@@ -1775,6 +1775,9 @@ func (b *EthAPIBackend) simulateSCPBundle(request instanceproto.SimulationReques
 		}
 		if execResult != nil && execResult.Failed() {
 			stateDB.RevertToSnapshot(txSnapshot)
+			if err := execResult.Unwrap(); err != nil {
+				return nil, nil, fmt.Errorf("transaction %d reverted: %w", idx, err)
+			}
 			return nil, nil, fmt.Errorf("transaction %d reverted", idx)
 		}
 
@@ -1845,7 +1848,10 @@ func (b *EthAPIBackend) applyPutInboxMessage(blockCtx vm.BlockContext, baseVMCon
 		return fmt.Errorf("putInbox execution failed: %w", err)
 	}
 	if result != nil && result.Failed() {
-		return fmt.Errorf("putInbox execution reverted")
+		if reason := result.Revert(); len(reason) > 0 {
+			return fmt.Errorf("putInbox execution reverted: %x", reason)
+		}
+		return fmt.Errorf("putInbox execution reverted: %w", result.Err)
 	}
 
 	stateDB.Finalise(true)

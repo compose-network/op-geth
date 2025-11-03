@@ -837,9 +837,12 @@ func setupSimulationTestBackend(t *testing.T) (*testAPIBackend, func() *state.St
 		if err != nil {
 			t.Fatalf("failed to create state db: %v", err)
 		}
-		bytecode, abiInstance := LoadMailboxRuntimeForCoordinator(t, coordAddr)
+		bytecode, storage, abiInstance := LoadMailboxRuntimeForCoordinator(t, coordAddr)
 		mailboxABIParsed = abiInstance
 		stateDB.SetCode(mailboxAddr, bytecode)
+		for key, value := range storage {
+			stateDB.SetState(mailboxAddr, key, value)
+		}
 		gasBudget := uint256.NewInt(defaultPutInboxGas)
 		gasBudget.Mul(gasBudget, uint256.NewInt(20_000_000_000))
 		gasBudget.Mul(gasBudget, uint256.NewInt(10))
@@ -848,7 +851,7 @@ func setupSimulationTestBackend(t *testing.T) (*testAPIBackend, func() *state.St
 		return stateDB
 	}
 
-	chainCfg := *params.AllEthashProtocolChanges
+	chainCfg := *params.AllDevChainProtocolChanges
 	chainCfg.ChainID = big.NewInt(99)
 
 	header := &types.Header{
@@ -856,7 +859,10 @@ func setupSimulationTestBackend(t *testing.T) (*testAPIBackend, func() *state.St
 		GasLimit:   30_000_000,
 		Time:       1,
 		BaseFee:    big.NewInt(1_000_000_000),
-		Difficulty: big.NewInt(1),
+		Difficulty: big.NewInt(0),
+	}
+	if !chainCfg.IsShanghai(header.Number, header.Time) {
+		t.Fatalf("test chain config missing Shanghai activation")
 	}
 
 	engine := ethash.NewFaker()
@@ -935,9 +941,9 @@ func runBundleSimulationWithError(t *testing.T, backend *testAPIBackend, stateDB
 }
 
 const (
-	testAccountFundingWei = 5_000_000_000_000_000
+	testAccountFundingWei = 20_000_000_000_000_000
 	defaultReadGasLimit   = 150_000
-	defaultWriteGasLimit  = 200_000
+	defaultWriteGasLimit  = defaultPutInboxGas
 )
 
 type testAccount struct {
