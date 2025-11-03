@@ -27,6 +27,10 @@ import (
 	"github.com/holiman/uint256"
 )
 
+var (
+	mailboxABIParsed, _ = abi.JSON(strings.NewReader(mailboxABI))
+)
+
 // Tests analyzeMailboxTrace for missing reads and writes.
 func TestAnalyzeMailboxTraceReturnsMissingRead(t *testing.T) {
 	mailboxAddr := common.HexToAddress("0x1000000000000000000000000000000000000001")
@@ -201,7 +205,8 @@ func TestBuildPutInboxCalldata(t *testing.T) {
 	}
 
 	// Verify that calldata starts with putInbox selector
-	parsedABI, _ := abi.JSON(strings.NewReader(mailboxABI))
+	//parsedABI, _ := abi.JSON(strings.NewReader(mailboxABI))
+	parsedABI := mailboxABIParsed
 	prefix := common.Bytes2Hex(parsedABI.Methods["putInbox"].ID)
 	if !strings.HasPrefix(common.Bytes2Hex(data), prefix) {
 		t.Fatalf("calldata does not start with putInbox selector")
@@ -832,7 +837,9 @@ func setupSimulationTestBackend(t *testing.T) (*testAPIBackend, func() *state.St
 		if err != nil {
 			t.Fatalf("failed to create state db: %v", err)
 		}
-		stateDB.SetCode(mailboxAddr, []byte{0x60, 0x00, 0x60, 0x00, 0xf3})
+		bytecode, abiInstance := LoadMailboxRuntimeForCoordinator(t, coordAddr)
+		mailboxABIParsed = abiInstance
+		stateDB.SetCode(mailboxAddr, bytecode)
 		gasBudget := uint256.NewInt(defaultPutInboxGas)
 		gasBudget.Mul(gasBudget, uint256.NewInt(20_000_000_000))
 		gasBudget.Mul(gasBudget, uint256.NewInt(10))
@@ -1072,10 +1079,11 @@ func hashToComposeRoot(h common.Hash) compose.StateRoot {
 
 func encodeMailboxReadCall(t *testing.T, chainSrc uint64, sender common.Address, sessionID uint64, label string) []byte {
 	t.Helper()
-	parsedABI, err := abi.JSON(strings.NewReader(mailboxABI))
-	if err != nil {
-		t.Fatalf("parse mailbox ABI: %v", err)
-	}
+	//parsedABI, err := abi.JSON(strings.NewReader(mailboxABI))
+	//if err != nil {
+	//	t.Fatalf("parse mailbox ABI: %v", err)
+	//}
+	parsedABI := mailboxABIParsed
 	data, err := parsedABI.Pack(
 		"read",
 		new(big.Int).SetUint64(chainSrc),
@@ -1091,10 +1099,11 @@ func encodeMailboxReadCall(t *testing.T, chainSrc uint64, sender common.Address,
 
 func encodeMailboxWriteCall(t *testing.T, destChain uint64, receiver common.Address, sessionID uint64, label string, payload []byte) []byte {
 	t.Helper()
-	parsedABI, err := abi.JSON(strings.NewReader(mailboxABI))
-	if err != nil {
-		t.Fatalf("parse mailbox ABI: %v", err)
-	}
+	//parsedABI, err := abi.JSON(strings.NewReader(mailboxABI))
+	//if err != nil {
+	//	t.Fatalf("parse mailbox ABI: %v", err)
+	//}
+	parsedABI := mailboxABIParsed
 	data, err := parsedABI.Pack(
 		"write",
 		new(big.Int).SetUint64(destChain),
