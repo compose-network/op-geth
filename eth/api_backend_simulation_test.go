@@ -221,17 +221,12 @@ func TestAnalyzeMailboxTraceCollectsWrites(t *testing.T) {
 	if len(writes) != 1 {
 		t.Fatalf("expected a single outbound message, got %d", len(writes))
 	}
-	// Validate contents of the write
-	msg := writes[0]
-	if msg.SourceChainID != compose.ChainID(42) || msg.DestChainID != compose.ChainID(55) {
-		t.Fatalf("unexpected chains in outbound message: %+v", msg.MailboxMessageHeader)
-	}
-	if msg.Label != "hello" {
-		t.Fatalf("unexpected label: %s", msg.Label)
-	}
-	if string(msg.Data) != "payload" {
-		t.Fatalf("unexpected payload: %s", string(msg.Data))
-	}
+	requireWriteMessage(t, writes[0], writeExpectation{
+		source: 42,
+		dest:   55,
+		label:  "hello",
+		data:   []byte("payload"),
+	}, "unexpected outbound message")
 }
 
 // Test that buildPutInboxCalldata constructs valid calldata for putInbox.
@@ -408,15 +403,11 @@ func TestSimulateSCPBundle(t *testing.T) {
 	}
 
 	missing, writes := runBundleSimulation(t, backend, baseState, header, request)
-	if missing != nil {
-		t.Fatalf("expected no missing mailbox header")
-	}
+	requireNoMissing(t, missing, "expected no missing mailbox header")
 	if len(writes) != 0 {
 		t.Fatalf("expected no outbound mailbox messages, got %d", len(writes))
 	}
-	if after := baseState.IntermediateRoot(false); after != initialRoot {
-		t.Fatalf("base state mutated during simulation")
-	}
+	assertStateUnchanged(t, baseState, initialRoot)
 }
 
 func TestSimulateSCPBundleDetectsMissingRead(t *testing.T) {
@@ -424,20 +415,12 @@ func TestSimulateSCPBundleDetectsMissingRead(t *testing.T) {
 	baseState := stateFactory()
 
 	// Create reader account (or contract)
-	readerKey, err := crypto.GenerateKey()
-	if err != nil {
-		t.Fatalf("generate reader key: %v", err)
-	}
-	readerAddr := crypto.PubkeyToAddress(readerKey.PublicKey)
-	baseState.AddBalance(readerAddr, uint256.NewInt(5_000_000_000_000_000), tracing.BalanceChangeUnspecified)
-	baseState.SetNonce(readerAddr, 0, tracing.NonceChangeUnspecified)
+	reader := newTestAccount(t, baseState)
 
+	// Create read transaction
 	sessionID := uint64(77)
-	label := []byte("read-test")
-	readCallData := encodeMailboxReadCall(t, 12, readerAddr, sessionID, label)
-
-	// Build request
-	payload := mustEncodeSignedTx(t, backend.ChainConfig().ChainID, readerKey, 0, backend.mailboxAddresses[0], readCallData, 150_000)
+	label := "read-test"
+	payload := reader.SignReadTx(t, backend, 0, 12, reader.Address(), sessionID, label)
 	initialRoot := baseState.IntermediateRoot(false)
 	request := instanceproto.SimulationRequest{
 		Transactions: [][]byte{payload},
@@ -446,53 +429,30 @@ func TestSimulateSCPBundleDetectsMissingRead(t *testing.T) {
 
 	// Run simulation
 	missing, writes := runBundleSimulation(t, backend, baseState, header, request)
-	// Read missing is expected
-	if missing == nil {
-		t.Fatalf("expected missing mailbox header from read transaction")
-	}
-	// Validate message fields
-	if missing.SourceChainID != compose.ChainID(12) {
-		t.Fatalf("unexpected source chain: %d", missing.SourceChainID)
-	}
-	if missing.DestChainID != compose.ChainID(backend.ChainConfig().ChainID.Uint64()) {
-		t.Fatalf("unexpected destination chain: %d", missing.DestChainID)
-	}
-	if missing.SessionID != compose.SessionID(sessionID) {
-		t.Fatalf("unexpected session id: %d", missing.SessionID)
-	}
-	if missing.Label != string(label) {
-		t.Fatalf("unexpected label: %s", missing.Label)
-	}
-	if commonAddressFromCompose(missing.Receiver) != readerAddr {
-		t.Fatalf("unexpected receiver: %s", commonAddressFromCompose(missing.Receiver).Hex())
-	}
+	requireMissingHeader(t, missing, missingExpectation{
+		source:   12,
+		dest:     backend.ChainConfig().ChainID.Uint64(),
+		session:  sessionID,
+		label:    label,
+		receiver: reader.Address(),
+	}, "expected missing mailbox header from read transaction")
 	if len(writes) != 0 {
 		t.Fatalf("expected no outbound writes, got %d", len(writes))
 	}
-	if after := baseState.IntermediateRoot(false); after != initialRoot {
-		t.Fatalf("base state mutated during simulation")
-	}
+	assertStateUnchanged(t, baseState, initialRoot)
 }
 
 func TestSimulateSCPBundleCollectsWrites(t *testing.T) {
 	backend, stateFactory, _, header := setupSimulationTestBackend(t)
 	baseState := stateFactory()
 
-	writerKey, err := crypto.GenerateKey()
-	if err != nil {
-		t.Fatalf("generate writer key: %v", err)
-	}
-	writerAddr := crypto.PubkeyToAddress(writerKey.PublicKey)
-	baseState.AddBalance(writerAddr, uint256.NewInt(5_000_000_000_000_000), tracing.BalanceChangeUnspecified)
-	baseState.SetNonce(writerAddr, 0, tracing.NonceChangeUnspecified)
+	writer := newTestAccount(t, baseState)
 
 	destChain := uint64(101)
 	sessionID := uint64(55)
-	label := []byte("write-test")
+	label := "write-test"
 	payloadData := []byte("payload")
-	writeCallData := encodeMailboxWriteCall(t, destChain, common.HexToAddress("0x3000000000000000000000000000000000000033"), sessionID, label, payloadData)
-
-	payload := mustEncodeSignedTx(t, backend.ChainConfig().ChainID, writerKey, 0, backend.mailboxAddresses[0], writeCallData, 200_000)
+	payload := writer.SignWriteTx(t, backend, 0, destChain, common.HexToAddress("0x3000000000000000000000000000000000000033"), sessionID, label, payloadData)
 
 	// Build request with write as main tx
 	initialRoot := baseState.IntermediateRoot(false)
@@ -502,33 +462,21 @@ func TestSimulateSCPBundleCollectsWrites(t *testing.T) {
 	}
 
 	missing, writes := runBundleSimulation(t, backend, baseState, header, request)
-	if missing != nil {
-		t.Fatalf("did not expect missing mailbox header")
-	}
+	requireNoMissing(t, missing, "did not expect missing mailbox header")
 	if len(writes) != 1 {
 		t.Fatalf("expected a single outbound write, got %d", len(writes))
 	}
 
-	out := writes[0]
-	if out.SourceChainID != compose.ChainID(backend.ChainConfig().ChainID.Uint64()) {
-		t.Fatalf("unexpected source chain: %d", out.SourceChainID)
-	}
-	if out.DestChainID != compose.ChainID(destChain) {
-		t.Fatalf("unexpected destination chain: %d", out.DestChainID)
-	}
-	if out.SessionID != compose.SessionID(sessionID) {
-		t.Fatalf("unexpected session id: %d", out.SessionID)
-	}
-	if out.Label != string(label) {
-		t.Fatalf("unexpected label: %s", out.Label)
-	}
-	if !bytes.Equal(out.Data, payloadData) {
-		t.Fatalf("unexpected payload: %x", out.Data)
-	}
+	requireWriteMessage(t, writes[0], writeExpectation{
+		source:   backend.ChainConfig().ChainID.Uint64(),
+		dest:     destChain,
+		session:  sessionID,
+		label:    label,
+		data:     payloadData,
+		receiver: common.HexToAddress("0x3000000000000000000000000000000000000033"),
+	}, "unexpected write message")
 
-	if after := baseState.IntermediateRoot(false); after != initialRoot {
-		t.Fatalf("base state mutated during simulation")
-	}
+	assertStateUnchanged(t, baseState, initialRoot)
 }
 
 // Tests the simulation of a bundle with two reads (as main txs).
@@ -539,44 +487,14 @@ func TestSimulateSCPBundleMultipleReads(t *testing.T) {
 
 	chainID := backend.ChainConfig().ChainID.Uint64()
 
-	keyOne, err := crypto.GenerateKey()
-	if err != nil {
-		t.Fatalf("generate key one: %v", err)
-	}
-	addrOne := crypto.PubkeyToAddress(keyOne.PublicKey)
-	baseState.AddBalance(addrOne, uint256.NewInt(5_000_000_000_000_000), tracing.BalanceChangeUnspecified)
-	baseState.SetNonce(addrOne, 0, tracing.NonceChangeUnspecified)
+	accOne := newTestAccount(t, baseState)
+	accTwo := newTestAccount(t, baseState)
 
-	keyTwo, err := crypto.GenerateKey()
-	if err != nil {
-		t.Fatalf("generate key two: %v", err)
-	}
-	addrTwo := crypto.PubkeyToAddress(keyTwo.PublicKey)
-	baseState.AddBalance(addrTwo, uint256.NewInt(5_000_000_000_000_000), tracing.BalanceChangeUnspecified)
-	baseState.SetNonce(addrTwo, 0, tracing.NonceChangeUnspecified)
+	labelOne := "read-one"
+	labelTwo := "read-two"
 
-	labelOne := []byte("read-one")
-	labelTwo := []byte("read-two")
-
-	// Create two read transactions
-	readOne := mustEncodeSignedTx(
-		t,
-		backend.ChainConfig().ChainID,
-		keyOne,
-		0,
-		backend.mailboxAddresses[0],
-		encodeMailboxReadCall(t, 12, addrOne, 11, labelOne),
-		150_000,
-	)
-	readTwo := mustEncodeSignedTx(
-		t,
-		backend.ChainConfig().ChainID,
-		keyTwo,
-		0,
-		backend.mailboxAddresses[0],
-		encodeMailboxReadCall(t, 13, addrTwo, 22, labelTwo),
-		150_000,
-	)
+	readOne := accOne.SignReadTx(t, backend, 0, 12, accOne.Address(), 11, labelOne)
+	readTwo := accTwo.SignReadTx(t, backend, 0, 13, accTwo.Address(), 22, labelTwo)
 
 	initialRoot := baseState.IntermediateRoot(false)
 	request := instanceproto.SimulationRequest{
@@ -586,30 +504,17 @@ func TestSimulateSCPBundleMultipleReads(t *testing.T) {
 
 	// Ensure only the first read miss is reported
 	missing, writes := runBundleSimulation(t, backend, baseState, header, request)
-	if missing == nil {
-		t.Fatalf("expected missing mailbox header")
-	}
-	if missing.SourceChainID != compose.ChainID(12) {
-		t.Fatalf("unexpected source chain: %d", missing.SourceChainID)
-	}
-	if missing.DestChainID != compose.ChainID(chainID) {
-		t.Fatalf("unexpected destination chain: %d", missing.DestChainID)
-	}
-	if missing.SessionID != compose.SessionID(11) {
-		t.Fatalf("unexpected session id: %d", missing.SessionID)
-	}
-	if missing.Label != string(labelOne) {
-		t.Fatalf("unexpected label: %s", missing.Label)
-	}
-	if commonAddressFromCompose(missing.Receiver) != addrOne {
-		t.Fatalf("unexpected receiver: %s", commonAddressFromCompose(missing.Receiver).Hex())
-	}
+	requireMissingHeader(t, missing, missingExpectation{
+		source:   12,
+		dest:     chainID,
+		session:  11,
+		label:    labelOne,
+		receiver: accOne.Address(),
+	}, "expected missing mailbox header")
 	if len(writes) != 0 {
 		t.Fatalf("expected no writes, got %d", len(writes))
 	}
-	if after := baseState.IntermediateRoot(false); after != initialRoot {
-		t.Fatalf("base state mutated during simulation")
-	}
+	assertStateUnchanged(t, baseState, initialRoot)
 }
 
 // Tests the simulation of a bundle with two writes (as main txs).
@@ -618,55 +523,12 @@ func TestSimulateSCPBundleMultipleWrites(t *testing.T) {
 	backend, stateFactory, _, header := setupSimulationTestBackend(t)
 	baseState := stateFactory()
 
-	keyOne, err := crypto.GenerateKey()
-	if err != nil {
-		t.Fatalf("generate key one: %v", err)
-	}
-	addrOne := crypto.PubkeyToAddress(keyOne.PublicKey)
-	baseState.AddBalance(addrOne, uint256.NewInt(5_000_000_000_000_000), tracing.BalanceChangeUnspecified)
-	baseState.SetNonce(addrOne, 0, tracing.NonceChangeUnspecified)
+	accOne := newTestAccount(t, baseState)
+	accTwo := newTestAccount(t, baseState)
 
-	keyTwo, err := crypto.GenerateKey()
-	if err != nil {
-		t.Fatalf("generate key two: %v", err)
-	}
-	addrTwo := crypto.PubkeyToAddress(keyTwo.PublicKey)
-	baseState.AddBalance(addrTwo, uint256.NewInt(5_000_000_000_000_000), tracing.BalanceChangeUnspecified)
-	baseState.SetNonce(addrTwo, 0, tracing.NonceChangeUnspecified)
+	writeOne := accOne.SignWriteTx(t, backend, 0, 201, common.HexToAddress("0x4000000000000000000000000000000000000044"), 31, "write-one", []byte("payload-one"))
 
-	writeOne := mustEncodeSignedTx(
-		t,
-		backend.ChainConfig().ChainID,
-		keyOne,
-		0,
-		backend.mailboxAddresses[0],
-		encodeMailboxWriteCall(
-			t,
-			201,
-			common.HexToAddress("0x4000000000000000000000000000000000000044"),
-			31,
-			[]byte("write-one"),
-			[]byte("payload-one"),
-		),
-		200_000,
-	)
-
-	writeTwo := mustEncodeSignedTx(
-		t,
-		backend.ChainConfig().ChainID,
-		keyTwo,
-		0,
-		backend.mailboxAddresses[0],
-		encodeMailboxWriteCall(
-			t,
-			202,
-			common.HexToAddress("0x5000000000000000000000000000000000000055"),
-			32,
-			[]byte("write-two"),
-			[]byte("payload-two"),
-		),
-		200_000,
-	)
+	writeTwo := accTwo.SignWriteTx(t, backend, 0, 202, common.HexToAddress("0x5000000000000000000000000000000000000055"), 32, "write-two", []byte("payload-two"))
 
 	initialRoot := baseState.IntermediateRoot(false)
 	request := instanceproto.SimulationRequest{
@@ -675,52 +537,27 @@ func TestSimulateSCPBundleMultipleWrites(t *testing.T) {
 	}
 
 	missing, writes := runBundleSimulation(t, backend, baseState, header, request)
-	if missing != nil {
-		t.Fatalf("unexpected missing mailbox header")
-	}
+	requireNoMissing(t, missing, "unexpected missing mailbox header")
 	if len(writes) != 2 {
 		t.Fatalf("expected 2 writes, got %d", len(writes))
 	}
 
-	localChain := compose.ChainID(backend.ChainConfig().ChainID.Uint64())
+	requireWriteMessage(t, writes[0], writeExpectation{
+		source:  backend.ChainConfig().ChainID.Uint64(),
+		dest:    201,
+		session: 31,
+		label:   "write-one",
+		data:    []byte("payload-one"),
+	}, "first write")
+	requireWriteMessage(t, writes[1], writeExpectation{
+		source:  backend.ChainConfig().ChainID.Uint64(),
+		dest:    202,
+		session: 32,
+		label:   "write-two",
+		data:    []byte("payload-two"),
+	}, "second write")
 
-	first := writes[0]
-	if first.SourceChainID != localChain {
-		t.Fatalf("unexpected first source chain: %d", first.SourceChainID)
-	}
-	if first.DestChainID != compose.ChainID(201) {
-		t.Fatalf("unexpected first dest chain: %d", first.DestChainID)
-	}
-	if first.SessionID != compose.SessionID(31) {
-		t.Fatalf("unexpected first session: %d", first.SessionID)
-	}
-	if first.Label != "write-one" {
-		t.Fatalf("unexpected first label: %s", first.Label)
-	}
-	if string(first.Data) != "payload-one" {
-		t.Fatalf("unexpected first payload: %s", string(first.Data))
-	}
-
-	second := writes[1]
-	if second.SourceChainID != localChain {
-		t.Fatalf("unexpected second source chain: %d", second.SourceChainID)
-	}
-	if second.DestChainID != compose.ChainID(202) {
-		t.Fatalf("unexpected second dest chain: %d", second.DestChainID)
-	}
-	if second.SessionID != compose.SessionID(32) {
-		t.Fatalf("unexpected second session: %d", second.SessionID)
-	}
-	if second.Label != "write-two" {
-		t.Fatalf("unexpected second label: %s", second.Label)
-	}
-	if string(second.Data) != "payload-two" {
-		t.Fatalf("unexpected second payload: %s", string(second.Data))
-	}
-
-	if after := baseState.IntermediateRoot(false); after != initialRoot {
-		t.Fatalf("base state mutated during simulation")
-	}
+	assertStateUnchanged(t, baseState, initialRoot)
 }
 
 // Tests a bundle with a putInbox message and a read that matches it.
@@ -729,39 +566,25 @@ func TestSimulateSCPBundlePutInboxSatisfiedRead(t *testing.T) {
 	backend, stateFactory, _, header := setupSimulationTestBackend(t)
 	baseState := stateFactory()
 
-	readerKey, err := crypto.GenerateKey()
-	if err != nil {
-		t.Fatalf("generate reader key: %v", err)
-	}
-	readerAddr := crypto.PubkeyToAddress(readerKey.PublicKey)
-	baseState.AddBalance(readerAddr, uint256.NewInt(5_000_000_000_000_000), tracing.BalanceChangeUnspecified)
-	baseState.SetNonce(readerAddr, 0, tracing.NonceChangeUnspecified)
+	reader := newTestAccount(t, baseState)
 
 	sourceChain := uint64(321)
 	sessionID := uint64(99)
-	label := []byte("inbox-fulfilled")
+	label := "inbox-fulfilled"
 
 	message := instanceproto.MailboxMessage{
 		MailboxMessageHeader: instanceproto.MailboxMessageHeader{
 			SourceChainID: compose.ChainID(sourceChain),
 			DestChainID:   compose.ChainID(backend.ChainConfig().ChainID.Uint64()),
-			Sender:        composeAddressFromCommon(readerAddr),
-			Receiver:      composeAddressFromCommon(readerAddr),
+			Sender:        composeAddressFromCommon(reader.Address()),
+			Receiver:      composeAddressFromCommon(reader.Address()),
 			SessionID:     compose.SessionID(sessionID),
-			Label:         string(label),
+			Label:         label,
 		},
 		Data: []byte("payload"),
 	}
 
-	readTx := mustEncodeSignedTx(
-		t,
-		backend.ChainConfig().ChainID,
-		readerKey,
-		0,
-		backend.mailboxAddresses[0],
-		encodeMailboxReadCall(t, sourceChain, readerAddr, sessionID, label),
-		150_000,
-	)
+	readTx := reader.SignReadTx(t, backend, 0, sourceChain, reader.Address(), sessionID, label)
 
 	initialRoot := baseState.IntermediateRoot(false)
 	request := instanceproto.SimulationRequest{
@@ -777,9 +600,7 @@ func TestSimulateSCPBundlePutInboxSatisfiedRead(t *testing.T) {
 	if len(writes) != 0 {
 		t.Fatalf("expected no outbound writes, got %d", len(writes))
 	}
-	if after := baseState.IntermediateRoot(false); after != initialRoot {
-		t.Fatalf("base state mutated during simulation")
-	}
+	assertStateUnchanged(t, baseState, initialRoot)
 }
 
 // Tests a bundle with a putInbox message and a read that DOES NOT match it.
@@ -788,35 +609,21 @@ func TestSimulateSCPBundlePutInboxDifferentRead(t *testing.T) {
 	backend, stateFactory, _, header := setupSimulationTestBackend(t)
 	baseState := stateFactory()
 
-	readerKey, err := crypto.GenerateKey()
-	if err != nil {
-		t.Fatalf("generate reader key: %v", err)
-	}
-	readerAddr := crypto.PubkeyToAddress(readerKey.PublicKey)
-	baseState.AddBalance(readerAddr, uint256.NewInt(5_000_000_000_000_000), tracing.BalanceChangeUnspecified)
-	baseState.SetNonce(readerAddr, 0, tracing.NonceChangeUnspecified)
+	reader := newTestAccount(t, baseState)
 
 	fulfilledMsg := instanceproto.MailboxMessage{
 		MailboxMessageHeader: instanceproto.MailboxMessageHeader{
 			SourceChainID: compose.ChainID(400),
 			DestChainID:   compose.ChainID(backend.ChainConfig().ChainID.Uint64()),
-			Sender:        composeAddressFromCommon(readerAddr),
-			Receiver:      composeAddressFromCommon(readerAddr),
+			Sender:        composeAddressFromCommon(reader.Address()),
+			Receiver:      composeAddressFromCommon(reader.Address()),
 			SessionID:     compose.SessionID(10),
 			Label:         "fulfilled",
 		},
 		Data: []byte("payload"),
 	}
 
-	readTx := mustEncodeSignedTx(
-		t,
-		backend.ChainConfig().ChainID,
-		readerKey,
-		0,
-		backend.mailboxAddresses[0],
-		encodeMailboxReadCall(t, 401, readerAddr, 11, []byte("different")),
-		150_000,
-	)
+	readTx := reader.SignReadTx(t, backend, 0, 401, reader.Address(), 11, "different")
 
 	initialRoot := baseState.IntermediateRoot(false)
 	request := instanceproto.SimulationRequest{
@@ -826,18 +633,17 @@ func TestSimulateSCPBundlePutInboxDifferentRead(t *testing.T) {
 	}
 
 	missing, writes := runBundleSimulation(t, backend, baseState, header, request)
-	if missing == nil {
-		t.Fatalf("expected missing mailbox header for unmatched read")
-	}
-	if missing.SessionID == compose.SessionID(10) && missing.Label == fulfilledMsg.Label {
-		t.Fatalf("expected missing header to differ from fulfilled message")
-	}
+	requireMissingHeader(t, missing, missingExpectation{
+		source:   401,
+		dest:     backend.ChainConfig().ChainID.Uint64(),
+		session:  11,
+		label:    "different",
+		receiver: reader.Address(),
+	}, "expected missing mailbox header for unmatched read")
 	if len(writes) != 0 {
 		t.Fatalf("expected no outbound writes, got %d", len(writes))
 	}
-	if after := baseState.IntermediateRoot(false); after != initialRoot {
-		t.Fatalf("base state mutated during simulation")
-	}
+	assertStateUnchanged(t, baseState, initialRoot)
 }
 
 // Tests a bundle with two putInbox messages and two reads that match them,
@@ -848,30 +654,16 @@ func TestSimulateSCPBundleMatchedReadsRegardlessOfOrder(t *testing.T) {
 	remoteA := common.HexToAddress("0x7000000000000000000000000000000000000070")
 	remoteB := common.HexToAddress("0x8000000000000000000000000000000000000080")
 
-	readerAKey, err := crypto.GenerateKey()
-	if err != nil {
-		t.Fatalf("generate reader A key: %v", err)
-	}
-	readerA := crypto.PubkeyToAddress(readerAKey.PublicKey)
-
-	readerBKey, err := crypto.GenerateKey()
-	if err != nil {
-		t.Fatalf("generate reader B key: %v", err)
-	}
-	readerB := crypto.PubkeyToAddress(readerBKey.PublicKey)
-
 	buildMessages := func(state *state.StateDB) ([]instanceproto.MailboxMessage, [][]byte) {
-		state.AddBalance(readerA, uint256.NewInt(5_000_000_000_000_000), tracing.BalanceChangeUnspecified)
-		state.SetNonce(readerA, 0, tracing.NonceChangeUnspecified)
-		state.AddBalance(readerB, uint256.NewInt(5_000_000_000_000_000), tracing.BalanceChangeUnspecified)
-		state.SetNonce(readerB, 0, tracing.NonceChangeUnspecified)
+		readerA := newTestAccount(t, state)
+		readerB := newTestAccount(t, state)
 
 		msgA := instanceproto.MailboxMessage{
 			MailboxMessageHeader: instanceproto.MailboxMessageHeader{
 				SourceChainID: compose.ChainID(501),
 				DestChainID:   compose.ChainID(backend.ChainConfig().ChainID.Uint64()),
 				Sender:        composeAddressFromCommon(remoteA),
-				Receiver:      composeAddressFromCommon(readerA),
+				Receiver:      composeAddressFromCommon(readerA.Address()),
 				SessionID:     compose.SessionID(41),
 				Label:         "read-A",
 			},
@@ -882,31 +674,15 @@ func TestSimulateSCPBundleMatchedReadsRegardlessOfOrder(t *testing.T) {
 				SourceChainID: compose.ChainID(502),
 				DestChainID:   compose.ChainID(backend.ChainConfig().ChainID.Uint64()),
 				Sender:        composeAddressFromCommon(remoteB),
-				Receiver:      composeAddressFromCommon(readerB),
+				Receiver:      composeAddressFromCommon(readerB.Address()),
 				SessionID:     compose.SessionID(42),
 				Label:         "read-B",
 			},
 			Data: []byte("payload-B"),
 		}
 
-		readATx := mustEncodeSignedTx(
-			t,
-			backend.ChainConfig().ChainID,
-			readerAKey,
-			0,
-			backend.mailboxAddresses[0],
-			encodeMailboxReadCall(t, 501, remoteA, 41, []byte("read-A")),
-			150_000,
-		)
-		readBTx := mustEncodeSignedTx(
-			t,
-			backend.ChainConfig().ChainID,
-			readerBKey,
-			0,
-			backend.mailboxAddresses[0],
-			encodeMailboxReadCall(t, 502, remoteB, 42, []byte("read-B")),
-			150_000,
-		)
+		readATx := readerA.SignReadTx(t, backend, 0, 501, remoteA, 41, "read-A")
+		readBTx := readerB.SignReadTx(t, backend, 0, 502, remoteB, 42, "read-B")
 
 		return []instanceproto.MailboxMessage{msgA, msgB}, [][]byte{readATx, readBTx}
 	}
@@ -958,15 +734,11 @@ func TestSimulateSCPBundleMatchedReadsRegardlessOfOrder(t *testing.T) {
 			}
 
 			missing, writes := runBundleSimulation(t, backend, state, header, request)
-			if missing != nil {
-				t.Fatalf("unexpected missing mailbox header: %+v", *missing)
-			}
+			requireNoMissing(t, missing, "unexpected missing mailbox header")
 			if len(writes) != 0 {
 				t.Fatalf("expected no outbound writes, got %d", len(writes))
 			}
-			if after := state.IntermediateRoot(false); after != initialRoot {
-				t.Fatalf("state mutated during simulation")
-			}
+			assertStateUnchanged(t, state, initialRoot)
 		})
 	}
 }
@@ -977,21 +749,8 @@ func TestSimulateSCPBundleStopsBeforeWritesOnMissingRead(t *testing.T) {
 	backend, stateFactory, _, header := setupSimulationTestBackend(t)
 	state := stateFactory()
 
-	readerAKey, err := crypto.GenerateKey()
-	if err != nil {
-		t.Fatalf("generate reader A key: %v", err)
-	}
-	readerA := crypto.PubkeyToAddress(readerAKey.PublicKey)
-	state.AddBalance(readerA, uint256.NewInt(5_000_000_000_000_000), tracing.BalanceChangeUnspecified)
-	state.SetNonce(readerA, 0, tracing.NonceChangeUnspecified)
-
-	writerKey, err := crypto.GenerateKey()
-	if err != nil {
-		t.Fatalf("generate writer key: %v", err)
-	}
-	writerAddr := crypto.PubkeyToAddress(writerKey.PublicKey)
-	state.AddBalance(writerAddr, uint256.NewInt(5_000_000_000_000_000), tracing.BalanceChangeUnspecified)
-	state.SetNonce(writerAddr, 0, tracing.NonceChangeUnspecified)
+	reader := newTestAccount(t, state)
+	writer := newTestAccount(t, state)
 
 	// PutInbox message that does not satisfy the first read
 	putInboxMsg := instanceproto.MailboxMessage{
@@ -999,7 +758,7 @@ func TestSimulateSCPBundleStopsBeforeWritesOnMissingRead(t *testing.T) {
 			SourceChainID: compose.ChainID(777),
 			DestChainID:   compose.ChainID(backend.ChainConfig().ChainID.Uint64()),
 			Sender:        composeAddressFromCommon(common.HexToAddress("0x9100000000000000000000000000000000000091")),
-			Receiver:      composeAddressFromCommon(readerA),
+			Receiver:      composeAddressFromCommon(reader.Address()),
 			SessionID:     compose.SessionID(55),
 			Label:         "read-A",
 		},
@@ -1007,37 +766,13 @@ func TestSimulateSCPBundleStopsBeforeWritesOnMissingRead(t *testing.T) {
 	}
 
 	// Read that will miss
-	readMissing := mustEncodeSignedTx(
-		t,
-		backend.ChainConfig().ChainID,
-		readerAKey,
-		0,
-		backend.mailboxAddresses[0],
-		encodeMailboxReadCall(t, 888, common.HexToAddress("0x9200000000000000000000000000000000000092"), 10, []byte("missing")),
-		150_000,
-	)
+	readMissing := reader.SignReadTx(t, backend, 0, 888, common.HexToAddress("0x9200000000000000000000000000000000000092"), 10, "missing")
 
 	// Write that should not be applied
-	writeTx := mustEncodeSignedTx(
-		t,
-		backend.ChainConfig().ChainID,
-		writerKey,
-		0,
-		backend.mailboxAddresses[0],
-		encodeMailboxWriteCall(t, 999, common.HexToAddress("0x9300000000000000000000000000000000000093"), 66, []byte("write-label"), []byte("write-payload")),
-		200_000,
-	)
+	writeTx := writer.SignWriteTx(t, backend, 0, 999, common.HexToAddress("0x9300000000000000000000000000000000000093"), 66, "write-label", []byte("write-payload"))
 
 	// Read that would be fulfilled if it were reached
-	readFulfilled := mustEncodeSignedTx(
-		t,
-		backend.ChainConfig().ChainID,
-		readerAKey,
-		1,
-		backend.mailboxAddresses[0],
-		encodeMailboxReadCall(t, 777, common.HexToAddress("0x9100000000000000000000000000000000000091"), 55, []byte("read-A")),
-		150_000,
-	)
+	readFulfilled := reader.SignReadTx(t, backend, 1, 777, common.HexToAddress("0x9100000000000000000000000000000000000091"), 55, "read-A")
 
 	// PutInbox (A). Transactions (ReadB, write, ReadA)
 	// Expect to stop at ReadB missing. Neither write nor ReadA should be applied.
@@ -1049,21 +784,19 @@ func TestSimulateSCPBundleStopsBeforeWritesOnMissingRead(t *testing.T) {
 	}
 
 	missing, writes := runBundleSimulation(t, backend, state, header, request)
-	if missing == nil {
-		t.Fatalf("expected missing mailbox header from first read")
-	}
-	if missing.Label != "missing" {
-		t.Fatalf("unexpected missing label: %s", missing.Label)
-	}
+	requireMissingHeader(t, missing, missingExpectation{
+		source:  888,
+		dest:    backend.ChainConfig().ChainID.Uint64(),
+		session: 10,
+		label:   "missing",
+	}, "expected missing mailbox header from first read")
 	if len(writes) != 0 {
 		t.Fatalf("expected no writes when first tx fails, got %d", len(writes))
 	}
-	if nonce := state.GetNonce(writerAddr); nonce != 0 {
+	if nonce := state.GetNonce(writer.Address()); nonce != 0 {
 		t.Fatalf("writer nonce mutated despite rollback")
 	}
-	if after := state.IntermediateRoot(false); after != initialRoot {
-		t.Fatalf("state mutated during simulation")
-	}
+	assertStateUnchanged(t, state, initialRoot)
 }
 
 // Tests that a simulation with a snapshot that does not match the initial state root returns an error.
@@ -1247,13 +980,150 @@ func runBundleSimulationWithError(t *testing.T, backend *testAPIBackend, stateDB
 	return backend.simulateSCPBundle(request)
 }
 
+const (
+	testAccountFundingWei = 5_000_000_000_000_000
+	defaultReadGasLimit   = 150_000
+	defaultWriteGasLimit  = 200_000
+)
+
+type testAccount struct {
+	key  *ecdsa.PrivateKey
+	addr common.Address
+}
+
+func newTestAccount(t *testing.T, state *state.StateDB) testAccount {
+	t.Helper()
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("generate test key: %v", err)
+	}
+	return fundTestAccount(t, state, key)
+}
+
+func fundTestAccount(t *testing.T, state *state.StateDB, key *ecdsa.PrivateKey) testAccount {
+	t.Helper()
+	addr := crypto.PubkeyToAddress(key.PublicKey)
+	state.AddBalance(addr, uint256.NewInt(testAccountFundingWei), tracing.BalanceChangeUnspecified)
+	state.SetNonce(addr, 0, tracing.NonceChangeUnspecified)
+	return testAccount{key: key, addr: addr}
+}
+
+func (a testAccount) Address() common.Address {
+	return a.addr
+}
+
+func (a testAccount) SignReadTx(t *testing.T, backend *testAPIBackend, nonce uint64, chainSrc uint64, sender common.Address, sessionID uint64, label string) []byte {
+	t.Helper()
+	callData := encodeMailboxReadCall(t, chainSrc, sender, sessionID, label)
+	return mustEncodeSignedTx(t, backend.ChainConfig().ChainID, a.key, nonce, backend.mailboxAddresses[0], callData, defaultReadGasLimit)
+}
+
+func (a testAccount) SignWriteTx(t *testing.T, backend *testAPIBackend, nonce uint64, destChain uint64, receiver common.Address, sessionID uint64, label string, payload []byte) []byte {
+	t.Helper()
+	callData := encodeMailboxWriteCall(t, destChain, receiver, sessionID, label, payload)
+	return mustEncodeSignedTx(t, backend.ChainConfig().ChainID, a.key, nonce, backend.mailboxAddresses[0], callData, defaultWriteGasLimit)
+}
+
+func assertStateUnchanged(t *testing.T, state *state.StateDB, expected common.Hash) {
+	t.Helper()
+	if after := state.IntermediateRoot(false); after != expected {
+		t.Fatalf("state mutated during simulation")
+	}
+}
+
+type missingExpectation struct {
+	source   uint64
+	dest     uint64
+	session  uint64
+	label    string
+	receiver common.Address
+}
+
+func requireMissingHeader(t *testing.T, missing *instanceproto.MailboxMessageHeader, want missingExpectation, context string) {
+	t.Helper()
+	if missing == nil {
+		if context == "" {
+			context = "expected missing mailbox header"
+		}
+		t.Fatalf(context)
+	}
+	fail := func(format string, args ...interface{}) {
+		if context != "" {
+			format = context + ": " + format
+		}
+		t.Fatalf(format, args...)
+	}
+	if want.source != 0 && missing.SourceChainID != compose.ChainID(want.source) {
+		fail("unexpected source chain: %d", missing.SourceChainID)
+	}
+	if want.dest != 0 && missing.DestChainID != compose.ChainID(want.dest) {
+		fail("unexpected destination chain: %d", missing.DestChainID)
+	}
+	if want.session != 0 && missing.SessionID != compose.SessionID(want.session) {
+		fail("unexpected session id: %d", missing.SessionID)
+	}
+	if want.label != "" && missing.Label != want.label {
+		fail("unexpected label: %s", missing.Label)
+	}
+	if want.receiver != (common.Address{}) && commonAddressFromCompose(missing.Receiver) != want.receiver {
+		fail("unexpected receiver: %s", commonAddressFromCompose(missing.Receiver).Hex())
+	}
+}
+
+func requireNoMissing(t *testing.T, missing *instanceproto.MailboxMessageHeader, context string) {
+	t.Helper()
+	if missing != nil {
+		if context == "" {
+			context = "unexpected missing mailbox header"
+		}
+		t.Fatalf("%s: %+v", context, *missing)
+	}
+}
+
+type writeExpectation struct {
+	source   uint64
+	dest     uint64
+	session  uint64
+	label    string
+	data     []byte
+	receiver common.Address
+}
+
+func requireWriteMessage(t *testing.T, got instanceproto.MailboxMessage, want writeExpectation, context string) {
+	t.Helper()
+	fail := func(format string, args ...interface{}) {
+		if context != "" {
+			format = context + ": " + format
+		}
+		t.Fatalf(format, args...)
+	}
+	if want.source != 0 && got.SourceChainID != compose.ChainID(want.source) {
+		fail("unexpected source chain: %d", got.SourceChainID)
+	}
+	if want.dest != 0 && got.DestChainID != compose.ChainID(want.dest) {
+		fail("unexpected destination chain: %d", got.DestChainID)
+	}
+	if want.session != 0 && got.SessionID != compose.SessionID(want.session) {
+		fail("unexpected session id: %d", got.SessionID)
+	}
+	if want.label != "" && got.Label != want.label {
+		fail("unexpected label: %s", got.Label)
+	}
+	if want.data != nil && !bytes.Equal(got.Data, want.data) {
+		fail("unexpected payload: %x", got.Data)
+	}
+	if want.receiver != (common.Address{}) && commonAddressFromCompose(got.Receiver) != want.receiver {
+		fail("unexpected receiver: %s", commonAddressFromCompose(got.Receiver).Hex())
+	}
+}
+
 func hashToComposeRoot(h common.Hash) compose.StateRoot {
 	var out compose.StateRoot
 	copy(out[:], h[:])
 	return out
 }
 
-func encodeMailboxReadCall(t *testing.T, chainSrc uint64, sender common.Address, sessionID uint64, label []byte) []byte {
+func encodeMailboxReadCall(t *testing.T, chainSrc uint64, sender common.Address, sessionID uint64, label string) []byte {
 	t.Helper()
 	parsedABI, err := abi.JSON(strings.NewReader(mailboxABI))
 	if err != nil {
@@ -1264,7 +1134,7 @@ func encodeMailboxReadCall(t *testing.T, chainSrc uint64, sender common.Address,
 		new(big.Int).SetUint64(chainSrc),
 		sender,
 		new(big.Int).SetUint64(sessionID),
-		label,
+		[]byte(label),
 	)
 	if err != nil {
 		t.Fatalf("pack read calldata: %v", err)
@@ -1272,7 +1142,7 @@ func encodeMailboxReadCall(t *testing.T, chainSrc uint64, sender common.Address,
 	return data
 }
 
-func encodeMailboxWriteCall(t *testing.T, destChain uint64, receiver common.Address, sessionID uint64, label []byte, payload []byte) []byte {
+func encodeMailboxWriteCall(t *testing.T, destChain uint64, receiver common.Address, sessionID uint64, label string, payload []byte) []byte {
 	t.Helper()
 	parsedABI, err := abi.JSON(strings.NewReader(mailboxABI))
 	if err != nil {
@@ -1283,7 +1153,7 @@ func encodeMailboxWriteCall(t *testing.T, destChain uint64, receiver common.Addr
 		new(big.Int).SetUint64(destChain),
 		receiver,
 		new(big.Int).SetUint64(sessionID),
-		label,
+		[]byte(label),
 		payload,
 	)
 	if err != nil {
