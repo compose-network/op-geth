@@ -102,6 +102,13 @@ type EthAPIBackend struct {
 	// but we need them to determine which blocks have XTs when sending to SP
 	committedTxsMutex sync.RWMutex
 	committedTxHashes map[common.Hash]bool // Hashes of txs that were committed in blocks during this slot
+
+	// Overrides for testing purposes only
+	// TODO refactor dependency injection with interfaces to avoid these
+	chainConfigOverride         *params.ChainConfig
+	chainContextOverride        core.ChainContext
+	stateByNumberOverride       func(ctx context.Context, number rpc.BlockNumber) (*state.StateDB, *types.Header, error)
+	stateByNumberOrHashOverride func(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (*state.StateDB, *types.Header, error)
 }
 
 const defaultPutInboxGas = 500000
@@ -121,7 +128,13 @@ type sequencerTxEntry struct {
 
 // ChainConfig returns the active chain configuration.
 func (b *EthAPIBackend) ChainConfig() *params.ChainConfig {
-	return b.eth.blockchain.Config()
+	if b.chainConfigOverride != nil {
+		return b.chainConfigOverride
+	}
+	if b.eth != nil && b.eth.blockchain != nil {
+		return b.eth.blockchain.Config()
+	}
+	return params.AllEthashProtocolChanges
 }
 
 func (b *EthAPIBackend) CurrentBlock() *types.Header {
@@ -296,6 +309,9 @@ func (b *EthAPIBackend) StateAndHeaderByNumber(
 	ctx context.Context,
 	number rpc.BlockNumber,
 ) (*state.StateDB, *types.Header, error) {
+	if b.stateByNumberOverride != nil {
+		return b.stateByNumberOverride(ctx, number)
+	}
 	// Pending state is only known by the miner
 	if number == rpc.PendingBlockNumber {
 		block, _, state := b.eth.miner.Pending(ctx)
@@ -330,6 +346,9 @@ func (b *EthAPIBackend) StateAndHeaderByNumberOrHash(
 	ctx context.Context,
 	blockNrOrHash rpc.BlockNumberOrHash,
 ) (*state.StateDB, *types.Header, error) {
+	if b.stateByNumberOrHashOverride != nil {
+		return b.stateByNumberOrHashOverride(ctx, blockNrOrHash)
+	}
 	if blockNr, ok := blockNrOrHash.Number(); ok {
 		return b.StateAndHeaderByNumber(ctx, blockNr)
 	}
@@ -1644,32 +1663,32 @@ func (b *EthAPIBackend) SetSequencerCoordinator(coord xsequencer.Coordinator, sp
 //  2. Execute the supplied transactions sequentially while tracing mailbox read/write calls.
 //     Execution stops early if a mailbox read targets this chain without an available message,
 //     returning the header that must be fulfilled before the bundle can succeed.
-//  3. Collect any outbound mailbox writes emitted during successful execution. Regardless of
-//     the outcome, all state changes are reverted before returning so the simulation has no
-//     side effects.
+//  3. Collect any outbound mailbox writes emitted during successful execution. The simulation
+//     operates on a copy of the state so it never mutates the underlying chain data.
 func (b *EthAPIBackend) simulateSCPBundle(request instanceproto.SimulationRequest) (*instanceproto.MailboxMessageHeader, []instanceproto.MailboxMessage, error) {
 	ctx := context.Background()
 
 	// Gets state DB and header of current pending block
-	stateDB, header, err := b.StateAndHeaderByNumberOrHash(ctx, rpc.BlockNumberOrHashWithNumber(rpc.PendingBlockNumber))
+	stateDBBase, header, err := b.StateAndHeaderByNumberOrHash(ctx, rpc.BlockNumberOrHashWithNumber(rpc.PendingBlockNumber))
 	if err != nil {
 		return nil, nil, fmt.Errorf("state lookup failed: %w", err)
 	}
 
 	// Finalize any prior state changes (removing dirty state)
-	stateDB.Finalise(true)
-	rootSnapshot := stateDB.Snapshot()
-	defer stateDB.RevertToSnapshot(rootSnapshot)
+	stateDBBase.Finalise(true)
 
 	// The simulation request is made with a requirement on the state root it should be executed on top.
 	// If there is a mismatch, abort early.
 	if request.Snapshot != (compose.StateRoot{}) {
 		expected := composeRootToHash(request.Snapshot)
-		current := stateDB.IntermediateRoot(false)
+		current := stateDBBase.IntermediateRoot(false)
 		if current != expected {
 			return nil, nil, fmt.Errorf("state root mismatch: pending=%s expected=%s", current.Hex(), expected.Hex())
 		}
 	}
+
+	// Work on a copy so simulation does not disturb the original state
+	stateDB := stateDBBase.Copy()
 
 	// Retrieve mailbox addresses
 	mailboxAddresses := b.GetMailboxAddresses()
@@ -1683,7 +1702,7 @@ func (b *EthAPIBackend) simulateSCPBundle(request instanceproto.SimulationReques
 		vmBaseConfig = *cfg
 	}
 	vmBaseConfig.EnablePreimageRecording = true
-	blockContext := core.NewEVMBlockContext(header, b.eth.blockchain, nil, b.ChainConfig(), stateDB)
+	blockContext := core.NewEVMBlockContext(header, b.chainContext(), nil, b.ChainConfig(), stateDB)
 
 	// Run putInbox transactions
 	fulfilled := make(map[string]struct{}, len(request.PutInboxMessages))
@@ -1978,6 +1997,16 @@ func composeAddressFromCommon(addr common.Address) compose.EthAddress {
 	var out compose.EthAddress
 	copy(out[:], addr.Bytes())
 	return out
+}
+
+func (b *EthAPIBackend) chainContext() core.ChainContext {
+	if b.chainContextOverride != nil {
+		return b.chainContextOverride
+	}
+	if b.eth != nil && b.eth.blockchain != nil {
+		return b.eth.blockchain
+	}
+	return nil
 }
 
 func commonAddressFromCompose(addr compose.EthAddress) common.Address {
