@@ -59,6 +59,9 @@ func (s DecisionState) String() string {
 }
 
 // TwoPCState holds state for a single cross-chain transaction
+// Important: it doesn't automatically set the decision state based on votes;
+// that logic must be handled externally to allow for custom decision policies.
+// TODO: we should add the decision logic here as well, making it a complete 2PC state manager.
 type TwoPCState struct {
 	mu                  sync.RWMutex
 	XTID                *pb.XtID

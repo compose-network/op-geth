@@ -375,8 +375,10 @@ func getNonceFor(networkRPCAddr string, address common.Address) (uint64, error) 
 }
 
 // generateRandomSessionID returns a random big.Int in the range [0, 2^63-1]
+// TODO: use [0, 2^256)
 func generateRandomSessionID() *big.Int {
 	max := new(big.Int).Lsh(big.NewInt(1), 63)
+	// 	max := new(big.Int).Lsh(big.NewInt(1), 256)
 	n, err := rand.Int(rand.Reader, max)
 	if err != nil {
 		log.Fatalf("failed to generate random session ID: %v", err)
