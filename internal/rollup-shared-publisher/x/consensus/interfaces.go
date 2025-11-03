@@ -57,9 +57,9 @@ type Config struct {
 
 // DefaultConfig returns sensible defaults
 func DefaultConfig(nodeID string) Config {
-	return Config{
-		NodeID:  nodeID,
-		Timeout: 4 * time.Second,
-		Role:    Leader,
-	}
+    return Config{
+        NodeID:  nodeID,
+        Timeout: time.Minute,
+        Role:    Leader,
+    }
 }
