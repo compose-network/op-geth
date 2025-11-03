@@ -38,23 +38,8 @@ func TestAnalyzeMailboxTraceReturnsMissingRead(t *testing.T) {
 		mailboxAddresses: []common.Address{mailboxAddr},
 	}
 
-	parsedABI, err := abi.JSON(strings.NewReader(mailboxABI))
-	if err != nil {
-		t.Fatalf("parse mailbox ABI: %v", err)
-	}
-
-	// Prepare calldata for a read operation from chain 7, from sender, session ID 42, label "coord".
 	sessionID := uint64(42)
-	callData, err := parsedABI.Pack(
-		"read",
-		new(big.Int).SetUint64(7),
-		sourceSender,
-		new(big.Int).SetUint64(sessionID),
-		[]byte("coord"),
-	)
-	if err != nil {
-		t.Fatalf("pack read calldata: %v", err)
-	}
+	callData := encodeMailboxReadCall(t, 7, sourceSender, sessionID, "coord")
 
 	// Mock trace result with a STATICCALL to the mailbox's read function.
 	trace := &ssv.SSVTraceResult{
@@ -78,23 +63,16 @@ func TestAnalyzeMailboxTraceReturnsMissingRead(t *testing.T) {
 		t.Fatalf("analyzeMailboxTrace returned error: %v", err)
 	}
 	// Missing should have the msg we expect
-	if missing == nil {
-		t.Fatalf("expected missing mailbox header, got nil")
-	}
+	requireMissingHeader(t, missing, missingExpectation{
+		source:   7,
+		dest:     10,
+		session:  sessionID,
+		label:    "coord",
+		receiver: readerContract,
+	}, "expected missing mailbox header")
 	// No writes should be returned
 	if writes != nil {
 		t.Fatalf("expected no writes when read missing, got %d messages", len(writes))
-	}
-	// Validate missing header contents
-	if missing.SourceChainID != compose.ChainID(7) || missing.DestChainID != compose.ChainID(10) {
-		t.Fatalf("unexpected chains in missing header: %+v", *missing)
-	}
-	// Validate label and session ID
-	if missing.Label != "coord" {
-		t.Fatalf("unexpected label: %s", missing.Label)
-	}
-	if missing.SessionID != compose.SessionID(sessionID) {
-		t.Fatalf("unexpected session ID: %d", missing.SessionID)
 	}
 }
 
@@ -109,22 +87,8 @@ func TestAnalyzeMailboxTraceRespectsFulfilledReads(t *testing.T) {
 		mailboxAddresses: []common.Address{mailboxAddr},
 	}
 
-	parsedABI, err := abi.JSON(strings.NewReader(mailboxABI))
-	if err != nil {
-		t.Fatalf("parse mailbox ABI: %v", err)
-	}
-
 	session := uint64(77)
-	callData, err := parsedABI.Pack(
-		"read",
-		new(big.Int).SetUint64(12),
-		sourceSender,
-		new(big.Int).SetUint64(session),
-		[]byte("token"),
-	)
-	if err != nil {
-		t.Fatalf("pack read calldata: %v", err)
-	}
+	callData := encodeMailboxReadCall(t, 12, sourceSender, session, "token")
 
 	trace := &ssv.SSVTraceResult{
 		Operations: []ssv.SSVOperation{{
@@ -159,9 +123,7 @@ func TestAnalyzeMailboxTraceRespectsFulfilledReads(t *testing.T) {
 		t.Fatalf("analyzeMailboxTrace returned error: %v", err)
 	}
 	// Missing should be nil since read is fulfilled
-	if missing != nil {
-		t.Fatalf("expected fulfilled read to be ignored")
-	}
+	requireNoMissing(t, missing, "expected fulfilled read to be ignored")
 	// No writes is expected
 	if len(writes) != 0 {
 		t.Fatalf("expected no writes in read-only trace, got %d", len(writes))
@@ -179,22 +141,7 @@ func TestAnalyzeMailboxTraceCollectsWrites(t *testing.T) {
 		mailboxAddresses: []common.Address{mailboxAddr},
 	}
 
-	parsedABI, err := abi.JSON(strings.NewReader(mailboxABI))
-	if err != nil {
-		t.Fatalf("parse mailbox ABI: %v", err)
-	}
-	// Create a write call to chain 55, receiver, session ID 99, label "hello", payload "payload"
-	callData, err := parsedABI.Pack(
-		"write",
-		new(big.Int).SetUint64(55),
-		receiver,
-		new(big.Int).SetUint64(99),
-		[]byte("hello"),
-		[]byte("payload"),
-	)
-	if err != nil {
-		t.Fatalf("pack write calldata: %v", err)
-	}
+	callData := encodeMailboxWriteCall(t, 55, receiver, 99, "hello", []byte("payload"))
 
 	trace := &ssv.SSVTraceResult{
 		Operations: []ssv.SSVOperation{{
@@ -214,19 +161,19 @@ func TestAnalyzeMailboxTraceCollectsWrites(t *testing.T) {
 		t.Fatalf("analyzeMailboxTrace returned error: %v", err)
 	}
 	// No missing reads expected
-	if missing != nil {
-		t.Fatalf("expected no missing reads")
-	}
+	requireNoMissing(t, missing, "expected no missing reads")
 	// One write expected
 	if len(writes) != 1 {
 		t.Fatalf("expected a single outbound message, got %d", len(writes))
 	}
 	requireWriteMessage(t, writes[0], writeExpectation{
-		source: 42,
-		dest:   55,
-		label:  "hello",
-		data:   []byte("payload"),
-	}, "unexpected outbound message")
+		source:   42,
+		dest:     55,
+		session:  99,
+		label:    "hello",
+		data:     []byte("payload"),
+		receiver: receiver,
+	}, "unexpected outbound mailbox message")
 }
 
 // Test that buildPutInboxCalldata constructs valid calldata for putInbox.
