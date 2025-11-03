@@ -1766,7 +1766,8 @@ func (b *EthAPIBackend) simulateSCPBundle(request instanceproto.SimulationReques
 
 		if missing != nil {
 			stateDB.RevertToSnapshot(txSnapshot)
-			return missing, nil, nil
+			accumulated := append(append([]instanceproto.MailboxMessage(nil), writeAccumulator...), writes...)
+			return missing, accumulated, nil
 		}
 
 		if execErr != nil {
@@ -1906,7 +1907,7 @@ func (b *EthAPIBackend) analyzeMailboxTrace(mp *MailboxProcessor, trace *ssv.SSV
 	}
 
 	if missing != nil {
-		return missing, nil, nil
+		return missing, writes, nil
 	}
 
 	return nil, writes, nil

@@ -29,6 +29,12 @@ import (
 
 var (
 	mailboxABIParsed, _ = abi.JSON(strings.NewReader(mailboxABI))
+	pingPongABIParsed   abi.ABI
+)
+
+var (
+	mailboxContractAddr  = common.HexToAddress("0x1000000000000000000000000000000000000011")
+	pingPongContractAddr = common.HexToAddress("0x2000000000000000000000000000000000000022")
 )
 
 // Tests analyzeMailboxTrace for missing reads and writes.
@@ -75,7 +81,7 @@ func TestAnalyzeMailboxTraceReturnsMissingRead(t *testing.T) {
 		receiver: readerContract,
 	}, "expected missing mailbox header")
 	// No writes should be returned
-	if writes != nil {
+	if len(writes) != 0 {
 		t.Fatalf("expected no writes when read missing, got %d messages", len(writes))
 	}
 }
@@ -548,6 +554,174 @@ func TestSimulateSCPBundleDuplicateWritesError(t *testing.T) {
 	assertStateUnchanged(t, state, initialRoot)
 }
 
+func TestSimulateSCPBundlePingMissingPong(t *testing.T) {
+	backend, stateFactory, _, header := setupSimulationTestBackend(t)
+	state := stateFactory()
+
+	caller := newTestAccount(t, state)
+	otherChain := uint64(777)
+	sessionID := uint64(99)
+	pongSender := common.HexToAddress("0x7100000000000000000000000000000000000071")
+	pingReceiver := common.HexToAddress("0x7200000000000000000000000000000000000072")
+	payload := []byte("ping-data")
+
+	tx := caller.SignPingTx(t, backend, 0, otherChain, pongSender, pingReceiver, sessionID, payload)
+
+	initialRoot := state.IntermediateRoot(false)
+	request := instanceproto.SimulationRequest{
+		Transactions: [][]byte{tx},
+		Snapshot:     hashToComposeRoot(initialRoot),
+	}
+
+	missing, writes := runBundleSimulation(t, backend, state, header, request)
+	requireMissingHeader(t, missing, missingExpectation{
+		source:   otherChain,
+		dest:     backend.ChainConfig().ChainID.Uint64(),
+		session:  sessionID,
+		label:    "PONG",
+		receiver: pingPongContractAddr,
+	}, "expected missing pong reply")
+	if len(writes) != 1 {
+		t.Fatalf("expected ping write to be recorded, got %d", len(writes))
+	}
+	requireWriteMessage(t, writes[0], writeExpectation{
+		source:   backend.ChainConfig().ChainID.Uint64(),
+		dest:     otherChain,
+		session:  sessionID,
+		label:    "PING",
+		data:     payload,
+		receiver: pingReceiver,
+	}, "unexpected ping write")
+	assertStateUnchanged(t, state, initialRoot)
+}
+
+func TestSimulateSCPBundlePongMissingPing(t *testing.T) {
+	backend, stateFactory, _, header := setupSimulationTestBackend(t)
+	state := stateFactory()
+
+	caller := newTestAccount(t, state)
+	otherChain := uint64(888)
+	sessionID := uint64(11)
+	pingSender := common.HexToAddress("0x7300000000000000000000000000000000000073")
+	payload := []byte("pong-data")
+
+	tx := caller.SignPongTx(t, backend, 0, otherChain, pingSender, sessionID, payload)
+
+	initialRoot := state.IntermediateRoot(false)
+	request := instanceproto.SimulationRequest{
+		Transactions: [][]byte{tx},
+		Snapshot:     hashToComposeRoot(initialRoot),
+	}
+
+	missing, writes := runBundleSimulation(t, backend, state, header, request)
+	requireMissingHeader(t, missing, missingExpectation{
+		source:   otherChain,
+		dest:     backend.ChainConfig().ChainID.Uint64(),
+		session:  sessionID,
+		label:    "PING",
+		receiver: pingPongContractAddr,
+	}, "expected missing ping message")
+	if len(writes) != 0 {
+		t.Fatalf("expected no writes before missing, got %d", len(writes))
+	}
+	assertStateUnchanged(t, state, initialRoot)
+}
+
+func TestSimulateSCPBundlePingSatisfiedByPutInbox(t *testing.T) {
+	backend, stateFactory, _, header := setupSimulationTestBackend(t)
+	state := stateFactory()
+
+	caller := newTestAccount(t, state)
+	otherChain := uint64(889)
+	sessionID := uint64(12)
+	pongSender := common.HexToAddress("0x7400000000000000000000000000000000000074")
+	pingReceiver := common.HexToAddress("0x7500000000000000000000000000000000000075")
+	payload := []byte("ping-to-remote")
+	reply := []byte("pong-reply")
+
+	tx := caller.SignPingTx(t, backend, 0, otherChain, pongSender, pingReceiver, sessionID, payload)
+
+	initialRoot := state.IntermediateRoot(false)
+	message := instanceproto.MailboxMessage{
+		MailboxMessageHeader: instanceproto.MailboxMessageHeader{
+			SourceChainID: compose.ChainID(otherChain),
+			DestChainID:   compose.ChainID(backend.ChainConfig().ChainID.Uint64()),
+			Sender:        composeAddressFromCommon(pongSender),
+			Receiver:      composeAddressFromCommon(pingPongContractAddr),
+			SessionID:     compose.SessionID(sessionID),
+			Label:         "PONG",
+		},
+		Data: reply,
+	}
+	request := instanceproto.SimulationRequest{
+		PutInboxMessages: []instanceproto.MailboxMessage{message},
+		Transactions:     [][]byte{tx},
+		Snapshot:         hashToComposeRoot(initialRoot),
+	}
+
+	missing, writes := runBundleSimulation(t, backend, state, header, request)
+	requireNoMissing(t, missing, "expected pong reply to satisfy ping")
+	if len(writes) != 1 {
+		t.Fatalf("expected ping write when pong satisfied, got %d", len(writes))
+	}
+	requireWriteMessage(t, writes[0], writeExpectation{
+		source:   backend.ChainConfig().ChainID.Uint64(),
+		dest:     otherChain,
+		session:  sessionID,
+		label:    "PING",
+		data:     payload,
+		receiver: pingReceiver,
+	}, "unexpected ping write when satisfied")
+	assertStateUnchanged(t, state, initialRoot)
+}
+
+func TestSimulateSCPBundlePongSatisfiedByPutInbox(t *testing.T) {
+	backend, stateFactory, _, header := setupSimulationTestBackend(t)
+	state := stateFactory()
+
+	caller := newTestAccount(t, state)
+	otherChain := uint64(890)
+	sessionID := uint64(13)
+	pingSender := common.HexToAddress("0x7600000000000000000000000000000000000076")
+	payload := []byte("pong-payload")
+	pingPayload := []byte("ping-from-remote")
+
+	tx := caller.SignPongTx(t, backend, 0, otherChain, pingSender, sessionID, payload)
+
+	initialRoot := state.IntermediateRoot(false)
+	message := instanceproto.MailboxMessage{
+		MailboxMessageHeader: instanceproto.MailboxMessageHeader{
+			SourceChainID: compose.ChainID(otherChain),
+			DestChainID:   compose.ChainID(backend.ChainConfig().ChainID.Uint64()),
+			Sender:        composeAddressFromCommon(pingSender),
+			Receiver:      composeAddressFromCommon(pingPongContractAddr),
+			SessionID:     compose.SessionID(sessionID),
+			Label:         "PING",
+		},
+		Data: pingPayload,
+	}
+	request := instanceproto.SimulationRequest{
+		PutInboxMessages: []instanceproto.MailboxMessage{message},
+		Transactions:     [][]byte{tx},
+		Snapshot:         hashToComposeRoot(initialRoot),
+	}
+
+	missing, writes := runBundleSimulation(t, backend, state, header, request)
+	requireNoMissing(t, missing, "expected inbound ping to satisfy pong")
+	if len(writes) != 1 {
+		t.Fatalf("expected single pong write, got %d", len(writes))
+	}
+	requireWriteMessage(t, writes[0], writeExpectation{
+		source:   backend.ChainConfig().ChainID.Uint64(),
+		dest:     otherChain,
+		session:  sessionID,
+		label:    "PONG",
+		data:     payload,
+		receiver: pingPongContractAddr,
+	}, "unexpected pong write when satisfied")
+	assertStateUnchanged(t, state, initialRoot)
+}
+
 // Tests a bundle with a putInbox message and a read that matches it.
 // No missing read should be reported.
 func TestSimulateSCPBundlePutInboxSatisfiedRead(t *testing.T) {
@@ -859,8 +1033,6 @@ func (c *testChainContext) Config() *params.ChainConfig {
 func setupSimulationTestBackend(t *testing.T) (*testAPIBackend, func() *state.StateDB, core.ChainContext, *types.Header) {
 	t.Helper()
 
-	mailboxAddr := common.HexToAddress("0x1000000000000000000000000000000000000011")
-
 	coordKey, err := crypto.GenerateKey()
 	if err != nil {
 		t.Fatalf("failed to generate coordinator key: %v", err)
@@ -875,10 +1047,13 @@ func setupSimulationTestBackend(t *testing.T) (*testAPIBackend, func() *state.St
 		}
 		bytecode, storage, abiInstance := LoadMailboxRuntimeForCoordinator(t, coordAddr)
 		mailboxABIParsed = abiInstance
-		stateDB.SetCode(mailboxAddr, bytecode)
+		stateDB.SetCode(mailboxContractAddr, bytecode)
 		for key, value := range storage {
-			stateDB.SetState(mailboxAddr, key, value)
+			stateDB.SetState(mailboxContractAddr, key, value)
 		}
+		pingCode, pingABI := LoadPingPongRuntime(t, mailboxContractAddr)
+		pingPongABIParsed = pingABI
+		stateDB.SetCode(pingPongContractAddr, pingCode)
 		gasBudget := uint256.NewInt(defaultPutInboxGas)
 		gasBudget.Mul(gasBudget, uint256.NewInt(20_000_000_000))
 		gasBudget.Mul(gasBudget, uint256.NewInt(10))
@@ -936,8 +1111,8 @@ func setupSimulationTestBackend(t *testing.T) (*testAPIBackend, func() *state.St
 	}
 	backend.eth.APIBackend = &backend.EthAPIBackend
 
-	backend.mailboxAddresses = []common.Address{mailboxAddr}
-	backend.mailboxByChainID = map[uint64]common.Address{chainCfg.ChainID.Uint64(): mailboxAddr}
+	backend.mailboxAddresses = []common.Address{mailboxContractAddr}
+	backend.mailboxByChainID = map[uint64]common.Address{chainCfg.ChainID.Uint64(): mailboxContractAddr}
 	backend.coordinatorAddr = coordAddr
 	backend.coordinatorKey = coordKey
 	backend.chainConfigOverride = &chainCfg
@@ -980,6 +1155,7 @@ const (
 	testAccountFundingWei = 20_000_000_000_000_000
 	defaultReadGasLimit   = 150_000
 	defaultWriteGasLimit  = defaultPutInboxGas
+	pingPongCallGasLimit  = defaultPutInboxGas
 )
 
 type testAccount struct {
@@ -1018,6 +1194,18 @@ func (a testAccount) SignWriteTx(t *testing.T, backend *testAPIBackend, nonce ui
 	t.Helper()
 	callData := encodeMailboxWriteCall(t, destChain, receiver, sessionID, label, payload)
 	return mustEncodeSignedTx(t, backend.ChainConfig().ChainID, a.key, nonce, backend.mailboxAddresses[0], callData, defaultWriteGasLimit)
+}
+
+func (a testAccount) SignPingTx(t *testing.T, backend *testAPIBackend, nonce uint64, otherChain uint64, pongSender, pingReceiver common.Address, sessionID uint64, payload []byte) []byte {
+	t.Helper()
+	callData := encodePingCall(t, otherChain, pongSender, pingReceiver, sessionID, payload)
+	return mustEncodeSignedTx(t, backend.ChainConfig().ChainID, a.key, nonce, pingPongContractAddr, callData, pingPongCallGasLimit)
+}
+
+func (a testAccount) SignPongTx(t *testing.T, backend *testAPIBackend, nonce uint64, otherChain uint64, pingSender common.Address, sessionID uint64, payload []byte) []byte {
+	t.Helper()
+	callData := encodePongCall(t, otherChain, pingSender, sessionID, payload)
+	return mustEncodeSignedTx(t, backend.ChainConfig().ChainID, a.key, nonce, pingPongContractAddr, callData, pingPongCallGasLimit)
 }
 
 func assertStateUnchanged(t *testing.T, state *state.StateDB, expected common.Hash) {
@@ -1156,6 +1344,43 @@ func encodeMailboxWriteCall(t *testing.T, destChain uint64, receiver common.Addr
 	)
 	if err != nil {
 		t.Fatalf("pack write calldata: %v", err)
+	}
+	return data
+}
+
+func encodePingCall(t *testing.T, otherChain uint64, pongSender, pingReceiver common.Address, sessionID uint64, payload []byte) []byte {
+	t.Helper()
+	if len(pingPongABIParsed.Methods) == 0 {
+		t.Fatalf("pingpong ABI not initialized")
+	}
+	data, err := pingPongABIParsed.Pack(
+		"ping",
+		new(big.Int).SetUint64(otherChain),
+		pongSender,
+		pingReceiver,
+		new(big.Int).SetUint64(sessionID),
+		payload,
+	)
+	if err != nil {
+		t.Fatalf("pack ping calldata: %v", err)
+	}
+	return data
+}
+
+func encodePongCall(t *testing.T, otherChain uint64, pingSender common.Address, sessionID uint64, payload []byte) []byte {
+	t.Helper()
+	if len(pingPongABIParsed.Methods) == 0 {
+		t.Fatalf("pingpong ABI not initialized")
+	}
+	data, err := pingPongABIParsed.Pack(
+		"pong",
+		new(big.Int).SetUint64(otherChain),
+		pingSender,
+		new(big.Int).SetUint64(sessionID),
+		payload,
+	)
+	if err != nil {
+		t.Fatalf("pack pong calldata: %v", err)
 	}
 	return data
 }
