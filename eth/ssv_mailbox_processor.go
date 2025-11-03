@@ -588,6 +588,15 @@ func matchCIRCToDependency(dep CrossRollupDependency, circ *rollupv1.CIRCMessage
 			return false
 		}
 	}
+	// Session ID must match when present in the CIRC message
+	if sid := circ.GetSessionId(); len(sid) > 0 {
+		if dep.SessionID == nil {
+			return false
+		}
+		if !bytes.Equal(sid, common.LeftPadBytes(dep.SessionID.Bytes(), 32)) {
+			return false
+		}
+	}
 	return true
 }
 

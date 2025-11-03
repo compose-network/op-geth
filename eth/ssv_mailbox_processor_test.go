@@ -3,6 +3,8 @@ package eth
 import (
 	"testing"
 
+	"math/big"
+
 	"github.com/ethereum/go-ethereum/common"
 	rollupv1 "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/proto/rollup/v1"
 )
@@ -55,5 +57,43 @@ func TestMatchCIRCToDependency_ReceiverMismatch(t *testing.T) {
 
 	if matchCIRCToDependency(dep, circ) {
 		t.Fatalf("expected matchCIRCToDependency to return false for receiver mismatch")
+	}
+}
+
+func TestMatchCIRCToDependency_SessionMatch(t *testing.T) {
+	dep := CrossRollupDependency{
+		Receiver:  common.HexToAddress("0x31c57E2910496e46Bb883EDeb1eB2bee8E3Ee82C"),
+		Label:     []byte("SEND"),
+		SessionID: big.NewInt(123456),
+	}
+
+	circ := &rollupv1.CIRCMessage{
+		Label:     "SEND",
+		Receiver:  [][]byte{dep.Receiver.Bytes()},
+		SessionId: common.LeftPadBytes(dep.SessionID.Bytes(), 32),
+		Data:      [][]byte{[]byte{0x01}},
+	}
+
+	if !matchCIRCToDependency(dep, circ) {
+		t.Fatalf("expected match when session matches")
+	}
+}
+
+func TestMatchCIRCToDependency_SessionMismatch(t *testing.T) {
+	dep := CrossRollupDependency{
+		Receiver:  common.HexToAddress("0x31c57E2910496e46Bb883EDeb1eB2bee8E3Ee82C"),
+		Label:     []byte("SEND"),
+		SessionID: big.NewInt(123456),
+	}
+
+	circ := &rollupv1.CIRCMessage{
+		Label:     "SEND",
+		Receiver:  [][]byte{dep.Receiver.Bytes()},
+		SessionId: common.LeftPadBytes(big.NewInt(654321).Bytes(), 32),
+		Data:      [][]byte{[]byte{0x01}},
+	}
+
+	if matchCIRCToDependency(dep, circ) {
+		t.Fatalf("expected no match when session differs")
 	}
 }
