@@ -2440,9 +2440,9 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 				xtID.Hex(),
 			)
 
-			// Send any ACK messages detected in re-simulation
+			// Send any new outbound messages detected in re-simulation
 			for _, outMsg := range newSimState.OutboundMessages {
-				log.Info("[SSV] Detected new ACK message in re-simulation",
+				log.Info("[SSV] Detected new outbound message in re-simulation",
 					"xtID", xtID.Hex(),
 					"srcChain", outMsg.SourceChainID,
 					"destChain", outMsg.DestChainID,
@@ -2450,14 +2450,14 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 					"label", string(outMsg.Label))
 
 				if err := mailboxProcessor.sendCIRCMessage(ctx, &outMsg, xtID); err != nil {
-					log.Error("[SSV] Failed to send ACK CIRC message", "error", err, "xtID", xtID.Hex())
+					log.Error("[SSV] Failed to send CIRC message", "error", err, "xtID", xtID.Hex())
 					continue
 				}
 			}
 
 			if len(newSimState.OutboundMessages) > 0 {
 				log.Info(
-					"[SSV] Successfully sent ACK CIRC messages after putInbox",
+					"[SSV] Successfully sent CIRC messages after putInbox",
 					"count",
 					len(newSimState.OutboundMessages),
 					"xtID",
