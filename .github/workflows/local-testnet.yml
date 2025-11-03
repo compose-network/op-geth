@@ -49,7 +49,7 @@ jobs:
           # Install make from source to user's local bin
           mkdir -p $HOME/.local/bin
           cd /tmp
-          wget http://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz
+          curl -L http://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz -o make-4.4.1.tar.gz
           tar -xzf make-4.4.1.tar.gz
           cd make-4.4.1
           ./configure --prefix=$HOME/.local
