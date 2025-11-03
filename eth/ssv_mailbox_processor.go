@@ -480,7 +480,7 @@ func (mp *MailboxProcessor) handleCrossRollupCoordination(
 	for _, dep := range simState.Dependencies {
 		sourceBytes := new(big.Int).SetUint64(dep.SourceChainID).Bytes()
 		sourceKey := spconsensus.ChainKeyBytes(sourceBytes)
-		circMsg, err := mp.waitForCIRCMessage(ctx, xtID, sourceKey)
+		circMsg, err := mp.waitForCIRCMessage(ctx, xtID, sourceKey, dep)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to wait for CIRC message: %w", err)
 		}
@@ -567,10 +567,35 @@ func (mp *MailboxProcessor) sendCIRCMessage(ctx context.Context, msg *CrossRollu
 	return nil
 }
 
+// matchCIRCToDependency returns true if the circ message can satisfy the given
+// mailbox dependency. We require label equality and (when present) receiver
+// address equality to avoid accidentally fulfilling a SEND read with an ACK
+// (or any other) payload.
+func matchCIRCToDependency(dep CrossRollupDependency, circ *rollupv1.CIRCMessage) bool {
+	if circ == nil {
+		return false
+	}
+	// Label must match exactly
+	if circ.GetLabel() != string(dep.Label) {
+		return false
+	}
+	// Receiver (destination contract) should match too when provided
+	if recs := circ.GetReceiver(); len(recs) > 0 {
+		if len(recs[0]) != common.AddressLength {
+			return false
+		}
+		if common.BytesToAddress(recs[0]) != dep.Receiver {
+			return false
+		}
+	}
+	return true
+}
+
 func (mp *MailboxProcessor) waitForCIRCMessage(
 	ctx context.Context,
 	xtID *rollupv1.XtID,
 	sourceChainID string,
+	expectedDep CrossRollupDependency,
 ) (*rollupv1.CIRCMessage, error) {
 	// Wait for CIRC message with a bounded timeout to respect SBCP slot cutover.
 	// Hardcoded for 20s slot with 0.90 seal cutover: use ~12s window.
@@ -621,12 +646,31 @@ func (mp *MailboxProcessor) waitForCIRCMessage(
 				continue // Keep waiting
 			}
 
-			log.Info("[SSV] Consumed CIRC message",
-				"from", sourceChainID,
-				"dataLen", len(circMsg.Data[0]),
-			)
+			// Check whether this CIRC matches the dependency we are fulfilling.
+			if matchCIRCToDependency(expectedDep, circMsg) {
+				log.Info("[SSV] Consumed matching CIRC message",
+					"from", sourceChainID,
+					"label", circMsg.GetLabel(),
+					"dataLen", func() int {
+						if len(circMsg.Data) == 0 {
+							return 0
+						}
+						return len(circMsg.Data[0])
+					}(),
+				)
+				return circMsg, nil
+			}
 
-			return circMsg, nil
+			// Not a match: re-queue the message and continue waiting within the timeout window.
+			// This prevents ACK (or other) messages from fulfilling a SEND read.
+			if err := backend.coordinator.Consensus().RecordCIRCMessage(circMsg); err != nil {
+				log.Warn("[SSV] Failed to re-queue non-matching CIRC message", "err", err)
+			} else {
+				log.Info("[SSV] Deferred non-matching CIRC message",
+					"from", sourceChainID,
+					"label", circMsg.GetLabel(),
+				)
+			}
 		}
 	}
 }
@@ -790,7 +834,7 @@ func (mp *MailboxProcessor) reSimulateForACKMessages(
 		return nil, fmt.Errorf("backend not available for re-simulation")
 	}
 
-	log.Info("[SSV] Re-simulating transaction for ACK detection", "txHash", tx.Hash().Hex(), "xtID", xtID.Hex())
+	log.Info("[SSV] Re-simulating transaction to detect new outbound mailbox writes", "txHash", tx.Hash().Hex(), "xtID", xtID.Hex())
 
 	// Re-simulate the transaction against pending state (which should include putInbox transactions)
 	blockNrOrHash := rpc.BlockNumberOrHashWithNumber(rpc.PendingBlockNumber)
@@ -810,7 +854,7 @@ func (mp *MailboxProcessor) reSimulateForACKMessages(
 
 	// Send any new outbound messages detected in re-simulation
 	for _, outMsg := range simState.OutboundMessages {
-		log.Info("[SSV] Detected new ACK message in re-simulation",
+		log.Info("[SSV] Detected new outbound message in re-simulation",
 			"xtID", xtID.Hex(),
 			"srcChain", outMsg.SourceChainID,
 			"destChain", outMsg.DestChainID,
@@ -826,7 +870,7 @@ func (mp *MailboxProcessor) reSimulateForACKMessages(
 	}
 
 	if len(newOutboundMsgs) > 0 {
-		log.Info("[SSV] Successfully sent ACK CIRC messages", "xtID", xtID.Hex(), "count", len(newOutboundMsgs))
+		log.Info("[SSV] Successfully sent CIRC messages in re-simulation", "xtID", xtID.Hex(), "count", len(newOutboundMsgs))
 	}
 	return newOutboundMsgs, nil
 }
