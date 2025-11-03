@@ -840,6 +840,255 @@ func TestSimulateSCPBundlePutInboxDifferentRead(t *testing.T) {
 	}
 }
 
+// Tests a bundle with two putInbox messages and two reads that match them,
+// in varying orders. No missing read should be reported.
+func TestSimulateSCPBundleMatchedReadsRegardlessOfOrder(t *testing.T) {
+	backend, stateFactory, _, header := setupSimulationTestBackend(t)
+
+	remoteA := common.HexToAddress("0x7000000000000000000000000000000000000070")
+	remoteB := common.HexToAddress("0x8000000000000000000000000000000000000080")
+
+	readerAKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("generate reader A key: %v", err)
+	}
+	readerA := crypto.PubkeyToAddress(readerAKey.PublicKey)
+
+	readerBKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("generate reader B key: %v", err)
+	}
+	readerB := crypto.PubkeyToAddress(readerBKey.PublicKey)
+
+	buildMessages := func(state *state.StateDB) ([]instanceproto.MailboxMessage, [][]byte) {
+		state.AddBalance(readerA, uint256.NewInt(5_000_000_000_000_000), tracing.BalanceChangeUnspecified)
+		state.SetNonce(readerA, 0, tracing.NonceChangeUnspecified)
+		state.AddBalance(readerB, uint256.NewInt(5_000_000_000_000_000), tracing.BalanceChangeUnspecified)
+		state.SetNonce(readerB, 0, tracing.NonceChangeUnspecified)
+
+		msgA := instanceproto.MailboxMessage{
+			MailboxMessageHeader: instanceproto.MailboxMessageHeader{
+				SourceChainID: compose.ChainID(501),
+				DestChainID:   compose.ChainID(backend.ChainConfig().ChainID.Uint64()),
+				Sender:        composeAddressFromCommon(remoteA),
+				Receiver:      composeAddressFromCommon(readerA),
+				SessionID:     compose.SessionID(41),
+				Label:         "read-A",
+			},
+			Data: []byte("payload-A"),
+		}
+		msgB := instanceproto.MailboxMessage{
+			MailboxMessageHeader: instanceproto.MailboxMessageHeader{
+				SourceChainID: compose.ChainID(502),
+				DestChainID:   compose.ChainID(backend.ChainConfig().ChainID.Uint64()),
+				Sender:        composeAddressFromCommon(remoteB),
+				Receiver:      composeAddressFromCommon(readerB),
+				SessionID:     compose.SessionID(42),
+				Label:         "read-B",
+			},
+			Data: []byte("payload-B"),
+		}
+
+		readATx := mustEncodeSignedTx(
+			t,
+			backend.ChainConfig().ChainID,
+			readerAKey,
+			0,
+			backend.mailboxAddresses[0],
+			encodeMailboxReadCall(t, 501, remoteA, 41, []byte("read-A")),
+			150_000,
+		)
+		readBTx := mustEncodeSignedTx(
+			t,
+			backend.ChainConfig().ChainID,
+			readerBKey,
+			0,
+			backend.mailboxAddresses[0],
+			encodeMailboxReadCall(t, 502, remoteB, 42, []byte("read-B")),
+			150_000,
+		)
+
+		return []instanceproto.MailboxMessage{msgA, msgB}, [][]byte{readATx, readBTx}
+	}
+
+	cases := []struct {
+		name      string
+		reorderMs func([]instanceproto.MailboxMessage) []instanceproto.MailboxMessage
+		reorderTx func([][]byte) [][]byte
+	}{
+		{
+			name: "matching order",
+			reorderMs: func(msgs []instanceproto.MailboxMessage) []instanceproto.MailboxMessage {
+				return msgs
+			},
+			reorderTx: func(txs [][]byte) [][]byte {
+				return txs
+			},
+		},
+		{
+			name: "reads reverse order",
+			reorderMs: func(msgs []instanceproto.MailboxMessage) []instanceproto.MailboxMessage {
+				return msgs
+			},
+			reorderTx: func(txs [][]byte) [][]byte {
+				return [][]byte{txs[1], txs[0]}
+			},
+		},
+		{
+			name: "putInbox reverse order",
+			reorderMs: func(msgs []instanceproto.MailboxMessage) []instanceproto.MailboxMessage {
+				return []instanceproto.MailboxMessage{msgs[1], msgs[0]}
+			},
+			reorderTx: func(txs [][]byte) [][]byte {
+				return txs
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			state := stateFactory()
+			msgs, txs := buildMessages(state)
+			initialRoot := state.IntermediateRoot(false)
+			request := instanceproto.SimulationRequest{
+				PutInboxMessages: tc.reorderMs(msgs),
+				Transactions:     tc.reorderTx(txs),
+				Snapshot:         hashToComposeRoot(initialRoot),
+			}
+
+			missing, writes := runBundleSimulation(t, backend, state, header, request)
+			if missing != nil {
+				t.Fatalf("unexpected missing mailbox header: %+v", *missing)
+			}
+			if len(writes) != 0 {
+				t.Fatalf("expected no outbound writes, got %d", len(writes))
+			}
+			if after := state.IntermediateRoot(false); after != initialRoot {
+				t.Fatalf("state mutated during simulation")
+			}
+		})
+	}
+}
+
+// Tests a bundle with a read that misses, followed by a write operation.
+// The simulation should stop at the first read miss, and the write operation should not be applied.
+func TestSimulateSCPBundleStopsBeforeWritesOnMissingRead(t *testing.T) {
+	backend, stateFactory, _, header := setupSimulationTestBackend(t)
+	state := stateFactory()
+
+	readerAKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("generate reader A key: %v", err)
+	}
+	readerA := crypto.PubkeyToAddress(readerAKey.PublicKey)
+	state.AddBalance(readerA, uint256.NewInt(5_000_000_000_000_000), tracing.BalanceChangeUnspecified)
+	state.SetNonce(readerA, 0, tracing.NonceChangeUnspecified)
+
+	writerKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("generate writer key: %v", err)
+	}
+	writerAddr := crypto.PubkeyToAddress(writerKey.PublicKey)
+	state.AddBalance(writerAddr, uint256.NewInt(5_000_000_000_000_000), tracing.BalanceChangeUnspecified)
+	state.SetNonce(writerAddr, 0, tracing.NonceChangeUnspecified)
+
+	// PutInbox message that does not satisfy the first read
+	putInboxMsg := instanceproto.MailboxMessage{
+		MailboxMessageHeader: instanceproto.MailboxMessageHeader{
+			SourceChainID: compose.ChainID(777),
+			DestChainID:   compose.ChainID(backend.ChainConfig().ChainID.Uint64()),
+			Sender:        composeAddressFromCommon(common.HexToAddress("0x9100000000000000000000000000000000000091")),
+			Receiver:      composeAddressFromCommon(readerA),
+			SessionID:     compose.SessionID(55),
+			Label:         "read-A",
+		},
+		Data: []byte("payload-A"),
+	}
+
+	// Read that will miss
+	readMissing := mustEncodeSignedTx(
+		t,
+		backend.ChainConfig().ChainID,
+		readerAKey,
+		0,
+		backend.mailboxAddresses[0],
+		encodeMailboxReadCall(t, 888, common.HexToAddress("0x9200000000000000000000000000000000000092"), 10, []byte("missing")),
+		150_000,
+	)
+
+	// Write that should not be applied
+	writeTx := mustEncodeSignedTx(
+		t,
+		backend.ChainConfig().ChainID,
+		writerKey,
+		0,
+		backend.mailboxAddresses[0],
+		encodeMailboxWriteCall(t, 999, common.HexToAddress("0x9300000000000000000000000000000000000093"), 66, []byte("write-label"), []byte("write-payload")),
+		200_000,
+	)
+
+	// Read that would be fulfilled if it were reached
+	readFulfilled := mustEncodeSignedTx(
+		t,
+		backend.ChainConfig().ChainID,
+		readerAKey,
+		1,
+		backend.mailboxAddresses[0],
+		encodeMailboxReadCall(t, 777, common.HexToAddress("0x9100000000000000000000000000000000000091"), 55, []byte("read-A")),
+		150_000,
+	)
+
+	// PutInbox (A). Transactions (ReadB, write, ReadA)
+	// Expect to stop at ReadB missing. Neither write nor ReadA should be applied.
+	initialRoot := state.IntermediateRoot(false)
+	request := instanceproto.SimulationRequest{
+		PutInboxMessages: []instanceproto.MailboxMessage{putInboxMsg},
+		Transactions:     [][]byte{readMissing, writeTx, readFulfilled},
+		Snapshot:         hashToComposeRoot(initialRoot),
+	}
+
+	missing, writes := runBundleSimulation(t, backend, state, header, request)
+	if missing == nil {
+		t.Fatalf("expected missing mailbox header from first read")
+	}
+	if missing.Label != "missing" {
+		t.Fatalf("unexpected missing label: %s", missing.Label)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("expected no writes when first tx fails, got %d", len(writes))
+	}
+	if nonce := state.GetNonce(writerAddr); nonce != 0 {
+		t.Fatalf("writer nonce mutated despite rollback")
+	}
+	if after := state.IntermediateRoot(false); after != initialRoot {
+		t.Fatalf("state mutated during simulation")
+	}
+}
+
+// Tests that a simulation with a snapshot that does not match the initial state root returns an error.
+func TestSimulateSCPBundleSnapshotMismatchError(t *testing.T) {
+	backend, stateFactory, _, header := setupSimulationTestBackend(t)
+	state := stateFactory()
+	initialRoot := state.IntermediateRoot(false)
+
+	var wrong compose.StateRoot
+	copy(wrong[:], initialRoot[:])
+	wrong[0] ^= 0xFF
+
+	request := instanceproto.SimulationRequest{
+		Snapshot: wrong,
+	}
+
+	_, _, err := runBundleSimulationWithError(t, backend, state, header, request)
+	if err == nil {
+		t.Fatalf("expected snapshot mismatch error")
+	}
+	if !strings.Contains(err.Error(), "state root mismatch") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 type testAPIBackend struct {
 	EthAPIBackend
 	chainCfg   *params.ChainConfig
@@ -906,6 +1155,7 @@ func setupSimulationTestBackend(t *testing.T) (*testAPIBackend, func() *state.St
 		stateDB.SetCode(mailboxAddr, []byte{0x60, 0x00, 0x60, 0x00, 0xf3})
 		gasBudget := uint256.NewInt(defaultPutInboxGas)
 		gasBudget.Mul(gasBudget, uint256.NewInt(20_000_000_000))
+		gasBudget.Mul(gasBudget, uint256.NewInt(10))
 		stateDB.AddBalance(coordAddr, gasBudget, tracing.BalanceChangeUnspecified)
 		stateDB.Finalise(true)
 		return stateDB
@@ -973,6 +1223,15 @@ func setupSimulationTestBackend(t *testing.T) (*testAPIBackend, func() *state.St
 	return backend, stateFactory, chainCtx, header
 }
 
+func runBundleSimulation(t *testing.T, backend *testAPIBackend, stateDB *state.StateDB, header *types.Header, request instanceproto.SimulationRequest) (*instanceproto.MailboxMessageHeader, []instanceproto.MailboxMessage) {
+	t.Helper()
+	missing, writes, err := runBundleSimulationWithError(t, backend, stateDB, header, request)
+	if err != nil {
+		t.Fatalf("simulateSCPBundle returned error: %v", err)
+	}
+	return missing, writes
+}
+
 func setStateOverrides(backend *testAPIBackend, stateDB *state.StateDB, header *types.Header) {
 	backend.stateByNumberOverride = func(context.Context, rpc.BlockNumber) (*state.StateDB, *types.Header, error) {
 		return stateDB, header, nil
@@ -982,14 +1241,10 @@ func setStateOverrides(backend *testAPIBackend, stateDB *state.StateDB, header *
 	}
 }
 
-func runBundleSimulation(t *testing.T, backend *testAPIBackend, stateDB *state.StateDB, header *types.Header, request instanceproto.SimulationRequest) (*instanceproto.MailboxMessageHeader, []instanceproto.MailboxMessage) {
+func runBundleSimulationWithError(t *testing.T, backend *testAPIBackend, stateDB *state.StateDB, header *types.Header, request instanceproto.SimulationRequest) (*instanceproto.MailboxMessageHeader, []instanceproto.MailboxMessage, error) {
 	t.Helper()
 	setStateOverrides(backend, stateDB, header)
-	missing, writes, err := backend.simulateSCPBundle(request)
-	if err != nil {
-		t.Fatalf("simulateSCPBundle returned error: %v", err)
-	}
-	return missing, writes
+	return backend.simulateSCPBundle(request)
 }
 
 func hashToComposeRoot(h common.Hash) compose.StateRoot {
