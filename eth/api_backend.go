@@ -41,6 +41,7 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus"
@@ -102,6 +103,8 @@ type EthAPIBackend struct {
 	committedTxsMutex sync.RWMutex
 	committedTxHashes map[common.Hash]bool // Hashes of txs that were committed in blocks during this slot
 }
+
+const defaultPutInboxGas = 500000
 
 type sequencerTxKind int
 
@@ -1631,6 +1634,354 @@ func (b *EthAPIBackend) SetSequencerCoordinator(coord xsequencer.Coordinator, sp
 		// Set miner notifier and start
 		//b.coordinator.SetMinerNotifier(b)
 	}
+}
+
+// simulateSCPBundle performs the mailbox-aware EVM simulation required by the SCP instance
+// sequencer. The simulation proceeds in three phases:
+//  1. Apply all provided mailbox messages by invoking the local mailbox contract's putInbox
+//     entrypoint. This reproduces the contract state that would exist if the messages had
+//     been relayed on-chain prior to executing the bundle.
+//  2. Execute the supplied transactions sequentially while tracing mailbox read/write calls.
+//     Execution stops early if a mailbox read targets this chain without an available message,
+//     returning the header that must be fulfilled before the bundle can succeed.
+//  3. Collect any outbound mailbox writes emitted during successful execution. Regardless of
+//     the outcome, all state changes are reverted before returning so the simulation has no
+//     side effects.
+func (b *EthAPIBackend) simulateSCPBundle(request instanceproto.SimulationRequest) (*instanceproto.MailboxMessageHeader, []instanceproto.MailboxMessage, error) {
+	ctx := context.Background()
+
+	// Gets state DB and header of current pending block
+	stateDB, header, err := b.StateAndHeaderByNumberOrHash(ctx, rpc.BlockNumberOrHashWithNumber(rpc.PendingBlockNumber))
+	if err != nil {
+		return nil, nil, fmt.Errorf("state lookup failed: %w", err)
+	}
+
+	// Finalize any prior state changes (removing dirty state)
+	stateDB.Finalise(true)
+	rootSnapshot := stateDB.Snapshot()
+	defer stateDB.RevertToSnapshot(rootSnapshot)
+
+	// The simulation request is made with a requirement on the state root it should be executed on top.
+	// If there is a mismatch, abort early.
+	if request.Snapshot != (compose.StateRoot{}) {
+		expected := composeRootToHash(request.Snapshot)
+		current := stateDB.IntermediateRoot(false)
+		if current != expected {
+			return nil, nil, fmt.Errorf("state root mismatch: pending=%s expected=%s", current.Hex(), expected.Hex())
+		}
+	}
+
+	// Retrieve mailbox addresses
+	mailboxAddresses := b.GetMailboxAddresses()
+	if len(mailboxAddresses) == 0 {
+		return nil, nil, errors.New("mailbox addresses not configured")
+	}
+
+	// Produce the block and VM contexts
+	vmBaseConfig := vm.Config{}
+	if cfg := b.eth.blockchain.GetVMConfig(); cfg != nil {
+		vmBaseConfig = *cfg
+	}
+	vmBaseConfig.EnablePreimageRecording = true
+	blockContext := core.NewEVMBlockContext(header, b.eth.blockchain, nil, b.ChainConfig(), stateDB)
+
+	// Run putInbox transactions
+	fulfilled := make(map[string]struct{}, len(request.PutInboxMessages))
+	for _, msg := range request.PutInboxMessages {
+		if err := b.applyPutInboxMessage(blockContext, vmBaseConfig, stateDB, msg); err != nil {
+			return nil, nil, fmt.Errorf("apply putInbox message: %w", err)
+		}
+		fulfilled[mailboxHeaderKey(msg.MailboxMessageHeader)] = struct{}{}
+	}
+
+	localChainID := b.ChainConfig().ChainID.Uint64()
+	processor := &MailboxProcessor{
+		chainID:          localChainID,
+		mailboxAddresses: mailboxAddresses,
+	}
+
+	signer := types.MakeSigner(b.ChainConfig(), header.Number, header.Time)
+	writeAccumulator := make([]instanceproto.MailboxMessage, 0)
+
+	for idx, payload := range request.Transactions {
+		if len(payload) == 0 {
+			continue
+		}
+
+		tx := new(types.Transaction)
+		if err := tx.UnmarshalBinary(payload); err != nil {
+			return nil, nil, fmt.Errorf("decode transaction %d: %w", idx, err)
+		}
+
+		txSnapshot := stateDB.Snapshot()
+
+		tracer := native.NewSSVTracer(mailboxAddresses)
+		vmConfig := vmBaseConfig
+		vmConfig.Tracer = tracer.Hooks()
+
+		evm := vm.NewEVM(blockContext, stateDB, b.ChainConfig(), vmConfig)
+
+		msg, err := core.TransactionToMessage(tx, signer, header.BaseFee)
+		if err != nil {
+			stateDB.RevertToSnapshot(txSnapshot)
+			return nil, nil, fmt.Errorf("build message for tx %d: %w", idx, err)
+		}
+
+		stateDB.SetTxContext(tx.Hash(), stateDB.TxIndex()+1)
+		gasPool := new(core.GasPool)
+		gasPool.AddGas(header.GasLimit)
+
+		execResult, execErr := core.ApplyMessage(evm, msg, gasPool)
+		traceResult := tracer.GetTraceResult()
+		if execResult != nil {
+			traceResult.ExecutionResult = execResult
+		} else {
+			traceResult.ExecutionResult = &core.ExecutionResult{Err: execErr}
+		}
+
+		missing, writes, analyzeErr := b.analyzeMailboxTrace(processor, traceResult, fulfilled)
+		if analyzeErr != nil {
+			stateDB.RevertToSnapshot(txSnapshot)
+			return nil, nil, fmt.Errorf("analyze tx %d: %w", idx, analyzeErr)
+		}
+
+		if missing != nil {
+			stateDB.RevertToSnapshot(txSnapshot)
+			return missing, nil, nil
+		}
+
+		if execErr != nil {
+			stateDB.RevertToSnapshot(txSnapshot)
+			return nil, nil, fmt.Errorf("transaction %d failed: %w", idx, execErr)
+		}
+		if execResult != nil && execResult.Failed() {
+			stateDB.RevertToSnapshot(txSnapshot)
+			return nil, nil, fmt.Errorf("transaction %d reverted", idx)
+		}
+
+		stateDB.Finalise(true)
+		writeAccumulator = append(writeAccumulator, writes...)
+	}
+
+	return nil, writeAccumulator, nil
+}
+
+func (b *EthAPIBackend) applyPutInboxMessage(blockCtx vm.BlockContext, baseVMConfig vm.Config, stateDB *state.StateDB, msg instanceproto.MailboxMessage) error {
+	// Get mailbox address from local chain
+	mailboxAddr := b.GetMailboxAddressFromChainID(b.ChainConfig().ChainID.Uint64())
+	if (mailboxAddr == common.Address{}) {
+		return errors.New("mailbox address not configured for local chain")
+	}
+
+	// Produce call data for putInbox invocation
+	callData, err := buildPutInboxCalldata(msg)
+	if err != nil {
+		return fmt.Errorf("encode putInbox call: %w", err)
+	}
+
+	// Prepare EVM to execute putInbox
+	vmConfig := baseVMConfig
+	vmConfig.Tracer = nil
+	evm := vm.NewEVM(blockCtx, stateDB, b.ChainConfig(), vmConfig)
+
+	gasPool := new(core.GasPool)
+	gasPool.AddGas(blockCtx.GasLimit)
+
+	if (b.coordinatorAddr == common.Address{}) {
+		return errors.New("coordinator address not configured")
+	}
+	if b.coordinatorKey == nil {
+		return errors.New("coordinator key not configured")
+	}
+
+	nonce := stateDB.GetNonce(b.coordinatorAddr)
+
+	txData := &types.DynamicFeeTx{
+		ChainID:   b.ChainConfig().ChainID,
+		Nonce:     nonce,
+		GasTipCap: big.NewInt(1_000_000_000),
+		GasFeeCap: big.NewInt(20_000_000_000),
+		Gas:       defaultPutInboxGas,
+		To:        &mailboxAddr,
+		Value:     big.NewInt(0),
+		Data:      callData,
+	}
+
+	tx := types.NewTx(txData)
+	signedTx, err := types.SignTx(tx, types.NewLondonSigner(b.ChainConfig().ChainID), b.coordinatorKey)
+	if err != nil {
+		return fmt.Errorf("sign putInbox tx: %w", err)
+	}
+
+	signer := types.MakeSigner(b.ChainConfig(), blockCtx.BlockNumber, blockCtx.Time)
+	message, err := core.TransactionToMessage(signedTx, signer, blockCtx.BaseFee)
+	if err != nil {
+		return fmt.Errorf("convert putInbox tx to message: %w", err)
+	}
+
+	stateDB.SetTxContext(signedTx.Hash(), stateDB.TxIndex()+1)
+
+	result, err := core.ApplyMessage(evm, message, gasPool)
+	if err != nil {
+		return fmt.Errorf("putInbox execution failed: %w", err)
+	}
+	if result != nil && result.Failed() {
+		return fmt.Errorf("putInbox execution reverted")
+	}
+
+	stateDB.Finalise(true)
+	return nil
+}
+
+func (b *EthAPIBackend) analyzeMailboxTrace(mp *MailboxProcessor, trace *ssv.SSVTraceResult, fulfilled map[string]struct{}) (*instanceproto.MailboxMessageHeader, []instanceproto.MailboxMessage, error) {
+	writes := make([]instanceproto.MailboxMessage, 0)
+	var missing *instanceproto.MailboxMessageHeader
+
+	for _, op := range trace.Operations {
+		if !mp.isMailboxAddress(op.Address) {
+			continue
+		}
+		if op.Type != vm.CALL && op.Type != vm.STATICCALL {
+			continue
+		}
+		if len(op.CallData) < 4 {
+			continue
+		}
+
+		call, err := mp.parseMailboxCall(op.CallData)
+		if err != nil {
+			log.Debug("[SSV] Unable to parse mailbox call during simulation", "err", err)
+			continue
+		}
+
+		if call.IsRead && awaitRead(call, mp.chainID) {
+			header, err := buildReadHeader(call, op.From)
+			if err != nil {
+				return nil, nil, err
+			}
+			key := mailboxHeaderKey(*header)
+			if _, ok := fulfilled[key]; ok {
+				delete(fulfilled, key)
+				continue
+			}
+			if missing == nil {
+				temp := *header
+				missing = &temp
+			}
+			continue
+		}
+
+		if call.IsWrite && mustWrite(call, mp.chainID) {
+			message, err := buildWriteMessage(call, op.From)
+			if err != nil {
+				return nil, nil, err
+			}
+			writes = append(writes, message)
+		}
+	}
+
+	if missing != nil {
+		return missing, nil, nil
+	}
+
+	return nil, writes, nil
+}
+
+func buildPutInboxCalldata(msg instanceproto.MailboxMessage) ([]byte, error) {
+	parsedABI, err := abi.JSON(strings.NewReader(mailboxABI))
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := parsedABI.Pack(
+		"putInbox",
+		new(big.Int).SetUint64(uint64(msg.SourceChainID)),
+		commonAddressFromCompose(msg.Sender),
+		commonAddressFromCompose(msg.Receiver),
+		new(big.Int).SetUint64(uint64(msg.SessionID)),
+		[]byte(msg.Label),
+		msg.Data,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func buildReadHeader(call *MailboxCall, receiver common.Address) (*instanceproto.MailboxMessageHeader, error) {
+	if call.ChainSrc == nil || !call.ChainSrc.IsUint64() {
+		return nil, fmt.Errorf("invalid source chain id in read call")
+	}
+	if call.ChainDest == nil || !call.ChainDest.IsUint64() {
+		return nil, fmt.Errorf("invalid destination chain id in read call")
+	}
+	if call.SessionId == nil || !call.SessionId.IsUint64() {
+		return nil, fmt.Errorf("invalid session id in read call")
+	}
+
+	return &instanceproto.MailboxMessageHeader{
+		SourceChainID: compose.ChainID(call.ChainSrc.Uint64()),
+		DestChainID:   compose.ChainID(call.ChainDest.Uint64()),
+		Sender:        composeAddressFromCommon(call.Sender),
+		Receiver:      composeAddressFromCommon(receiver),
+		SessionID:     compose.SessionID(call.SessionId.Uint64()),
+		Label:         string(call.Label),
+	}, nil
+}
+
+func buildWriteMessage(call *MailboxCall, sender common.Address) (instanceproto.MailboxMessage, error) {
+	if call.ChainSrc == nil || !call.ChainSrc.IsUint64() {
+		return instanceproto.MailboxMessage{}, fmt.Errorf("invalid source chain id in write call")
+	}
+	if call.ChainDest == nil || !call.ChainDest.IsUint64() {
+		return instanceproto.MailboxMessage{}, fmt.Errorf("invalid destination chain id in write call")
+	}
+	if call.SessionId == nil || !call.SessionId.IsUint64() {
+		return instanceproto.MailboxMessage{}, fmt.Errorf("invalid session id in write call")
+	}
+
+	header := instanceproto.MailboxMessageHeader{
+		SourceChainID: compose.ChainID(call.ChainSrc.Uint64()),
+		DestChainID:   compose.ChainID(call.ChainDest.Uint64()),
+		Sender:        composeAddressFromCommon(sender),
+		Receiver:      composeAddressFromCommon(call.Receiver),
+		SessionID:     compose.SessionID(call.SessionId.Uint64()),
+		Label:         string(call.Label),
+	}
+
+	data := append([]byte(nil), call.Data...)
+
+	return instanceproto.MailboxMessage{
+		MailboxMessageHeader: header,
+		Data:                 data,
+	}, nil
+}
+
+func mailboxHeaderKey(header instanceproto.MailboxMessageHeader) string {
+	return fmt.Sprintf("%d|%d|%x|%x|%d|%s",
+		header.SourceChainID,
+		header.DestChainID,
+		header.Sender[:],
+		header.Receiver[:],
+		header.SessionID,
+		header.Label,
+	)
+}
+
+func composeRootToHash(root compose.StateRoot) common.Hash {
+	var h common.Hash
+	copy(h[:], root[:])
+	return h
+}
+
+func composeAddressFromCommon(addr common.Address) compose.EthAddress {
+	var out compose.EthAddress
+	copy(out[:], addr.Bytes())
+	return out
+}
+
+func commonAddressFromCompose(addr compose.EthAddress) common.Address {
+	return common.BytesToAddress(addr[:])
 }
 
 // NotifySlotStart notifies the backend when a new SBCP slot begins.

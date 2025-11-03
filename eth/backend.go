@@ -60,6 +60,7 @@ import (
 	"github.com/ethereum/go-ethereum/internal/sequencerapi"
 	"github.com/ethereum/go-ethereum/internal/shutdowncheck"
 	"github.com/ethereum/go-ethereum/internal/version"
+	"github.com/ethereum/go-ethereum/internal/xsimulation"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/miner"
 	"github.com/ethereum/go-ethereum/node"
@@ -459,6 +460,14 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	eth.APIBackend.sequencerAddress = crypto.PubkeyToAddress(stack.SequencerKey().PublicKey)
 	eth.APIBackend.coordinatorKey = stack.CoordinatorKey()
 	eth.APIBackend.coordinatorAddr = crypto.PubkeyToAddress(stack.CoordinatorKey().PublicKey)
+
+	if simEngine := stack.SimulationEngine(); simEngine != nil {
+		if setter, ok := simEngine.(interface {
+			SetSimulator(xsimulation.SimulatorFunc)
+		}); ok {
+			setter.SetSimulator(eth.APIBackend.simulateSCPBundle)
+		}
+	}
 
 	if eth.APIBackend.coordinator != nil && eth.APIBackend.spClient != nil {
 		eth.APIBackend.SetSequencerCoordinator(eth.APIBackend.coordinator, eth.APIBackend.spClient)

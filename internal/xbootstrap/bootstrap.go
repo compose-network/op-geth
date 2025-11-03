@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"github.com/compose-network/specs/compose"
 	sbcpproto "github.com/compose-network/specs/compose/proto"
+	scpproto "github.com/compose-network/specs/compose/scp"
 	"github.com/ethereum/go-ethereum/internal/xconsensus"
-	"github.com/ethereum/go-ethereum/internal/xconsensus/instanceproto"
+	instancecoord "github.com/ethereum/go-ethereum/internal/xconsensus/instanceproto"
 	"github.com/ethereum/go-ethereum/internal/xnetwork"
 	"github.com/ethereum/go-ethereum/internal/xsimulation"
 	xsequencer "github.com/ethereum/go-ethereum/internal/xsuperblock/sequencer"
@@ -60,6 +61,8 @@ type Runtime struct {
 	P2PServer xtransport.Server
 	// Peers is a map of hex chainID key to peer client.
 	Peers map[string]xtransport.Client
+	// SimulationEngine drives SCP execution on this node.
+	SimulationEngine scpproto.ExecutionEngine
 
 	log zerolog.Logger
 	cfg Config
@@ -78,9 +81,9 @@ func Setup(cfg Config) (*Runtime, error) {
 	}
 
 	periodSequencer := sbcp.NewSequencer(NewSimpleProver(), 0, 1, sbcp.SettledState{}, log)
-	simulationEngine := xsimulation.NewSimulationEngine()
+	simulationEngine := xsimulation.NewSimulationEngine(localChainID)
 	sequencerNetwork := xnetwork.NewSequencerNetwork(context.Background(), localChainID, log)
-	instanceSequencer := instanceproto.NewSequencer(simulationEngine, sequencerNetwork, log)
+	instanceSequencer := instancecoord.NewSequencer(simulationEngine, sequencerNetwork, log)
 
 	seqCoord, spClient := setupSequencerCoordinator(cfg, periodSequencer, instanceSequencer, log)
 
@@ -89,12 +92,13 @@ func Setup(cfg Config) (*Runtime, error) {
 	peers := setupP2PClients(cfg, log)
 
 	rt := &Runtime{
-		Coordinator: seqCoord,
-		SPClient:    spClient,
-		P2PServer:   p2pSrv,
-		Peers:       peers,
-		log:         log,
-		cfg:         cfg,
+		Coordinator:      seqCoord,
+		SPClient:         spClient,
+		P2PServer:        p2pSrv,
+		Peers:            peers,
+		SimulationEngine: simulationEngine,
+		log:              log,
+		cfg:              cfg,
 	}
 
 	sequencerNetwork.SetVoteSender(func(ctx context.Context, instanceID compose.InstanceID, chainID compose.ChainID, vote bool) error {
@@ -123,7 +127,7 @@ func Setup(cfg Config) (*Runtime, error) {
 	return rt, nil
 }
 
-func setupSequencerCoordinator(cfg Config, periodSequencer sbcp.Sequencer, instanceSequencer instanceproto.Sequencer, log zerolog.Logger) (*xsequencer.SequencerCoordinator, xtransport.Client) {
+func setupSequencerCoordinator(cfg Config, periodSequencer sbcp.Sequencer, instanceSequencer instancecoord.Sequencer, log zerolog.Logger) (*xsequencer.SequencerCoordinator, xtransport.Client) {
 	// SP client
 	spCfg := tcp.DefaultClientConfig()
 	if cfg.SPClientConfig != nil {

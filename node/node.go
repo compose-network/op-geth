@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	instanceproto "github.com/compose-network/specs/compose/scp"
 	"github.com/ethereum/go-ethereum/internal/xauth"
 	"github.com/ethereum/go-ethereum/internal/xbootstrap"
 	"github.com/ethereum/go-ethereum/internal/xconsensus"
@@ -939,6 +940,16 @@ func (n *Node) SPClient() xtransport.Client {
 	defer n.lock.Unlock()
 
 	return n.spClient
+}
+
+func (n *Node) SimulationEngine() instanceproto.ExecutionEngine {
+	n.lock.Lock()
+	defer n.lock.Unlock()
+
+	if n.sequencerRuntime != nil {
+		return n.sequencerRuntime.SimulationEngine
+	}
+	return nil
 }
 
 func (n *Node) Coordinator() xsequencer.Coordinator {
