@@ -363,8 +363,6 @@ func (sc *SequencerCoordinator) handleStartSC(
 	if lastSeq, ok := sc.scpIntegration.GetLastDecidedSequenceNumber(); ok {
 		requiredSeq = lastSeq + 1
 	}
-	// TODO startSC.XtSequenceNumber doesn't need to be prev+1
-	// check should be: startSC.XtSequenceNumber > next (= last+1)
 	if startSC.XtSequenceNumber != requiredSeq {
 		sc.log.Warn().
 			Uint64("got_seq", startSC.XtSequenceNumber).
@@ -397,9 +395,6 @@ func (sc *SequencerCoordinator) handleStartSC(
 	// Extract our transactions
 	myTxs := sc.extractMyTransactions(startSC.XtRequest)
 
-	// TODO: set default vote result to be false
-	// if len(myTxs) == 0, set to true
-	// but if sc.callbacks.SimulateAndVote != nil, set to false
 	var voteResult = true
 
 	if sc.callbacks.SimulateAndVote != nil && len(myTxs) > 0 {
@@ -797,13 +792,29 @@ func (sc *SequencerCoordinator) handleConsensusDecision(ctx context.Context, xtI
 		}
 	}
 
-	// If we returned to Building-Free and have queued StartSCs, process the next one
+	// After SCP decision completes, sequencer returns to Building-Free where it can accept
+	// either RequestSeal (slot end) or additional StartSC messages for queued XTs.
+	// Protocol maintains Building-Free state regardless of decision outcome (commit/abort).
+	if sc.stateMachine.GetCurrentState() == StateBuildingLocked {
+		reason := fmt.Sprintf("processed XT decision=%v", decision)
+		if err := sc.stateMachine.TransitionTo(StateBuildingFree, sc.currentSlot, reason); err != nil {
+			sc.log.Error().Err(err).
+				Str("xt_id", xtID.Hex()).
+				Bool("decision", decision).
+				Msg("Failed to transition to Building-Free after consensus decision")
+			return err
+		}
+	}
+
+	// Process next queued StartSC if we're in Building-Free
 	if sc.stateMachine.GetCurrentState() == StateBuildingFree && len(sc.pendingStartSCs) > 0 {
 		next := sc.pendingStartSCs[0]
 		sc.pendingStartSCs = sc.pendingStartSCs[1:]
 		sc.log.Info().
 			Int("remaining", len(sc.pendingStartSCs)).
 			Uint64("slot", sc.currentSlot).
+			Str("xt_id", xtID.Hex()).
+			Bool("prev_decision", decision).
 			Msg("Starting next queued StartSC after decision")
 		// Drop lock while invoking handler to avoid deadlocks and allow nested transitions
 		sc.mu.Unlock()
