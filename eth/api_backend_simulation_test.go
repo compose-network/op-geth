@@ -512,6 +512,42 @@ func TestSimulateSCPBundleMultipleWrites(t *testing.T) {
 	assertStateUnchanged(t, baseState, initialRoot)
 }
 
+// Tests a main transaction that raises an error.
+// For doing that, we use two writes (as main txs), which derive the same mailbox key,
+// causing an error in the solidity functino.
+func TestSimulateSCPBundleDuplicateWritesError(t *testing.T) {
+	backend, stateFactory, _, header := setupSimulationTestBackend(t)
+	state := stateFactory()
+
+	writer := newTestAccount(t, state)
+	destChain := uint64(404)
+	sessionID := uint64(1234)
+	label := "duplicate-write"
+	receiver := common.HexToAddress("0xdead00000000000000000000000000000000beef")
+	payload := []byte("payload")
+
+	writeOne := writer.SignWriteTx(t, backend, 0, destChain, receiver, sessionID, label, payload)
+	writeTwo := writer.SignWriteTx(t, backend, 1, destChain, receiver, sessionID, label, payload)
+
+	initialRoot := state.IntermediateRoot(false)
+	request := instanceproto.SimulationRequest{
+		Transactions: [][]byte{writeOne, writeTwo},
+		Snapshot:     hashToComposeRoot(initialRoot),
+	}
+
+	missing, writes, err := runBundleSimulationWithError(t, backend, state, header, request)
+	if err == nil || !strings.Contains(err.Error(), "transaction 1 reverted") {
+		t.Fatalf("expected duplicate write to revert, got missing=%v writes=%v err=%v", missing, writes, err)
+	}
+	if missing != nil {
+		t.Fatalf("unexpected missing mailbox header: %+v", *missing)
+	}
+	if writes != nil {
+		t.Fatalf("expected no outbound writes when bundle errors, got %d", len(writes))
+	}
+	assertStateUnchanged(t, state, initialRoot)
+}
+
 // Tests a bundle with a putInbox message and a read that matches it.
 // No missing read should be reported.
 func TestSimulateSCPBundlePutInboxSatisfiedRead(t *testing.T) {
