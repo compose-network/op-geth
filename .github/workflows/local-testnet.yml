@@ -22,7 +22,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: '1.25'
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
@@ -72,6 +72,10 @@ jobs:
           docker version
           docker buildx version
           docker compose version
+          pwd
+          ls -lha
+          ls -lha ../
+          exit 1
 
       - name: Run local testnet
         working-directory: local-testnet
