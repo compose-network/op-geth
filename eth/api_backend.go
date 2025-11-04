@@ -1178,25 +1178,38 @@ func (b *EthAPIBackend) validateSequencerTransaction(tx *types.Transaction) erro
 // OnBlockBuildingStart is called when block building starts
 // SSV
 func (b *EthAPIBackend) OnBlockBuildingStart(ctx context.Context) error {
+	slot := uint64(0)
+	state := "unknown"
 	if b.coordinator != nil {
-		slot := b.coordinator.GetCurrentSlot()
-		state := b.coordinator.GetState().String()
+		slot = b.coordinator.GetCurrentSlot()
+		state = b.coordinator.GetState().String()
+	}
 
-		var putCount, origCount, total int
-		if b.txStager != nil {
-			stats := b.txStager.GetStats()
-			putCount = stats["staged_putInbox"] + stats["in_block_putInbox"]
-			origCount = stats["staged_original"] + stats["in_block_original"]
-			total = putCount + origCount
+	var putCount, origCount, total int
+	if b.txStager != nil {
+		requeuedPut, requeuedOrig := b.txStager.RequeueInBlock(slot)
+		if requeuedPut > 0 || requeuedOrig > 0 {
+			log.Info("[SSV] Re-queued in-block transactions for new build",
+				"slot", slot,
+				"putInbox", requeuedPut,
+				"original", requeuedOrig)
 		}
 
-		log.Info("[SSV] OnBlockBuildingStart",
-			"slot", slot,
-			"state", state,
-			"staged_total", total,
-			"staged_putInbox", putCount,
-			"staged_original", origCount,
-		)
+		stats := b.txStager.GetStats()
+		putCount = stats["staged_putInbox"] + stats["in_block_putInbox"]
+		origCount = stats["staged_original"] + stats["in_block_original"]
+		total = putCount + origCount
+	}
+
+	log.Info("[SSV] OnBlockBuildingStart",
+		"slot", slot,
+		"state", state,
+		"staged_total", total,
+		"staged_putInbox", putCount,
+		"staged_original", origCount,
+	)
+
+	if b.coordinator != nil {
 		_ = b.coordinator.OnBlockBuildingStart(ctx, slot)
 	}
 
@@ -1212,18 +1225,36 @@ func (b *EthAPIBackend) OnBlockBuildingComplete(
 	block *types.Block,
 	success, simulation bool,
 ) error {
+	slot := uint64(0)
+	if b.coordinator != nil {
+		slot = b.coordinator.GetCurrentSlot()
+	}
+
+	if b.txStager != nil && (simulation || !success || block == nil) {
+		putInbox, original := b.txStager.RequeueInBlock(slot)
+		if putInbox > 0 || original > 0 {
+			outcome := "failed"
+			if simulation {
+				outcome = "simulation"
+			}
+			log.Warn("[SSV] Re-queued in-block transactions after block "+outcome,
+				"slot", slot,
+				"putInbox", putInbox,
+				"original", original)
+		}
+	}
+
 	if simulation {
 		return nil
 	}
 
 	if !success || block == nil {
-		log.Warn("[SSV] Block build failed")
+		log.Warn("[SSV] Block build failed", "slot", slot)
 		return nil
 	}
 
-	slot := uint64(0)
-	if b.coordinator != nil {
-		slot = b.coordinator.GetCurrentSlot()
+	if b.txStager == nil {
+		return nil
 	}
 
 	putInbox, original := b.txStager.CommitBlock(block.NumberU64())
@@ -1430,6 +1461,15 @@ func (b *EthAPIBackend) NotifySlotStart(startSlot *rollupv1.StartSlot) error {
 
 	if startSlot.Slot > 0 {
 		prevSlot := startSlot.Slot - 1
+
+		requeuedPut, requeuedOrig := b.txStager.RequeueInBlock(prevSlot)
+		if requeuedPut > 0 || requeuedOrig > 0 {
+			log.Warn("[SSV] Re-queued leftover transactions from previous slot",
+				"prevSlot", prevSlot,
+				"putInbox", requeuedPut,
+				"original", requeuedOrig)
+		}
+
 		putInbox, original := b.txStager.ClearSlot(prevSlot)
 
 		if putInbox > 0 || original > 0 {
