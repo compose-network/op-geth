@@ -26,6 +26,8 @@ type coordinator struct {
 	sentMu  sync.Mutex
 	sentMap map[string]bool
 
+	circBuffer *circMessageBuffer
+
 	// Lifecycle management
 	started      atomic.Bool
 	stopped      atomic.Bool
@@ -55,6 +57,7 @@ func NewWithMetrics(log zerolog.Logger, config Config, metrics MetricsRecorder) 
 		metrics:      metrics,
 		log:          logger,
 		sentMap:      make(map[string]bool),
+		circBuffer:   newCircMessageBuffer(logger),
 	}
 }
 
@@ -156,6 +159,8 @@ func (c *coordinator) StartTransaction(ctx context.Context, from string, xtReq *
 		Int("participating_chains", len(chains)).
 		Dur("timeout", c.config.Timeout).
 		Msg("Started 2PC transaction")
+
+	c.circBuffer.ProcessBuffered(xtID, state, c.log)
 
 	// Invoke start callback
 	c.callbackMgr.InvokeStart(ctx, from, xtReq)
@@ -301,9 +306,12 @@ func (c *coordinator) GetState(xtID *pb.XtID) (*TwoPCState, bool) {
 // RecordCIRCMessage records a CIRC message for a transaction
 func (c *coordinator) RecordCIRCMessage(circMessage *pb.CIRCMessage) error {
 	xtID := circMessage.XtId
+	xtIDHex := xtID.Hex()
+
 	state, exists := c.stateManager.GetState(xtID)
 	if !exists {
-		return fmt.Errorf("transaction %s not found", xtID.Hex())
+		c.circBuffer.Add(circMessage)
+		return nil
 	}
 
 	sourceChainID := ChainKeyBytes(circMessage.SourceChain)
@@ -312,20 +320,15 @@ func (c *coordinator) RecordCIRCMessage(circMessage *pb.CIRCMessage) error {
 	defer state.mu.Unlock()
 
 	if _, isParticipant := state.ParticipatingChains[sourceChainID]; !isParticipant {
-		return fmt.Errorf("chain %s not participating in transaction %s", sourceChainID, xtID.Hex())
+		return fmt.Errorf("chain %s not participating in transaction %s", sourceChainID, xtIDHex)
 	}
 
-	// Add message to queue
-	messages, ok := state.CIRCMessages[sourceChainID]
-	if !ok {
-		messages = make([]*pb.CIRCMessage, 0)
-	}
-	messages = append(messages, circMessage)
-	state.CIRCMessages[sourceChainID] = messages
+	messages := state.CIRCMessages[sourceChainID]
+	state.CIRCMessages[sourceChainID] = append(messages, circMessage)
 
 	sourceChainIDInt := new(big.Int).SetBytes(circMessage.SourceChain)
 	c.log.Info().
-		Str("xt_id", xtID.Hex()).
+		Str("xt_id", xtIDHex).
 		Str("chain_id", sourceChainIDInt.String()).
 		Msg("Recorded CIRC message")
 
