@@ -901,20 +901,11 @@ func (miner *Miner) fillTransactionsWithSequencerOrdering(interrupt *atomic.Int3
 				}
 			} else {
 				miner.applySequencerSimulationResults(env, simEnv)
-				appliedCount := len(simEnv.txs)
-				if appliedCount != len(orderedSequencerTxs) {
-					log.Warn("[SSV] Sequencer bundle size mismatch after simulation",
-						"ordered", len(orderedSequencerTxs),
-						"applied", appliedCount)
-				}
-				sequencerTxCount = appliedCount
-				pendingPut := len(backend.GetPendingPutInboxTxs())
-				pendingOriginal := len(backend.GetPendingOriginalTxs())
+				sequencerTxCount = len(simEnv.txs)
 				log.Info("[SSV] Committed sequencer transactions atomically",
-					"ordered", len(orderedSequencerTxs),
-					"applied", appliedCount,
-					"pending_putInbox", pendingPut,
-					"pending_original", pendingOriginal)
+					"putInbox", len(backend.GetPendingPutInboxTxs()),
+					"original", len(backend.GetPendingOriginalTxs()),
+					"total", sequencerTxCount)
 			}
 		}
 

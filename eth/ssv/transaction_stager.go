@@ -40,11 +40,11 @@ func (s TxState) String() string {
 // TxEntry tracks a sequencer transaction through its lifecycle
 type TxEntry struct {
 	Tx      *types.Transaction
-	XtID    string  // Cross-chain transaction ID (hex-encoded)
-	Kind    TxKind  // Original or PutInbox
-	State   TxState // Current lifecycle state
-	Slot    uint64  // Slot in which this transaction was staged
-	BlockNo *uint64 // Block number if committed (nil otherwise)
+	XtID    string   // Cross-chain transaction ID (hex-encoded)
+	Kind    TxKind   // Original or PutInbox
+	State   TxState  // Current lifecycle state
+	Slot    uint64   // Slot in which this transaction was staged
+	BlockNo *uint64  // Block number if committed (nil otherwise)
 }
 
 type TxKind int
@@ -74,8 +74,8 @@ type TransactionStager struct {
 	entries []*TxEntry
 
 	// Indexes for O(1) lookups
-	byHash map[common.Hash]int // hash → index in entries
-	byXtID map[string][]int    // xtID → indexes in entries (one XT can have multiple txs)
+	byHash map[common.Hash]int  // hash → index in entries
+	byXtID map[string][]int     // xtID → indexes in entries (one XT can have multiple txs)
 
 	currentSlot uint64 // Current SBCP slot for validation
 }
@@ -129,21 +129,10 @@ func (s *TransactionStager) SnapshotForBlock(slot uint64) ([]*TxEntry, error) {
 	defer s.mu.Unlock()
 
 	var snapshot []*TxEntry
-	stagedCount := 0
-	inBlockCount := 0
 
 	for _, entry := range s.entries {
-		if entry.Slot != slot {
-			continue
-		}
-
-		switch entry.State {
-		case TxStateStaged:
+		if entry.State == TxStateStaged && entry.Slot == slot {
 			entry.State = TxStateInBlock
-			stagedCount++
-			snapshot = append(snapshot, entry)
-		case TxStateInBlock:
-			inBlockCount++
 			snapshot = append(snapshot, entry)
 		}
 	}
@@ -151,8 +140,6 @@ func (s *TransactionStager) SnapshotForBlock(slot uint64) ([]*TxEntry, error) {
 	if len(snapshot) > 0 {
 		log.Info("[SSV] Snapshot for block building",
 			"slot", slot,
-			"staged", stagedCount,
-			"in_block", inBlockCount,
 			"count", len(snapshot))
 	}
 
@@ -277,35 +264,6 @@ func (s *TransactionStager) GetPendingByKind(kind TxKind) []*types.Transaction {
 		}
 	}
 	return txs
-}
-
-// RequeueInBlock transitions transactions that were part of an in-progress block
-// back to the Staged state so they can be snapshotted again. If slot is zero,
-// all in-flight transactions are requeued.
-func (s *TransactionStager) RequeueInBlock(slot uint64) (int, int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	putInbox := 0
-	original := 0
-
-	for _, entry := range s.entries {
-		if slot != 0 && entry.Slot != slot {
-			continue
-		}
-		if entry.State != TxStateInBlock {
-			continue
-		}
-
-		entry.State = TxStateStaged
-		if entry.Kind == TxKindPutInbox {
-			putInbox++
-		} else {
-			original++
-		}
-	}
-
-	return putInbox, original
 }
 
 // UpdateSlot sets the current slot for validation
