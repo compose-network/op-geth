@@ -12,11 +12,6 @@ jobs:
   run-testnet:
     runs-on: public-isolated
     steps:
-      - name: Checkout op-geth repository
-        uses: actions/checkout@v4
-        with:
-          path: op-geth
-
       - name: Checkout local-testnet repository
         uses: actions/checkout@v4
         with:
@@ -70,8 +65,6 @@ jobs:
           just --version
           echo "=== jq ==="
           jq --version
-          echo "=== Make ==="
-          make --version
           echo "=== Git ==="
           git --version
           echo "=== Docker ==="
@@ -81,4 +74,7 @@ jobs:
 
       - name: Run local testnet
         working-directory: local-testnet
-        run: make run-l2
+        run: |
+          go build -C cmd/localnet/
+          cp configs/config.example.yaml configs/config.yaml
+          cmd/localnet/localnet l2 --l1-chain-id ${{LOCAL_TESTNET_L1_CHAIN_ID}} --l1-cl-url=${{ secrets.LOCAL_TESTNET_L1_CL }} --l1-el-url=${{ secrets.LOCAL_TESTNET_L1_EL}} --wallet-address=${{ secrets.LOCAL_TESTNET_WALLET_ADDRESS}} --wallet-private-key=${{ secrets.LOCAL_TESTNET_WALLET_PK}} --coordinator-private-key=${{ secrets.LOCAL_TESTNET_COORDINATOR_PK }} --op-geth-branch=${COMMIT_SHA}
