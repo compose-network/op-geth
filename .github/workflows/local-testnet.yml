@@ -77,4 +77,4 @@ jobs:
         run: |
           go build -C cmd/localnet/
           cp configs/config.example.yaml configs/config.yaml
-          cmd/localnet/localnet l2 --l1-chain-id ${{ secrets.LOCAL_TESTNET_L1_CHAIN_ID }} --l1-cl-url=${{ secrets.LOCAL_TESTNET_L1_CL }} --l1-el-url=${{ secrets.LOCAL_TESTNET_L1_EL}} --wallet-address=${{ secrets.LOCAL_TESTNET_WALLET_ADDRESS}} --wallet-private-key=${{ secrets.LOCAL_TESTNET_WALLET_PK}} --coordinator-private-key=${{ secrets.LOCAL_TESTNET_COORDINATOR_PK }} --op-geth-branch=${GITHUB_SHA}
+          cmd/localnet/localnet l2 --l1-chain-id ${{ secrets.LOCAL_TESTNET_L1_CHAIN_ID }} --l1-cl-url=${{ secrets.LOCAL_TESTNET_L1_CL }} --l1-el-url=${{ secrets.LOCAL_TESTNET_L1_EL}} --wallet-address=${{ secrets.LOCAL_TESTNET_WALLET_ADDRESS}} --wallet-private-key=${{ secrets.LOCAL_TESTNET_WALLET_PK}} --coordinator-private-key=${{ secrets.LOCAL_TESTNET_COORDINATOR_PK }} --publisher-url=https://github.com/compose-network/publisher.git --publisher-branch=stage --op-geth-url=https://github.com/compose-network/op-geth.git --op-geth-branch=${GITHUB_SHA}
