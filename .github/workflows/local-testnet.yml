@@ -73,9 +73,6 @@ jobs:
           docker buildx version
           docker compose version
           pwd
-          ls -lha
-          ls -lha ../
-          exit 1
 
       - name: Run local testnet
         working-directory: local-testnet
