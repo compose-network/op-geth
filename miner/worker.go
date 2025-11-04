@@ -868,22 +868,29 @@ func (miner *Miner) fillTransactionsWithSequencerOrdering(interrupt *atomic.Int3
 
 	// SSV: Get ordered transactions from backend if available
 	if backend, ok := miner.backendAPI.(BackendWithSequencerTransactions); ok {
-		// Backend returns immutable snapshot of sequencer txs.
-		// State machine transitions (Staged → InBlock) happen atomically, preventing abort races.
-		// Returns transactions when ready:
-		// - BuildingFree: After SCP completes, transactions ready for inclusion
-		// - Submission: Final block with remaining transactions
+		// Ask backend for sequencer-managed txs appropriate for the current SBCP state.
+		// Backend returns sequencer txs when ready:
+		// - BuildingFree: After SCP completes, transactions are ready for inclusion
+		// - Submission: Final block with any remaining transactions
 		// - BuildingLocked: No transactions (SCP coordination in progress)
 		orderedSequencerTxs, err := backend.GetOrderedTransactionsForBlock(env.rpcCtx)
 		if err != nil {
 			log.Warn("[SSV] Failed to get backend-ordered sequencer txs", "err", err)
 		}
 
-		// Sequencer txs should NOT be in normal txpool,
-		// but we filter them out here as a safety mechanism
+		// Build a skip set to exclude sequencer txs from the normal tx pools
 		skip := make(map[common.Hash]struct{}, 0)
 		if len(orderedSequencerTxs) > 0 {
+			// BuildingFree or Submission state: skip txs that backend is managing via sequencer path
 			for _, tx := range orderedSequencerTxs {
+				skip[tx.Hash()] = struct{}{}
+			}
+		} else {
+			// BuildingLocked state: skip ALL pending sequencer-managed txs (not yet ready for inclusion)
+			for _, tx := range backend.GetPendingPutInboxTxs() {
+				skip[tx.Hash()] = struct{}{}
+			}
+			for _, tx := range backend.GetPendingOriginalTxs() {
 				skip[tx.Hash()] = struct{}{}
 			}
 		}
