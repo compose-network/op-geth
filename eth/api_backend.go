@@ -1459,11 +1459,11 @@ func (b *EthAPIBackend) OnBlockBuildingComplete(
 	}
 
 	if len(txsToRemove) > 0 {
-		b.clearCommittedSequencerTransactions(txsToRemove)
-		log.Info("[SSV] Cleared committed sequencer transactions after block build",
+		log.Info("[SSV] Recorded committed sequencer transactions awaiting finalization",
 			"slot", slot,
 			"blockNumber", block.NumberU64(),
-			"cleared", len(txsToRemove))
+			"count", len(txsToRemove),
+			"state", currentState)
 	}
 
 	// Store block with automatic deduplication. Treat pendingBlocks as a stack keyed
@@ -1861,7 +1861,9 @@ func (b *EthAPIBackend) removeEntriesByHashLocked(remove map[common.Hash]struct{
 	})
 }
 
-func (b *EthAPIBackend) dropTransactionsForXtKey(key string) (int, int) {
+// dropTransactionsForXtKey removes all staged transactions associated with the provided xtID.
+// When reject is true, the transactions are also marked as rejected inside the txpool.
+func (b *EthAPIBackend) dropTransactionsForXtKey(key string, reject bool) (int, int) {
 	if key == "" {
 		return 0, 0
 	}
@@ -1880,17 +1882,39 @@ func (b *EthAPIBackend) dropTransactionsForXtKey(key string) (int, int) {
 	})
 	b.sequencerTxMutex.Unlock()
 
-	// Remove from Ethereum txpool to prevent nonce gaps and maintain sequence integrity.
-	// Marking as rejected triggers automatic removal of dependent transactions with higher nonces,
-	// preventing invalid transaction chains from persisting in the pool.
-	for _, hash := range txHashesToRemove {
-		if tx := b.eth.txPool.Get(hash); tx != nil {
-			// Mark as rejected so txpool removes it and any dependent transactions
-			tx.SetRejected()
-			log.Info("[SSV] Marked aborted tx as rejected in txpool",
-				"txHash", hash.Hex(),
+	if len(txHashesToRemove) > 0 {
+		// If these transactions were previously marked as committed, clear the markers.
+		removedMarkers := 0
+		b.committedTxsMutex.Lock()
+		for _, hash := range txHashesToRemove {
+			if _, ok := b.committedTxHashes[hash]; ok {
+				delete(b.committedTxHashes, hash)
+				removedMarkers++
+			}
+		}
+		b.committedTxsMutex.Unlock()
+		if removedMarkers > 0 {
+			log.Info("[SSV] Cleared committed markers for aborted XT",
 				"xtID", key,
-				"nonce", tx.Nonce())
+				"count", removedMarkers)
+		}
+	}
+
+	rejectedCount := 0
+	if reject {
+		// Remove from Ethereum txpool to prevent nonce gaps and maintain sequence integrity.
+		// Marking as rejected triggers automatic removal of dependent transactions with higher nonces,
+		// preventing invalid transaction chains from persisting in the pool.
+		for _, hash := range txHashesToRemove {
+			if tx := b.eth.txPool.Get(hash); tx != nil {
+				// Mark as rejected so txpool removes it and any dependent transactions
+				tx.SetRejected()
+				rejectedCount++
+				log.Info("[SSV] Marked aborted tx as rejected in txpool",
+					"txHash", hash.Hex(),
+					"xtID", key,
+					"nonce", tx.Nonce())
+			}
 		}
 	}
 
@@ -1898,6 +1922,11 @@ func (b *EthAPIBackend) dropTransactionsForXtKey(key string) (int, int) {
 		if miner := b.eth.miner; miner != nil {
 			miner.InvalidatePendingCache()
 		}
+		log.Info("[SSV] Dropped staged sequencer transactions",
+			"xtID", key,
+			"putInboxRemoved", removedPutInbox,
+			"originalRemoved", removedOriginal,
+			"rejectedInPool", rejectedCount)
 	}
 
 	return removedPutInbox, removedOriginal
@@ -2066,7 +2095,7 @@ func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *roll
 			continue
 		}
 
-		removedPut, removedOriginal := b.dropTransactionsForXtKey(key)
+		removedPut, removedOriginal := b.dropTransactionsForXtKey(key, false)
 		totalDroppedPut += removedPut
 		totalDroppedOriginal += removedOriginal
 		if removedPut+removedOriginal > 0 {
@@ -2147,7 +2176,7 @@ func (b *EthAPIBackend) cleanupAbortedTransactionCallback(ctx context.Context, x
 		return nil
 	}
 	key := hexutil.Encode(xtID.Hash)
-	removedPut, removedOriginal := b.dropTransactionsForXtKey(key)
+	removedPut, removedOriginal := b.dropTransactionsForXtKey(key, false)
 	if removedPut+removedOriginal > 0 {
 		log.Info("[SSV] Dropped aborted transactions via callback",
 			"xtID", key,
