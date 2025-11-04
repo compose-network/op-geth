@@ -1666,6 +1666,10 @@ func (b *EthAPIBackend) SetSequencerCoordinator(coord xsequencer.Coordinator, sp
 //  3. Collect any outbound mailbox writes emitted during successful execution. The simulation
 //     operates on a copy of the state so it never mutates the underlying chain data.
 func (b *EthAPIBackend) simulateSCPBundle(request instanceproto.SimulationRequest) (*instanceproto.MailboxMessageHeader, []instanceproto.MailboxMessage, error) {
+	if len(request.Transactions) == 0 {
+		return nil, nil, errors.New("no transactions to simulate")
+	}
+
 	ctx := context.Background()
 
 	// Gets state DB and header of current pending block
