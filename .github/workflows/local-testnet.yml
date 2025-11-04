@@ -80,6 +80,7 @@ jobs:
           PWD=`pwd`
           docker build -f build/Dockerfile -t compose-network/local-testnet:latest .
           docker run --rm \
+             --add-host=host.docker.internal:host-gateway \
              -v /var/run/docker.sock:/var/run/docker.sock \
              -v ${PWD}:/workspace \
              -w /workspace \
