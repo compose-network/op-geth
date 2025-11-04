@@ -1112,28 +1112,21 @@ func (b *EthAPIBackend) GetOrderedTransactionsForBlock(ctx context.Context) (typ
 		return types.Transactions{}, nil
 	}
 
-	currentState := b.coordinator.GetState()
 	slot := b.coordinator.GetCurrentSlot()
 
-	switch currentState {
-	case sequencer.StateBuildingLocked:
-		return types.Transactions{}, nil
+	// Get atomic snapshot for current slot
+	// The stager handles state transitions atomically (STAGED → IN_BLOCK)
+	txs := b.txStager.GetTransactionsForBlock(slot)
 
-	case sequencer.StateBuildingFree, sequencer.StateSubmission:
-		txs := b.txStager.GetTransactionsForBlock(slot)
-
-		if len(txs) > 0 {
-			log.Info("[SSV] Atomic snapshot for block",
-				"slot", slot,
-				"state", currentState.String(),
-				"count", len(txs))
-		}
-
-		return txs, nil
-
-	default:
-		return types.Transactions{}, nil
+	if len(txs) > 0 {
+		currentState := b.coordinator.GetState()
+		log.Info("[SSV] Atomic snapshot for block",
+			"slot", slot,
+			"state", currentState.String(),
+			"count", len(txs))
 	}
+
+	return txs, nil
 }
 
 // validateSequencerTransaction validates that a sequencer transaction is properly formed

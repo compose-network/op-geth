@@ -868,12 +868,10 @@ func (miner *Miner) fillTransactionsWithSequencerOrdering(interrupt *atomic.Int3
 
 	// SSV: Get ordered transactions from backend if available
 	if backend, ok := miner.backendAPI.(BackendWithSequencerTransactions); ok {
-		// Backend returns immutable snapshot of sequencer txs.
-		// State machine transitions (Staged → InBlock) happen atomically, preventing abort races.
-		// Returns transactions when ready:
-		// - BuildingFree: After SCP completes, transactions ready for inclusion
-		// - Submission: Final block with remaining transactions
-		// - BuildingLocked: No transactions (SCP coordination in progress)
+		// Backend returns immutable atomic snapshot of sequencer txs for current slot.
+		// State machine transitions (STAGED → IN_BLOCK) happen atomically, preventing abort races.
+		// All transactions staged for this slot (putInbox + original) are returned together,
+		// ensuring transaction pairs are included in the same block.
 		orderedSequencerTxs, err := backend.GetOrderedTransactionsForBlock(env.rpcCtx)
 		if err != nil {
 			log.Warn("[SSV] Failed to get backend-ordered sequencer txs", "err", err)
