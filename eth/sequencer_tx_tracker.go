@@ -391,6 +391,24 @@ func (t *sequencerTxTracker) buildBundles() ([]sequencerBundleEntry, []sequencer
 	return ready, pending
 }
 
+func (t *sequencerTxTracker) allXTIDsLocked() map[string]struct{} {
+	xts := make(map[string]struct{}, len(t.records))
+	for _, rec := range t.records {
+		if rec != nil && rec.xtID != "" {
+			xts[rec.xtID] = struct{}{}
+		}
+	}
+	return xts
+}
+
+func (t *sequencerTxTracker) committedHashSet() map[common.Hash]struct{} {
+	set := make(map[common.Hash]struct{}, len(t.committed))
+	for _, hash := range t.committed {
+		set[hash] = struct{}{}
+	}
+	return set
+}
+
 func containsHash(items []common.Hash, target common.Hash) bool {
 	for _, hash := range items {
 		if hash == target {

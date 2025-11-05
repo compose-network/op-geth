@@ -2066,9 +2066,9 @@ func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *roll
 	totalPending := 0
 	if b.txTracker != nil {
 		totalPending = b.txTracker.pendingTotal()
-		for _, record := range b.txTracker.orderedRecords() {
-			if record.xtID != "" {
-				pendingKeys[record.xtID] = struct{}{}
+		for xtID := range b.txTracker.allXTIDsLocked() {
+			if xtID != "" {
+				pendingKeys[xtID] = struct{}{}
 			}
 		}
 	}
@@ -2206,16 +2206,13 @@ func (b *EthAPIBackend) sendStoredL2Block(ctx context.Context) error {
 	b.rsMutex.RUnlock()
 
 	// Get committed cross-chain tx hashes (tracked during block building)
-	b.sequencerTxMutex.RLock()
-	committedSet := make(map[common.Hash]struct{})
+	crossChainTxHashes := make(map[common.Hash]bool)
 	if b.txTracker != nil {
-		committedSet = b.txTracker.committedHashSet()
-	}
-	b.sequencerTxMutex.RUnlock()
-
-	crossChainTxHashes := make(map[common.Hash]bool, len(committedSet))
-	for hash := range committedSet {
-		crossChainTxHashes[hash] = true
+		b.sequencerTxMutex.RLock()
+		for hash := range b.txTracker.committedHashSet() {
+			crossChainTxHashes[hash] = true
+		}
+		b.sequencerTxMutex.RUnlock()
 	}
 
 	log.Info("[SSV] Submitting L2 blocks to shared publisher",
