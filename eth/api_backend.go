@@ -2014,23 +2014,16 @@ func (b *EthAPIBackend) NotifySlotStart(startSlot *rollupv1.StartSlot) error {
 	b.sequencerTxMutex.Lock()
 	tracker := b.ensureTrackerLocked()
 	prevTxCount := tracker.pendingTotal()
-	removedRecords := make([]*sequencerTxRecord, 0)
-	if prevTxCount > 0 {
-		putInboxCount := tracker.countByKind(sequencerTxPutInbox)
-		originalCount := tracker.countByKind(sequencerTxOriginal)
+	putInboxCount = tracker.countByKind(sequencerTxPutInbox)
+	originalCount = tracker.countByKind(sequencerTxOriginal)
+	b.sequencerTxMutex.Unlock()
 
-		log.Warn("[SSV] Clearing lingering sequencer transactions from previous slot",
+	if prevTxCount > 0 {
+		log.Info("[SSV] Carrying sequencer transactions into new slot",
 			"slot", startSlot.Slot,
 			"totalTxs", prevTxCount,
 			"putInbox", putInboxCount,
 			"original", originalCount)
-
-		_, _, removedRecords = tracker.clearAll()
-	}
-	b.sequencerTxMutex.Unlock()
-
-	for _, record := range removedRecords {
-		b.logSequencerRemoval(record, "slot_reset")
 	}
 
 	return nil
@@ -2134,6 +2127,23 @@ func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *roll
 		}
 	} else {
 		log.Info("[SSV] RequestSeal received with no stored blocks yet (will build now)", "slot", requestSeal.Slot)
+	}
+
+	// If there are still ready pairs staged after sealing existing blocks, force a payload rebuild
+	// so they are included before the next slot transition.
+	pendingPairs := 0
+	b.sequencerTxMutex.RLock()
+	if b.txTracker != nil {
+		pendingPairs = b.txTracker.readyPairCount()
+	}
+	b.sequencerTxMutex.RUnlock()
+	if pendingPairs > 0 {
+		if miner := b.eth.miner; miner != nil {
+			log.Info("[SSV] Pending sequencer pairs remain after RequestSeal; triggering payload rebuild",
+				"slot", requestSeal.Slot,
+				"pendingPairs", pendingPairs)
+			miner.InvalidatePendingCache()
+		}
 	}
 
 	return nil

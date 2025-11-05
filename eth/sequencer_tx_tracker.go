@@ -394,6 +394,41 @@ func (t *sequencerTxTracker) committedHashSet() map[common.Hash]struct{} {
 	return set
 }
 
+func (t *sequencerTxTracker) readyPairCount() int {
+	if len(t.records) == 0 {
+		return 0
+	}
+	type counts struct {
+		put  int
+		orig int
+	}
+	groups := make(map[string]*counts)
+	for _, rec := range t.records {
+		if rec == nil || rec.xtID == "" {
+			continue
+		}
+		g := groups[rec.xtID]
+		if g == nil {
+			g = &counts{}
+			groups[rec.xtID] = g
+		}
+		if rec.kind == sequencerTxPutInbox {
+			g.put++
+		} else {
+			g.orig++
+		}
+	}
+	total := 0
+	for _, g := range groups {
+		if g.put < g.orig {
+			total += g.put
+		} else {
+			total += g.orig
+		}
+	}
+	return total
+}
+
 func containsHash(items []common.Hash, target common.Hash) bool {
 	for _, hash := range items {
 		if hash == target {
