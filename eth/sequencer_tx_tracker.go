@@ -36,6 +36,7 @@ type sequencerTxRecord struct {
 	committedBlock  uint64
 	committedSlot   uint64
 	lastUpdatedSlot uint64
+	sequence        uint64
 }
 
 // sequencerTxTracker maintains the ordered lifecycle of staged/committed transactions
@@ -45,6 +46,7 @@ type sequencerTxTracker struct {
 	staged    []common.Hash
 	committed []common.Hash
 	records   map[common.Hash]*sequencerTxRecord
+	nextSeq   uint64
 }
 
 type sequencerBundleEntry struct {
@@ -54,14 +56,14 @@ type sequencerBundleEntry struct {
 	status sequencerTxStatus
 }
 
-type sequencerPendingBundle struct {
-	xtID  string
-	items []sequencerPendingItem
-}
-
 type sequencerPendingItem struct {
 	kind   sequencerTxKind
 	status sequencerTxStatus
+}
+
+type sequencerPendingBundle struct {
+	xtID  string
+	items []sequencerPendingItem
 }
 
 func (k sequencerTxKind) String() string {
@@ -80,6 +82,7 @@ func newSequencerTxTracker() *sequencerTxTracker {
 		staged:    make([]common.Hash, 0),
 		committed: make([]common.Hash, 0),
 		records:   make(map[common.Hash]*sequencerTxRecord),
+		nextSeq:   1,
 	}
 }
 
@@ -87,6 +90,7 @@ func (t *sequencerTxTracker) reset() {
 	t.staged = t.staged[:0]
 	t.committed = t.committed[:0]
 	t.records = make(map[common.Hash]*sequencerTxRecord)
+	t.nextSeq = 1
 }
 
 func (t *sequencerTxTracker) add(tx *types.Transaction, kind sequencerTxKind, currentSlot uint64) {
@@ -99,8 +103,6 @@ func (t *sequencerTxTracker) add(tx *types.Transaction, kind sequencerTxKind, cu
 		if kind == sequencerTxPutInbox {
 			record.kind = kind
 		}
-		// If the transaction was already committed for a previous payload, keep it there.
-		// Otherwise ensure it is present in the staged queue so it can be ordered correctly.
 		if record.status == sequencerTxStatusStaged && !containsHash(t.staged, hash) {
 			t.staged = append(t.staged, hash)
 		}
@@ -113,7 +115,9 @@ func (t *sequencerTxTracker) add(tx *types.Transaction, kind sequencerTxKind, cu
 		kind:            kind,
 		status:          sequencerTxStatusStaged,
 		lastUpdatedSlot: currentSlot,
+		sequence:        t.nextSeq,
 	}
+	t.nextSeq++
 	t.staged = append(t.staged, hash)
 }
 
@@ -154,44 +158,6 @@ func (t *sequencerTxTracker) pendingTotal() int {
 	return len(t.staged) + len(t.committed)
 }
 
-func (t *sequencerTxTracker) orderedTransactions() types.Transactions {
-	total := len(t.staged) + len(t.committed)
-	if total == 0 {
-		return types.Transactions{}
-	}
-	ordered := make(types.Transactions, 0, total)
-	for _, hash := range t.committed {
-		if record := t.records[hash]; record != nil {
-			ordered = append(ordered, record.tx)
-		}
-	}
-	for _, hash := range t.staged {
-		if record := t.records[hash]; record != nil {
-			ordered = append(ordered, record.tx)
-		}
-	}
-	return ordered
-}
-
-func (t *sequencerTxTracker) orderedRecords() []*sequencerTxRecord {
-	total := len(t.staged) + len(t.committed)
-	if total == 0 {
-		return nil
-	}
-	ordered := make([]*sequencerTxRecord, 0, total)
-	for _, hash := range t.committed {
-		if record := t.records[hash]; record != nil {
-			ordered = append(ordered, record)
-		}
-	}
-	for _, hash := range t.staged {
-		if record := t.records[hash]; record != nil {
-			ordered = append(ordered, record)
-		}
-	}
-	return ordered
-}
-
 func (t *sequencerTxTracker) transactionsByKind(kind sequencerTxKind) []*types.Transaction {
 	total := t.countByKind(kind)
 	if total == 0 {
@@ -209,88 +175,6 @@ func (t *sequencerTxTracker) transactionsByKind(kind sequencerTxKind) []*types.T
 		}
 	}
 	return result
-}
-
-func (t *sequencerTxTracker) buildBundles() ([]sequencerBundleEntry, []sequencerPendingBundle) {
-	ordered := t.orderedRecords()
-	if len(ordered) == 0 {
-		return nil, nil
-	}
-
-	ready := make([]sequencerBundleEntry, 0, len(ordered))
-	pending := make(map[string][]*sequencerTxRecord)
-
-	for _, record := range ordered {
-		if record == nil || record.tx == nil {
-			continue
-		}
-		if record.xtID == "" {
-			ready = append(ready, sequencerBundleEntry{
-				tx:     record.tx,
-				xtID:   record.xtID,
-				kind:   record.kind,
-				status: record.status,
-			})
-			continue
-		}
-
-		bucket := pending[record.xtID]
-		bucket = append(bucket, record)
-		pending[record.xtID] = bucket
-
-		var put, original *sequencerTxRecord
-		for _, item := range bucket {
-			if item.kind == sequencerTxPutInbox && put == nil {
-				put = item
-			} else if item.kind == sequencerTxOriginal && original == nil {
-				original = item
-			}
-		}
-		if put != nil && original != nil {
-			ready = append(ready,
-				sequencerBundleEntry{tx: put.tx, xtID: put.xtID, kind: put.kind, status: put.status},
-				sequencerBundleEntry{tx: original.tx, xtID: original.xtID, kind: original.kind, status: original.status},
-			)
-
-			newBucket := make([]*sequencerTxRecord, 0, len(bucket))
-			for _, item := range bucket {
-				if item == put || item == original {
-					continue
-				}
-				newBucket = append(newBucket, item)
-			}
-			if len(newBucket) == 0 {
-				delete(pending, record.xtID)
-			} else {
-				pending[record.xtID] = newBucket
-			}
-		}
-	}
-
-	if len(pending) == 0 {
-		return ready, nil
-	}
-
-	xtIDs := make([]string, 0, len(pending))
-	for xtID := range pending {
-		xtIDs = append(xtIDs, xtID)
-	}
-	sort.Strings(xtIDs)
-
-	pendingBundles := make([]sequencerPendingBundle, 0, len(xtIDs))
-	for _, xtID := range xtIDs {
-		bucket := pending[xtID]
-		bundle := sequencerPendingBundle{
-			xtID:  xtID,
-			items: make([]sequencerPendingItem, 0, len(bucket)),
-		}
-		for _, item := range bucket {
-			bundle.items = append(bundle.items, sequencerPendingItem{kind: item.kind, status: item.status})
-		}
-		pendingBundles = append(pendingBundles, bundle)
-	}
-
-	return ready, pendingBundles
 }
 
 func (t *sequencerTxTracker) markCommitted(slot, blockNumber uint64, hashes []common.Hash) (marked int) {
@@ -315,14 +199,6 @@ func (t *sequencerTxTracker) markCommitted(slot, blockNumber uint64, hashes []co
 		marked++
 	}
 	return marked
-}
-
-func (t *sequencerTxTracker) committedHashSet() map[common.Hash]struct{} {
-	result := make(map[common.Hash]struct{}, len(t.committed))
-	for _, hash := range t.committed {
-		result[hash] = struct{}{}
-	}
-	return result
 }
 
 func (t *sequencerTxTracker) dropByXtID(xtID string) (removedPut, removedOriginal int, removed []*sequencerTxRecord) {
@@ -401,6 +277,98 @@ func (t *sequencerTxTracker) clearAll() (removedPut, removedOriginal int, remove
 		hashes = append(hashes, hash)
 	}
 	return t.dropHashes(hashes)
+}
+
+func (t *sequencerTxTracker) buildBundles() ([]sequencerBundleEntry, []sequencerPendingBundle) {
+	if len(t.records) == 0 {
+		return nil, nil
+	}
+
+	records := make([]*sequencerTxRecord, 0, len(t.records))
+	for _, rec := range t.records {
+		if rec != nil && rec.tx != nil {
+			records = append(records, rec)
+		}
+	}
+
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].sequence < records[j].sequence
+	})
+
+	ready := make([]sequencerBundleEntry, 0, len(records))
+	type partial struct {
+		record *sequencerTxRecord
+	}
+	partials := make(map[string]*partial)
+
+	for _, record := range records {
+		if record.xtID == "" {
+			ready = append(ready, sequencerBundleEntry{
+				tx:     record.tx,
+				xtID:   record.xtID,
+				kind:   record.kind,
+				status: record.status,
+			})
+			continue
+		}
+
+		p := partials[record.xtID]
+		if p == nil {
+			partials[record.xtID] = &partial{record: record}
+			continue
+		}
+
+		first := p.record
+		if first == nil || first.tx == nil {
+			partials[record.xtID] = &partial{record: record}
+			continue
+		}
+
+		if record.kind == sequencerTxPutInbox {
+			ready = append(ready,
+				sequencerBundleEntry{tx: record.tx, xtID: record.xtID, kind: record.kind, status: record.status},
+				sequencerBundleEntry{tx: first.tx, xtID: first.xtID, kind: first.kind, status: first.status},
+			)
+		} else if first.kind == sequencerTxPutInbox {
+			ready = append(ready,
+				sequencerBundleEntry{tx: first.tx, xtID: first.xtID, kind: first.kind, status: first.status},
+				sequencerBundleEntry{tx: record.tx, xtID: record.xtID, kind: record.kind, status: record.status},
+			)
+		} else {
+			ready = append(ready,
+				sequencerBundleEntry{tx: first.tx, xtID: first.xtID, kind: first.kind, status: first.status},
+				sequencerBundleEntry{tx: record.tx, xtID: record.xtID, kind: record.kind, status: record.status},
+			)
+		}
+		delete(partials, record.xtID)
+	}
+
+	if len(partials) == 0 {
+		return ready, nil
+	}
+
+	xtIDs := make([]string, 0, len(partials))
+	for xtID := range partials {
+		xtIDs = append(xtIDs, xtID)
+	}
+	sort.Strings(xtIDs)
+
+	pending := make([]sequencerPendingBundle, 0, len(xtIDs))
+	for _, xtID := range xtIDs {
+		rec := partials[xtID].record
+		if rec == nil || rec.tx == nil {
+			continue
+		}
+		pending = append(pending, sequencerPendingBundle{
+			xtID: xtID,
+			items: []sequencerPendingItem{{
+				kind:   rec.kind,
+				status: rec.status,
+			}},
+		})
+	}
+
+	return ready, pending
 }
 
 func containsHash(items []common.Hash, target common.Hash) bool {
