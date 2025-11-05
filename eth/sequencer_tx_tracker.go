@@ -300,7 +300,7 @@ func (t *sequencerTxTracker) buildBundles() ([]sequencerBundleEntry, []sequencer
 	type group struct {
 		firstSeq uint64
 		puts     []*sequencerTxRecord
-		original []*sequencerTxRecord
+		origin   []*sequencerTxRecord
 	}
 
 	groups := make(map[string]*group)
@@ -328,7 +328,7 @@ func (t *sequencerTxTracker) buildBundles() ([]sequencerBundleEntry, []sequencer
 		if record.kind == sequencerTxPutInbox {
 			g.puts = append(g.puts, record)
 		} else {
-			g.original = append(g.original, record)
+			g.origin = append(g.origin, record)
 		}
 	}
 
@@ -350,9 +350,9 @@ func (t *sequencerTxTracker) buildBundles() ([]sequencerBundleEntry, []sequencer
 		g := groups[xtID]
 
 		sort.Slice(g.puts, func(i, j int) bool { return g.puts[i].sequence < g.puts[j].sequence })
-		sort.Slice(g.original, func(i, j int) bool { return g.original[i].sequence < g.original[j].sequence })
+		sort.Slice(g.origin, func(i, j int) bool { return g.origin[i].sequence < g.origin[j].sequence })
 
-		if len(g.original) == 0 {
+		if len(g.origin) == 0 {
 			items := make([]sequencerPendingItem, 0, len(g.puts))
 			for _, rec := range g.puts {
 				items = append(items, sequencerPendingItem{kind: rec.kind, status: rec.status})
@@ -364,21 +364,30 @@ func (t *sequencerTxTracker) buildBundles() ([]sequencerBundleEntry, []sequencer
 			continue
 		}
 
-		for _, rec := range g.puts {
+		i := 0
+		j := 0
+		for i < len(g.puts) && j < len(g.origin) {
+			ready = append(ready,
+				sequencerBundleEntry{tx: g.puts[i].tx, xtID: xtID, kind: g.puts[i].kind, status: g.puts[i].status},
+				sequencerBundleEntry{tx: g.origin[j].tx, xtID: xtID, kind: g.origin[j].kind, status: g.origin[j].status},
+			)
+			i++
+			j++
+		}
+		for ; j < len(g.origin); j++ {
 			ready = append(ready, sequencerBundleEntry{
-				tx:     rec.tx,
+				tx:     g.origin[j].tx,
 				xtID:   xtID,
-				kind:   rec.kind,
-				status: rec.status,
+				kind:   g.origin[j].kind,
+				status: g.origin[j].status,
 			})
 		}
-		for _, rec := range g.original {
-			ready = append(ready, sequencerBundleEntry{
-				tx:     rec.tx,
-				xtID:   xtID,
-				kind:   rec.kind,
-				status: rec.status,
-			})
+		if i < len(g.puts) {
+			items := make([]sequencerPendingItem, 0, len(g.puts)-i)
+			for ; i < len(g.puts); i++ {
+				items = append(items, sequencerPendingItem{kind: g.puts[i].kind, status: g.puts[i].status})
+			}
+			pending = append(pending, sequencerPendingBundle{xtID: xtID, items: items})
 		}
 	}
 
