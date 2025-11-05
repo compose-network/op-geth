@@ -296,10 +296,14 @@ func (t *sequencerTxTracker) buildBundles() ([]sequencerBundleEntry, []sequencer
 	})
 
 	ready := make([]sequencerBundleEntry, 0, len(records))
-	type partial struct {
-		record *sequencerTxRecord
+
+	type group struct {
+		firstSeq uint64
+		puts     []*sequencerTxRecord
+		original []*sequencerTxRecord
 	}
-	partials := make(map[string]*partial)
+
+	groups := make(map[string]*group)
 
 	for _, record := range records {
 		if record.xtID == "" {
@@ -312,62 +316,78 @@ func (t *sequencerTxTracker) buildBundles() ([]sequencerBundleEntry, []sequencer
 			continue
 		}
 
-		p := partials[record.xtID]
-		if p == nil {
-			partials[record.xtID] = &partial{record: record}
-			continue
+		g, ok := groups[record.xtID]
+		if !ok {
+			g = &group{firstSeq: record.sequence}
+			groups[record.xtID] = g
 		}
-
-		first := p.record
-		if first == nil || first.tx == nil {
-			partials[record.xtID] = &partial{record: record}
-			continue
+		if record.sequence < g.firstSeq {
+			g.firstSeq = record.sequence
 		}
 
 		if record.kind == sequencerTxPutInbox {
-			ready = append(ready,
-				sequencerBundleEntry{tx: record.tx, xtID: record.xtID, kind: record.kind, status: record.status},
-				sequencerBundleEntry{tx: first.tx, xtID: first.xtID, kind: first.kind, status: first.status},
-			)
-		} else if first.kind == sequencerTxPutInbox {
-			ready = append(ready,
-				sequencerBundleEntry{tx: first.tx, xtID: first.xtID, kind: first.kind, status: first.status},
-				sequencerBundleEntry{tx: record.tx, xtID: record.xtID, kind: record.kind, status: record.status},
-			)
+			g.puts = append(g.puts, record)
 		} else {
-			ready = append(ready,
-				sequencerBundleEntry{tx: first.tx, xtID: first.xtID, kind: first.kind, status: first.status},
-				sequencerBundleEntry{tx: record.tx, xtID: record.xtID, kind: record.kind, status: record.status},
-			)
+			g.original = append(g.original, record)
 		}
-		delete(partials, record.xtID)
 	}
 
-	if len(partials) == 0 {
+	if len(groups) == 0 {
 		return ready, nil
 	}
 
-	xtIDs := make([]string, 0, len(partials))
-	for xtID := range partials {
+	xtIDs := make([]string, 0, len(groups))
+	for xtID := range groups {
 		xtIDs = append(xtIDs, xtID)
 	}
-	sort.Strings(xtIDs)
+	sort.Slice(xtIDs, func(i, j int) bool {
+		return groups[xtIDs[i]].firstSeq < groups[xtIDs[j]].firstSeq
+	})
 
-	pending := make([]sequencerPendingBundle, 0, len(xtIDs))
+	pending := make([]sequencerPendingBundle, 0)
+
 	for _, xtID := range xtIDs {
-		rec := partials[xtID].record
-		if rec == nil || rec.tx == nil {
+		g := groups[xtID]
+
+		sort.Slice(g.puts, func(i, j int) bool { return g.puts[i].sequence < g.puts[j].sequence })
+		sort.Slice(g.original, func(i, j int) bool { return g.original[i].sequence < g.original[j].sequence })
+
+		if len(g.original) == 0 {
+			items := make([]sequencerPendingItem, 0, len(g.puts))
+			for _, rec := range g.puts {
+				items = append(items, sequencerPendingItem{kind: rec.kind, status: rec.status})
+			}
+			pending = append(pending, sequencerPendingBundle{
+				xtID:  xtID,
+				items: items,
+			})
 			continue
 		}
-		pending = append(pending, sequencerPendingBundle{
-			xtID: xtID,
-			items: []sequencerPendingItem{{
+
+		for _, rec := range g.puts {
+			ready = append(ready, sequencerBundleEntry{
+				tx:     rec.tx,
+				xtID:   xtID,
 				kind:   rec.kind,
 				status: rec.status,
-			}},
-		})
+			})
+		}
+		for _, rec := range g.original {
+			ready = append(ready, sequencerBundleEntry{
+				tx:     rec.tx,
+				xtID:   xtID,
+				kind:   rec.kind,
+				status: rec.status,
+			})
+		}
 	}
 
+	if len(pending) == 0 {
+		return ready, nil
+	}
+	sort.Slice(pending, func(i, j int) bool {
+		return groups[pending[i].xtID].firstSeq < groups[pending[j].xtID].firstSeq
+	})
 	return ready, pending
 }
 
