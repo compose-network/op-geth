@@ -182,7 +182,7 @@ func (miner *Miner) generateWork(genParam *generateParams, witness bool) *newPay
 
 	// SSV: Notify backend that block building is starting
 	if backend, ok := miner.backendAPI.(BackendWithSequencerTransactions); ok {
-		if err := backend.OnBlockBuildingStart(work.rpcCtx); err != nil {
+		if err := backend.OnBlockBuildingStart(work.rpcCtx, work.header.Number.Uint64()); err != nil {
 			log.Error("[SSV] Failed to notify block building start", "err", err)
 		}
 		// Prepare sequencer transactions for this block

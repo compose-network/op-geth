@@ -88,7 +88,7 @@ type BackendWithSequencerTransactions interface {
 
 	// OnBlockBuildingStart is called when block building starts
 	// SSV
-	OnBlockBuildingStart(ctx context.Context) error
+	OnBlockBuildingStart(ctx context.Context, u uint64) error
 
 	// OnBlockBuildingComplete is called when block building completes
 	// SSV
@@ -121,7 +121,7 @@ var DefaultConfig = Config{
 	// consensus-layer usually will wait a half slot of time(6s)
 	// for payload generation. It should be enough for Geth to
 	// run 3 rounds.
-	Recommit: 6 * time.Second,
+	Recommit: 2 * time.Second,
 }
 
 // Miner is the main object which takes care of submitting new work to consensus

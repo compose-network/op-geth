@@ -1240,12 +1240,8 @@ func (b *EthAPIBackend) validateSequencerTransaction(tx *types.Transaction) erro
 
 // OnBlockBuildingStart is called when block building starts
 // SSV
-func (b *EthAPIBackend) OnBlockBuildingStart(ctx context.Context) error {
-	if b.coordinator != nil {
-		_ = b.coordinator.OnBlockBuildingStart(ctx, 0)
-	}
-
-	return nil
+func (b *EthAPIBackend) OnBlockBuildingStart(ctx context.Context, blockNumber uint64) error {
+	return b.coordinator.OnBlockBuildingStart(ctx, blockNumber)
 }
 
 // OnBlockBuildingComplete is called when block building completes.
@@ -1257,132 +1253,7 @@ func (b *EthAPIBackend) OnBlockBuildingComplete(
 	block *types.Block,
 	success, simulation bool,
 ) error {
-	if !success || block == nil {
-		log.Warn("[SSV] Block build failed, clearing sequencer transactions")
-		b.clearAllSequencerTransactions()
-		return nil
-	}
-	if simulation {
-		return nil
-	}
-
-	//Get slot
-	//slot := uint64(0)
-	//currentState := "unknown"
-	//if b.coordinator != nil {
-	//	slot = b.coordinator.GetCurrentSlot()
-	//	currentState = b.coordinator.GetState().String()
-	//}
-
-	// Get current cross-chain tx hashes BEFORE clearing
-	b.sequencerTxMutex.RLock()
-	crossChainTxHashes := make(map[common.Hash]bool, len(b.pendingXTEntries))
-	for _, entry := range b.pendingXTEntries {
-		crossChainTxHashes[entry.tx.Hash()] = true
-	}
-	b.sequencerTxMutex.RUnlock()
-
-	// Identify which cross-chain txs are in this block
-	txsToRemove := make(map[common.Hash]bool)
-	for _, tx := range block.Transactions() {
-		if crossChainTxHashes[tx.Hash()] {
-			b.committedTxsMutex.Lock()
-			b.committedTxHashes[tx.Hash()] = true
-			b.committedTxsMutex.Unlock()
-			txsToRemove[tx.Hash()] = true
-		}
-	}
-
-	if len(txsToRemove) > 0 {
-		b.clearCommittedSequencerTransactions(txsToRemove)
-		log.Info("[SSV] Cleared committed sequencer transactions after block build",
-			//"slot", slot,
-			"blockNumber", block.NumberU64(),
-			"cleared", len(txsToRemove))
-	}
-
-	// Store block with automatic deduplication. Treat pendingBlocks as a stack keyed
-	// by block number: newer payloads replace older ones, identical hashes are ignored.
-	blockHash := block.Hash()
-	blockNumber := block.NumberU64()
-
-	b.pendingBlockMutex.Lock()
-	filtered := make([]*types.Block, 0, len(b.pendingBlocks))
-	isDuplicateHash := false
-	for _, existingBlock := range b.pendingBlocks {
-		switch {
-		case existingBlock.Hash() == blockHash:
-			isDuplicateHash = true
-			filtered = append(filtered, existingBlock)
-		case existingBlock.NumberU64() == blockNumber:
-			// Drop older version for this block number.
-		default:
-			filtered = append(filtered, existingBlock)
-		}
-	}
-
-	if isDuplicateHash {
-		b.pendingBlocks = filtered
-		totalStored := len(b.pendingBlocks)
-		b.pendingBlockMutex.Unlock()
-
-		log.Debug("[SSV] Skipping duplicate block (identical hash already stored)",
-			//"slot", slot,
-			//"state", currentState,
-			"blockNumber", blockNumber,
-			"hash", blockHash.Hex(),
-			"totalStored", totalStored)
-		return nil
-	}
-
-	b.pendingBlocks = append(filtered, block)
-	//b.pendingBlockSlot = slot
-	b.pendingBlockMutex.Unlock()
-
-	// If RequestSeal already arrived for this slot, send immediately
-	//b.rsMutex.RLock()
-	//requestSealReady := b.lastRequestSealIncluded != nil && b.lastRequestSealSlot == slot
-	//b.rsMutex.RUnlock()
-
-	//if requestSealReady {
-	//	if err := b.sendStoredL2Block(ctx); err != nil {
-	//		log.Error("[SSV] Failed to send stored L2Blocks after block build", "err", err, "slot", slot)
-	//	}
-	//}
-
-	return nil
-}
-
-func (b *EthAPIBackend) clearCommittedSequencerTransactions(committed map[common.Hash]bool) {
-	if len(committed) == 0 {
-		return
-	}
-
-	removeSet := make(map[common.Hash]struct{}, len(committed))
-	for hash := range committed {
-		removeSet[hash] = struct{}{}
-	}
-
-	b.sequencerTxMutex.Lock()
-	removedPutInbox, removedOriginal := b.removeEntriesByHashLocked(removeSet)
-	b.sequencerTxMutex.Unlock()
-
-	// Mark committed transactions as rejected in txpool to prevent re-inclusion.
-	// Without this, transactions stay in txpool after being cleared from pendingXTEntries.
-	for hash := range removeSet {
-		if tx := b.eth.txPool.Get(hash); tx != nil {
-			tx.SetRejected()
-			log.Debug("[SSV] Marked committed tx as rejected in txpool to prevent re-inclusion",
-				"txHash", hash.Hex())
-		}
-	}
-
-	if removedPutInbox > 0 || removedOriginal > 0 {
-		log.Info("[SSV] Cleared committed cross-chain txs after delivery",
-			"putInboxRemoved", removedPutInbox,
-			"originalRemoved", removedOriginal,
-			"rejectedInPool", len(removeSet))
-	}
+	return b.coordinator.OnBlockBuildingComplete(ctx, block, success)
 }
 
 func (b *EthAPIBackend) GetPendingOriginalTxs() []*types.Transaction {
@@ -2022,63 +1893,6 @@ func (b *EthAPIBackend) chainContext() core.ChainContext {
 
 func commonAddressFromCompose(addr compose.EthAddress) common.Address {
 	return common.BytesToAddress(addr[:])
-}
-
-// NotifySlotStart notifies the backend when a new SBCP slot begins.
-// SSV
-func (b *EthAPIBackend) NotifySlotStart(startSlot *rollupv1.StartSlot) error {
-	log.Info("[SSV] Notify miner: StartSlot", "slot", startSlot.Slot, "next_sb", startSlot.NextSuperblockNumber)
-
-	// Clear any pending blocks from previous slot when new slot starts
-	b.pendingBlockMutex.Lock()
-	prevBlockCount := len(b.pendingBlocks)
-	if prevBlockCount > 0 {
-		log.Warn("[SSV] Clearing unsent blocks from previous slot",
-			//"prevSlot", b.pendingBlockSlot,
-			"newSlot", startSlot.Slot,
-			"blockCount", prevBlockCount)
-	}
-	b.pendingBlocks = nil
-	//b.pendingBlockSlot = startSlot.Slot
-	b.pendingBlockMutex.Unlock()
-
-	// Clear any lingering sequencer transactions from previous slot.
-	b.sequencerTxMutex.Lock()
-	prevTxCount := len(b.pendingXTEntries)
-	if prevTxCount > 0 {
-		putInboxCount := 0
-		originalCount := 0
-		for _, entry := range b.pendingXTEntries {
-			if entry.kind == sequencerTxPutInbox {
-				putInboxCount++
-			} else {
-				originalCount++
-			}
-		}
-
-		log.Warn("[SSV] Clearing lingering sequencer transactions from previous slot",
-			"slot", startSlot.Slot,
-			"totalTxs", prevTxCount,
-			"putInbox", putInboxCount,
-			"original", originalCount)
-
-		b.pendingXTEntries = nil
-		b.pendingByHash = make(map[common.Hash]int)
-	}
-	b.sequencerTxMutex.Unlock()
-
-	// Clear committed transaction tracking for new slot
-	b.committedTxsMutex.Lock()
-	prevCommittedCount := len(b.committedTxHashes)
-	if prevCommittedCount > 0 {
-		log.Debug("[SSV] Clearing committed tx hashes from previous slot",
-			"slot", startSlot.Slot,
-			"count", prevCommittedCount)
-	}
-	b.committedTxHashes = make(map[common.Hash]bool)
-	b.committedTxsMutex.Unlock()
-
-	return nil
 }
 
 // NotifyStateChange notifies the miner of sequencer state changes

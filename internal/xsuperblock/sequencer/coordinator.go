@@ -6,9 +6,9 @@ import (
 	"github.com/compose-network/specs/compose"
 	sbcpproto "github.com/compose-network/specs/compose/proto"
 	periodproto "github.com/compose-network/specs/compose/sbcp"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/internal/xconsensus"
 	"github.com/ethereum/go-ethereum/internal/xconsensus/instanceproto"
-	pb "github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 	"github.com/ethereum/go-ethereum/internal/xsuperblock/period"
 	"github.com/ethereum/go-ethereum/internal/xtransport"
 	"sync"
@@ -146,20 +146,19 @@ func (sc *SequencerCoordinator) InstanceSequencer() instanceproto.Sequencer {
 }
 
 // OnBlockBuildingStart is called when block building begins for a slot
-func (sc *SequencerCoordinator) OnBlockBuildingStart(ctx context.Context, slot uint64) error {
+func (sc *SequencerCoordinator) OnBlockBuildingStart(ctx context.Context, blockNumber uint64) error {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 
 	sc.log.Debug().
-		Uint64("slot", slot).
+		Uint64("blockNumber", blockNumber).
 		Msg("Block building started")
 
-	// TODO: Implement block building start logic
-	return nil
+	return sc.periodSequencer.BeginBlock(periodproto.BlockNumber(blockNumber))
 }
 
 // OnBlockBuildingComplete is called when block building completes for a slot
-func (sc *SequencerCoordinator) OnBlockBuildingComplete(ctx context.Context, block *pb.L2Block, success bool) error {
+func (sc *SequencerCoordinator) OnBlockBuildingComplete(ctx context.Context, block *types.Block, success bool) error {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 
@@ -167,8 +166,12 @@ func (sc *SequencerCoordinator) OnBlockBuildingComplete(ctx context.Context, blo
 		Bool("success", success).
 		Msg("Block building completed")
 
-	// TODO: Implement block building completion logic
-	return nil
+	blockHeader := periodproto.BlockHeader{
+		Number:    periodproto.BlockNumber(block.Number().Uint64()),
+		BlockHash: compose.BlockHash(block.Hash()),
+		StateRoot: compose.StateRoot(block.Header().Root),
+	}
+	return sc.periodSequencer.EndBlock(blockHeader)
 }
 
 // TransactionManager implementation

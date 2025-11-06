@@ -4,15 +4,11 @@ import (
 	"context"
 	sbcpproto "github.com/compose-network/specs/compose/proto"
 	periodproto "github.com/compose-network/specs/compose/sbcp"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/internal/xconsensus"
 	"github.com/ethereum/go-ethereum/internal/xconsensus/instanceproto"
 	pb "github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 )
-
-// MinerNotifier defines the interface for notifying miner about sequencer events
-type MinerNotifier interface {
-	NotifySlotStart(startSlot *pb.StartSlot) error
-}
 
 // CoordinatorCallbacks defines callback functions for cross-component communication
 type CoordinatorCallbacks struct {
@@ -32,7 +28,7 @@ type CoordinatorCallbacks struct {
 // BlockLifecycleManager handles block building lifecycle events
 type BlockLifecycleManager interface {
 	OnBlockBuildingStart(ctx context.Context, slot uint64) error
-	OnBlockBuildingComplete(ctx context.Context, block *pb.L2Block, success bool) error
+	OnBlockBuildingComplete(ctx context.Context, block *types.Block, success bool) error
 }
 
 // TransactionManager handles transaction preparation and ordering
