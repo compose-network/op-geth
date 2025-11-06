@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package rollup.v1;
+
+option go_package = "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/proto/rollup/v1;rollupv1";
+
+// Synchronous Composability Protocol (SCP) messages
+// See: spec/synchronous_composability_protocol.md
+
+// XtID represents a transaction ID (SHA256 hash)
+message XtID {
+  bytes hash = 1;                // 32-byte SHA256 hash
+}
+
+// XTRequest represents a cross-chain transaction request
+message XTRequest {
+  repeated TransactionRequest transactions = 1;
+}
+
+// TransactionRequest represents a single transaction request for a specific chain
+message TransactionRequest {
+  bytes chain_id = 1;
+  repeated bytes transaction = 2; // RLP encoded Ethereum transactions
+}
+
+// Vote is a 2PC vote message from a sequencer to the SP
+message Vote {
+  bytes sender_chain_id = 1;     // Which chain is voting
+  XtID xt_id = 2;                // Transaction ID
+  bool vote = 3;                 // true = Commit, false = Abort
+}
+
+// Decided is a 2PC decision message from the SP to sequencers
+message Decided {
+  XtID xt_id = 1;                // Transaction ID
+  bool decision = 2;             // true = Commit, false = Abort
+}
+
+// CIRCMessage for direct message exchange between sequencers
+message CIRCMessage {
+  bytes source_chain = 1;
+  bytes destination_chain = 2;
+  repeated bytes source = 3;
+  repeated bytes receiver = 4;
+  XtID xt_id = 5;
+  string label = 6;
+  repeated bytes data = 7;       // ABI encoded data
+  bytes session_id = 8;          // 32-byte big-endian session identifier (U256)
+}

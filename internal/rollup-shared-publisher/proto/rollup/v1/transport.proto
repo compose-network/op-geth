@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package rollup.v1;
+
+option go_package = "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/proto/rollup/v1;rollupv1";
+
+// Transport-level messages for TCP connection management
+
+// HandshakeRequest is sent by the client during authentication
+message HandshakeRequest {
+  int64 timestamp = 1;           // Client timestamp for replay protection
+  bytes public_key = 2;          // Client's public key (33 bytes compressed)
+  bytes signature = 3;           // ECDSA signature over timestamp
+  string client_id = 4;          // Optional client identifier
+  bytes nonce = 5;               // Random nonce for replay protection
+}
+
+// HandshakeResponse is sent from the server to the client after a handshake request
+message HandshakeResponse {
+  bool accepted = 1;             // Whether authentication succeeded
+  string error = 2;              // Error message if rejected
+  string session_id = 3;         // Unique session identifier
+}
+
+// Ping is sent to check connection liveness
+message Ping {
+  int64 timestamp = 1;           // Timestamp for latency measurement
+}
+
+// Pong is a response to a Ping message
+message Pong {
+  int64 timestamp = 1;           // Echo back the timestamp from Ping
+}
+
+// DisconnectMessage is sent when gracefully closing a connection
+message DisconnectMessage {
+  enum Reason {
+    REQUESTED = 0;               // Client or server requested disconnect
+    PROTOCOL_ERROR = 1;          // Protocol violation detected
+    TOO_MANY_PEERS = 2;          // Connection limit reached
+    AUTH_FAILURE = 3;            // Authentication failed
+    READ_TIMEOUT = 4;            // Read operation timed out
+    WRITE_TIMEOUT = 5;           // Write operation timed out
+    NETWORK_ERROR = 6;           // Network-level error
+    INTERNAL_ERROR = 7;          // Internal server error
+    THROTTLED = 8;               // Connection throttled (rate limited)
+  }
+  Reason reason = 1;             // Disconnect reason code
+  string details = 2;            // Human-readable details (optional)
+}

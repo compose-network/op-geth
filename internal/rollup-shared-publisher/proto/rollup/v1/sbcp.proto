@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package rollup.v1;
+
+import "rollup/v1/consensus.proto";
+
+option go_package = "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/proto/rollup/v1;rollupv1";
+
+// Superblock Construction Protocol (SBCP) messages
+// See: spec/superblock_construction_protocol.md
+
+// L2BlockRequest specifies which L2 block a sequencer should build
+message L2BlockRequest {
+  bytes chain_id = 1;
+  uint64 block_number = 2;
+  bytes parent_hash = 3;
+}
+
+// StartSlot is sent by SP to begin a new slot
+message StartSlot {
+  uint64 slot = 1;                           // Current slot number
+  uint64 next_superblock_number = 2;         // Superblock number SP aims to produce
+  bytes last_superblock_hash = 3;            // Hash of the last valid superblock
+  repeated L2BlockRequest l2_blocks_request = 4; // L2 blocks to be built by each rollup
+}
+
+// RequestSeal is sent by SP to request sequencers seal their blocks
+message RequestSeal {
+  uint64 slot = 1;                           // Current slot number
+  repeated bytes included_xts = 2;           // List of included cross-chain transaction IDs
+}
+
+// RollBackAndStartSlot is sent by SP to rollback and restart from a valid state
+message RollBackAndStartSlot {
+  repeated L2BlockRequest l2_blocks_request = 1; // L2 blocks to build from valid state
+  uint64 current_slot = 2;                   // Current slot number
+  uint64 next_superblock_number = 3;         // Next superblock number to produce
+  bytes last_superblock_hash = 4;            // Hash of last valid superblock
+}
+
+// L2Block is submitted from sequencer to SP
+message L2Block {
+  uint64 slot = 1;                           // Slot this block belongs to
+  bytes chain_id = 2;                        // Chain identifier
+  uint64 block_number = 3;                   // L2 block number
+  bytes block_hash = 4;                      // Hash of this L2 block
+  bytes parent_block_hash = 5;               // Hash of parent L2 block
+  repeated bytes included_xts = 6;           // Included cross-chain transaction IDs
+  bytes block = 7;                           // Encoded Ethereum block data (RLP encoded)
+}
+
+// StartSC is sent by SP to start cross-chain transaction coordination
+message StartSC {
+  uint64 slot = 1;                           // Current slot number
+  uint64 xt_sequence_number = 2;             // Sequence number for ordering within slot
+  XTRequest xt_request = 3;                  // The cross-chain transaction request
+  bytes xt_id = 4;                           // 32-byte SHA256 hash over xTRequest
+}
+
+// Block submission from a sequencer to the SP (deprecated, kept for backward compatibility)
+message Block {
+  bytes chain_id = 1;                        // Which chain's block
+  bytes block_data = 2;                      // The actual block data
+  repeated XtID included_xt_ids = 3;         // Which xTs are included
+}

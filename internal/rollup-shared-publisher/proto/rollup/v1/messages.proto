@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package rollup.v1;
+
+import "rollup/v1/transport.proto";
+import "rollup/v1/consensus.proto";
+import "rollup/v1/sbcp.proto";
+
+option go_package = "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/proto/rollup/v1;rollupv1";
+
+// Message is the main wrapper for all protocol messages
+// This allows multiplexing different message types over a single connection
+message Message {
+  string sender_id = 1;          // Identifier of the sender
+
+  // Payload contains the actual message content
+  oneof payload {
+    // SCP (Synchronous Composability Protocol) messages
+    XTRequest xt_request = 2;
+    Vote vote = 3;
+    Decided decided = 4;
+    Block block = 5;             // Deprecated
+    CIRCMessage circ_message = 6;
+
+    // SBCP (Superblock Construction Protocol) messages
+    StartSlot start_slot = 7;
+    RequestSeal request_seal = 8;
+    RollBackAndStartSlot roll_back_and_start_slot = 9;
+    L2Block l2_block = 10;
+    StartSC start_sc = 11;
+
+    // Transport-level messages
+    HandshakeRequest handshake_request = 12;
+    HandshakeResponse handshake_response = 13;
+    Ping ping = 14;
+    Pong pong = 15;
+    DisconnectMessage disconnect = 16;
+  }
+}

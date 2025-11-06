@@ -196,10 +196,10 @@ func (c *client) Connect(ctx context.Context, addr string) error {
 // Disconnect closes the connection
 func (c *client) Disconnect(ctx context.Context) error {
 	c.autoReconnect.Store(false)
-
 	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if !c.connected.Load() {
-		c.mu.Unlock()
 		return fmt.Errorf("client not connected")
 	}
 
@@ -212,11 +212,14 @@ func (c *client) Disconnect(ctx context.Context) error {
 		c.cancel = nil
 	}
 
-	// Close connection
+	// Close connection with disconnect reason
 	if c.conn != nil {
-		c.conn.Close()
+		if impl, ok := c.conn.(*connection); ok {
+			impl.CloseWithReason(pb.DisconnectMessage_REQUESTED, "client requested disconnect")
+		} else {
+			c.conn.Close()
+		}
 	}
-	c.mu.Unlock() // Release lock BEFORE waiting for goroutines
 
 	// Wait for goroutines with timeout
 	done := make(chan struct{})
@@ -326,8 +329,8 @@ func (c *client) receiveLoop(ctx context.Context) {
 				return
 			}
 
-			// Handle ping/pong messages
-			switch msg.Payload.(type) {
+			// Handle ping/pong and disconnect messages
+			switch payload := msg.Payload.(type) {
 			case *pb.Message_Ping:
 				// Received ping, send pong
 				c.log.Debug().Msg("Received ping, sending pong")
@@ -340,6 +343,16 @@ func (c *client) receiveLoop(ctx context.Context) {
 				// Received pong, connection is alive
 				c.log.Debug().Msg("Received pong")
 				continue
+			case *pb.Message_Disconnect:
+				// Received disconnect message from server
+				c.log.Info().
+					Str("reason", payload.Disconnect.Reason.String()).
+					Str("details", payload.Disconnect.Details).
+					Msg("Server sent disconnect")
+				c.handleConnectionLoss(fmt.Errorf("server disconnected: %s - %s",
+					payload.Disconnect.Reason.String(),
+					payload.Disconnect.Details))
+				return
 			}
 
 			var verifiedID string

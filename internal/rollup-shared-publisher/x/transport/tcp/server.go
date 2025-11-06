@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +16,92 @@ import (
 	pb "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/proto/rollup/v1"
 	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/transport"
 )
+
+// ConnectionThrottle prevents rapid reconnection attacks by throttling per-IP connections
+type ConnectionThrottle struct {
+	mu          sync.RWMutex
+	attempts    map[string]time.Time
+	throttleDur time.Duration
+	log         zerolog.Logger
+}
+
+// NewConnectionThrottle creates a new connection throttle with the specified throttle duration
+func NewConnectionThrottle(throttleDur time.Duration, log zerolog.Logger) *ConnectionThrottle {
+	if throttleDur <= 0 {
+		throttleDur = 30 * time.Second
+	}
+
+	return &ConnectionThrottle{
+		attempts:    make(map[string]time.Time),
+		throttleDur: throttleDur,
+		log:         log.With().Str("component", "throttle").Logger(),
+	}
+}
+
+// Check verifies if the connection from the given IP should be allowed
+func (ct *ConnectionThrottle) Check(remoteAddr string) error {
+	ip := extractIP(remoteAddr)
+	if ip == "" {
+		return nil
+	}
+
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+
+	if lastAttempt, exists := ct.attempts[ip]; exists {
+		if time.Since(lastAttempt) < ct.throttleDur {
+			ct.log.Warn().
+				Str("ip", ip).
+				Dur("throttle", ct.throttleDur).
+				Msg("Connection throttled")
+			return fmt.Errorf("too many connection attempts from %s", ip)
+		}
+	}
+
+	ct.attempts[ip] = time.Now()
+	return nil
+}
+
+// cleanup removes expired throttle entries
+func (ct *ConnectionThrottle) cleanup() {
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+
+	now := time.Now()
+	for ip, lastAttempt := range ct.attempts {
+		if now.Sub(lastAttempt) > ct.throttleDur*2 {
+			delete(ct.attempts, ip)
+		}
+	}
+
+	ct.log.Debug().
+		Int("remaining_entries", len(ct.attempts)).
+		Msg("Cleaned up throttle entries")
+}
+
+// StartCleanup starts periodic cleanup of expired throttle entries
+func (ct *ConnectionThrottle) StartCleanup(ctx context.Context) {
+	ticker := time.NewTicker(ct.throttleDur)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				ct.cleanup()
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+// extractIP extracts the IP address from a net.Addr string
+func extractIP(remoteAddr string) string {
+	if idx := strings.LastIndex(remoteAddr, ":"); idx != -1 {
+		return remoteAddr[:idx]
+	}
+	return remoteAddr
+}
 
 // Server implements high-performance TCP server
 type Server struct {
@@ -33,6 +120,7 @@ type Server struct {
 	listenerBacklog int
 	acceptQueue     chan net.Conn
 	workerPool      *WorkerPool
+	throttle        *ConnectionThrottle
 }
 
 func DefaultServerConfig() transport.Config {
@@ -53,6 +141,7 @@ func NewServer(config transport.Config, log zerolog.Logger) transport.Server {
 		listenerBacklog: 128,
 		acceptQueue:     make(chan net.Conn, 64),
 		workerPool:      NewWorkerPool(8, log),
+		throttle:        NewConnectionThrottle(30*time.Second, log),
 	}
 }
 
@@ -78,6 +167,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	s.workerPool.Start(ctx)
 	s.manager.StartHealthMonitoring(ctx, 30*time.Second)
+	s.throttle.StartCleanup(ctx)
 
 	s.wg.Add(2)
 	go s.acceptLoop(ctx)
@@ -206,6 +296,25 @@ func (s *Server) connectionWorker(ctx context.Context) {
 
 // setupConnection configures and registers a new connection
 func (s *Server) setupConnection(netConn net.Conn) {
+	remoteAddr := netConn.RemoteAddr().String()
+
+	// Check throttle before processing connection
+	if err := s.throttle.Check(remoteAddr); err != nil {
+		s.log.Warn().
+			Str("remote_addr", remoteAddr).
+			Err(err).
+			Msg("Connection throttled, rejecting")
+
+		connID := uuid.New().String()
+		conn := NewConnection(netConn, connID, s.codec, s.log)
+		if impl, ok := conn.(*connection); ok {
+			impl.CloseWithReason(pb.DisconnectMessage_THROTTLED, "too many connection attempts")
+		} else {
+			netConn.Close()
+		}
+		return
+	}
+
 	// Configure TCP options
 	if tcpConn, ok := netConn.(*net.TCPConn); ok {
 		tcpConn.SetKeepAlive(s.config.KeepAlive)
@@ -223,7 +332,7 @@ func (s *Server) setupConnection(netConn net.Conn) {
 		if impl, ok := conn.(*connection); ok {
 			if err := impl.HandleHandshake(s.authManager); err != nil {
 				s.log.Error().Err(err).Msg("Handshake failed")
-				conn.Close()
+				impl.CloseWithReason(pb.DisconnectMessage_AUTH_FAILURE, err.Error())
 				return
 			}
 		} else {
@@ -236,7 +345,11 @@ func (s *Server) setupConnection(netConn net.Conn) {
 	// Register connection
 	if err := s.manager.Add(conn); err != nil {
 		s.log.Error().Err(err).Msg("Failed to register connection")
-		netConn.Close()
+		if impl, ok := conn.(*connection); ok {
+			impl.CloseWithReason(pb.DisconnectMessage_TOO_MANY_PEERS, "connection limit reached")
+		} else {
+			netConn.Close()
+		}
 		return
 	}
 
@@ -257,7 +370,7 @@ func (s *Server) SetHandler(handler transport.ServerMessageHandler) {
 // Broadcast sends a message to all clients except excluded
 func (s *Server) Broadcast(ctx context.Context, msg *pb.Message, excludeID string) error {
 	// Override sender ID
-	msg.SenderId = "shared-publisher"
+	msg.SenderId = "publisher"
 
 	data, err := s.codec.EncodeMessage(msg)
 	if err != nil {

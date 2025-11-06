@@ -16,12 +16,31 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// TimeoutConfig contains timeout settings for various connection operations
+type TimeoutConfig struct {
+	Handshake  time.Duration // Timeout for authentication handshake (default: 5s)
+	Read       time.Duration // Timeout for read operations, also acts as idle timeout (default: 30s)
+	Write      time.Duration // Timeout for write operations (default: 20s)
+	Disconnect time.Duration // Expedited timeout for disconnect messages (default: 1s)
+}
+
+// DefaultTimeoutConfig returns production-ready timeout defaults
+func DefaultTimeoutConfig() TimeoutConfig {
+	return TimeoutConfig{
+		Handshake:  5 * time.Second,
+		Read:       30 * time.Second,
+		Write:      20 * time.Second,
+		Disconnect: 1 * time.Second,
+	}
+}
+
 // connection implements transport.Connection with authentication
 type connection struct {
 	net.Conn
-	id    string
-	codec *Codec
-	log   zerolog.Logger
+	id       string
+	codec    *Codec
+	log      zerolog.Logger
+	timeouts TimeoutConfig
 
 	// Authentication state
 	mu              sync.RWMutex
@@ -46,15 +65,23 @@ type connection struct {
 
 // NewConnection creates a new connection wrapper
 func NewConnection(netConn net.Conn, id string, codec *Codec, log zerolog.Logger) transport.Connection {
+	return NewConnectionWithTimeouts(netConn, id, codec, log, DefaultTimeoutConfig())
+}
+
+// NewConnectionWithTimeouts creates a new connection wrapper with custom timeout configuration
+func NewConnectionWithTimeouts(
+	netConn net.Conn, id string, codec *Codec, log zerolog.Logger, timeouts TimeoutConfig,
+) transport.Connection {
 	now := time.Now()
 
 	return &connection{
-		Conn:   netConn,
-		id:     id,
-		codec:  codec,
-		log:    log.With().Str("conn_id", id).Logger(),
-		reader: bufio.NewReaderSize(netConn, 16384),
-		writer: bufio.NewWriterSize(netConn, 16384),
+		Conn:     netConn,
+		id:       id,
+		codec:    codec,
+		log:      log.With().Str("conn_id", id).Logger(),
+		timeouts: timeouts,
+		reader:   bufio.NewReaderSize(netConn, 16384),
+		writer:   bufio.NewWriterSize(netConn, 16384),
 		info: transport.ConnectionInfo{
 			ID:          id,
 			RemoteAddr:  netConn.RemoteAddr().String(),
@@ -100,7 +127,7 @@ func (c *connection) PerformHandshake(signer auth.Manager, clientID string) erro
 
 // HandleHandshake handles server-side authentication handshake
 func (c *connection) HandleHandshake(authManager auth.Manager) error {
-	if err := c.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+	if err := c.SetReadDeadline(time.Now().Add(c.timeouts.Handshake)); err != nil {
 		return err
 	}
 	defer c.SetReadDeadline(time.Time{})
@@ -193,6 +220,12 @@ func (c *connection) GetSessionID() string {
 
 // ReadMessage reads a protobuf message
 func (c *connection) ReadMessage() (*pb.Message, error) {
+	if c.timeouts.Read > 0 {
+		if err := c.SetReadDeadline(time.Now().Add(c.timeouts.Read)); err != nil {
+			return nil, fmt.Errorf("failed to set read deadline: %w", err)
+		}
+	}
+
 	var msg pb.Message
 	if err := c.codec.ReadMessage(c.reader, &msg); err != nil {
 		return nil, err
@@ -208,6 +241,12 @@ func (c *connection) ReadMessage() (*pb.Message, error) {
 func (c *connection) WriteMessage(msg *pb.Message) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+
+	if c.timeouts.Write > 0 {
+		if err := c.SetWriteDeadline(time.Now().Add(c.timeouts.Write)); err != nil {
+			return fmt.Errorf("failed to set write deadline: %w", err)
+		}
+	}
 
 	if err := c.codec.WriteMessage(c.writer, msg); err != nil {
 		return err
@@ -268,4 +307,46 @@ func (c *connection) SetChainID(chainID string) {
 	c.mu.Lock()
 	c.chainID = chainID
 	c.mu.Unlock()
+}
+
+// CloseWithReason sends a disconnect message with reason before closing the connection
+func (c *connection) CloseWithReason(reason pb.DisconnectMessage_Reason, details string) error {
+	c.log.Info().
+		Str("reason", reason.String()).
+		Str("details", details).
+		Msg("Closing connection with reason")
+
+	msg := &pb.Message{
+		SenderId: c.id,
+		Payload: &pb.Message_Disconnect{
+			Disconnect: &pb.DisconnectMessage{
+				Reason:  reason,
+				Details: details,
+			},
+		},
+	}
+
+	c.writeMu.Lock()
+	if c.timeouts.Disconnect > 0 {
+		if err := c.SetWriteDeadline(time.Now().Add(c.timeouts.Disconnect)); err != nil {
+			c.writeMu.Unlock()
+			c.log.Warn().Err(err).Msg("Failed to set disconnect deadline")
+			return c.Close()
+		}
+	}
+
+	if err := c.codec.WriteMessage(c.writer, msg); err != nil {
+		c.writeMu.Unlock()
+		c.log.Warn().Err(err).Msg("Failed to send disconnect message")
+		return c.Close()
+	}
+
+	if err := c.writer.Flush(); err != nil {
+		c.writeMu.Unlock()
+		c.log.Warn().Err(err).Msg("Failed to flush disconnect message")
+		return c.Close()
+	}
+	c.writeMu.Unlock()
+
+	return c.Close()
 }
