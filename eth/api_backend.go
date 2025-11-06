@@ -2082,7 +2082,7 @@ func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *roll
 			continue
 		}
 
-		removedPut, removedOriginal := b.dropTransactionsForXtKey(key, false)
+		removedPut, removedOriginal := b.dropTransactionsForXtKey(key, true)
 		totalDroppedPut += removedPut
 		totalDroppedOriginal += removedOriginal
 		if removedPut+removedOriginal > 0 {
@@ -2180,7 +2180,7 @@ func (b *EthAPIBackend) cleanupAbortedTransactionCallback(ctx context.Context, x
 		return nil
 	}
 	key := hexutil.Encode(xtID.Hash)
-	removedPut, removedOriginal := b.dropTransactionsForXtKey(key, false)
+	removedPut, removedOriginal := b.dropTransactionsForXtKey(key, true)
 	if removedPut+removedOriginal > 0 {
 		log.Info("[SSV] Dropped aborted transactions via callback",
 			"xtID", key,
