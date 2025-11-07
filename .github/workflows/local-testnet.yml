@@ -44,5 +44,4 @@ jobs:
                --publisher-url=https://github.com/compose-network/publisher.git \
                --publisher-branch=stage \
                --op-geth-url=https://github.com/compose-network/op-geth.git \
-               --op-geth-branch=${GITHUB_REF_NAME_SLUG}
-          docker ps -a
+               --op-geth-branch=${GITHUB_REF_NAME_SLUG} || docker ps -a && exit 1
