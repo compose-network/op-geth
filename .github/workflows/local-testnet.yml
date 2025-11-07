@@ -32,6 +32,7 @@ jobs:
                --wallet-address=${{ secrets.LOCAL_TESTNET_WALLET_ADDRESS}} \
                --wallet-private-key=${{ secrets.LOCAL_TESTNET_WALLET_PK}} \
                --coordinator-private-key=${{ secrets.LOCAL_TESTNET_COORDINATOR_PK }} \
+               --genesis-balance-wei=10000000000000000000 \
                --compose-network-name=hoodi \
                --dispute-network-name=hoodi \
                --dispute-owner-address=${{ secrets.LOCAL_TESTNET_WALLET_ADDRESS}} \
