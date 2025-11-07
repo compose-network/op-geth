@@ -12,77 +12,14 @@ jobs:
   run-testnet:
     runs-on: public-isolated
     steps:
-      - name: Checkout local-testnet repository
-        uses: actions/checkout@v4
-        with:
-          repository: compose-network/local-testnet
-          path: local-testnet
-      - name: Inject enhanced GitHub environment variables
-        uses: rlespinasse/github-slug-action@v5
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-        with:
-          version: nightly
-
-      - name: Install Just
-        uses: extractions/setup-just@v2
-
-      - name: Install jq
-        run: |
-          # Install jq to user's local bin without needing root
-          mkdir -p $HOME/.local/bin
-          curl -L https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o $HOME/.local/bin/jq
-          chmod +x $HOME/.local/bin/jq
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Install Docker Compose
-        run: |
-          # Install Docker Compose V2 plugin if not already installed
-          if ! docker compose version &> /dev/null; then
-            echo "Installing Docker Compose..."
-            DOCKER_CONFIG=${DOCKER_CONFIG:-$HOME/.docker}
-            mkdir -p $DOCKER_CONFIG/cli-plugins
-            curl -SL https://github.com/docker/compose/releases/download/v2.40.3/docker-compose-linux-x86_64 -o $DOCKER_CONFIG/cli-plugins/docker-compose
-            chmod +x $DOCKER_CONFIG/cli-plugins/docker-compose
-          fi
-
-      - name: Verify all tools
-        run: |
-          echo "=== Go ==="
-          go version
-          echo "=== Foundry ==="
-          forge --version
-          cast --version
-          anvil --version
-          echo "=== Just ==="
-          just --version
-          echo "=== jq ==="
-          jq --version
-          echo "=== Git ==="
-          git --version
-          echo "=== Docker ==="
-          docker version
-          docker buildx version
-          docker compose version
-          pwd
-
       - name: Run local testnet
         working-directory: local-testnet
         run: |
           PWD=`pwd`
-          docker build -f build/Dockerfile -t compose-network/local-testnet:latest .
           docker run --rm \
              --add-host=host.docker.internal:host-gateway \
              -v /var/run/docker.sock:/var/run/docker.sock \
              -v ${PWD}:/workspace \
              -w /workspace \
              -e HOST_PROJECT_PATH=${PWD} \
-             compose-network/local-testnet:latest l2 --l1-chain-id ${{ secrets.LOCAL_TESTNET_L1_CHAIN_ID }} --l1-cl-url=${{ secrets.LOCAL_TESTNET_L1_CL }} --l1-el-url=${{ secrets.LOCAL_TESTNET_L1_EL}} --wallet-address=${{ secrets.LOCAL_TESTNET_WALLET_ADDRESS}} --wallet-private-key=${{ secrets.LOCAL_TESTNET_WALLET_PK}} --coordinator-private-key=${{ secrets.LOCAL_TESTNET_COORDINATOR_PK }} --dispute-network-name=hoodi --dispute-owner-address=${{ secrets.LOCAL_TESTNET_WALLET_ADDRESS}} --dispute-proposer-address=${{ secrets.LOCAL_TESTNET_WALLET_ADDRESS}} --dispute-admin-address=${{ secrets.LOCAL_TESTNET_WALLET_ADDRESS}} --dispute-verifier-address=${{ secrets.LOCAL_TESTNET_VERIFIER_WALLET}}  --dispute-aggregation-vkey=${{ secrets.LOCAL_TESTNET_VERIFIER_PK}} --compose-contracts-url=https://github.com/compose-network/contracts.git --compose-contracts-branch=develop --publisher-url=https://github.com/compose-network/publisher.git --publisher-branch=stage --op-geth-url=https://github.com/compose-network/op-geth.git --op-geth-branch=${GITHUB_REF_NAME_SLUG}
+             ghcr.io/compose-network/local-testnet:v0.0.1 l2 --l1-chain-id ${{ secrets.LOCAL_TESTNET_L1_CHAIN_ID }} --l1-cl-url=${{ secrets.LOCAL_TESTNET_L1_CL }} --l1-el-url=${{ secrets.LOCAL_TESTNET_L1_EL}} --wallet-address=${{ secrets.LOCAL_TESTNET_WALLET_ADDRESS}} --wallet-private-key=${{ secrets.LOCAL_TESTNET_WALLET_PK}} --coordinator-private-key=${{ secrets.LOCAL_TESTNET_COORDINATOR_PK }} --dispute-network-name=hoodi --dispute-owner-address=${{ secrets.LOCAL_TESTNET_WALLET_ADDRESS}} --dispute-proposer-address=${{ secrets.LOCAL_TESTNET_WALLET_ADDRESS}} --dispute-admin-address=${{ secrets.LOCAL_TESTNET_WALLET_ADDRESS}} --dispute-verifier-address=${{ secrets.LOCAL_TESTNET_VERIFIER_WALLET}}  --dispute-aggregation-vkey=${{ secrets.LOCAL_TESTNET_VERIFIER_PK}} --compose-contracts-url=https://github.com/compose-network/contracts.git --compose-contracts-branch=develop --publisher-url=https://github.com/compose-network/publisher.git --publisher-branch=stage --op-geth-url=https://github.com/compose-network/op-geth.git --op-geth-branch=${GITHUB_REF_NAME_SLUG}
