@@ -22,6 +22,19 @@ jobs:
         with:
           app-id: ${{ secrets.PULL_PRIVATE_GITHUB_APP_ID }}
           private-key: ${{ secrets.PULL_PRIVATE_GITHUB_APP_KEY }}
+      - name: Generate two random chain IDs (>=100000)
+        id: chainids
+        run: |
+          MIN=100000
+          MAX=2147483646   # 2^31-1 (JS/tooling-safe upper bound)
+          a=$(shuf -i ${MIN}-${MAX} -n 1)
+          b=$(shuf -i ${MIN}-${MAX} -n 1)
+          while [ "$b" -eq "$a" ]; do
+            b=$(shuf -i ${MIN}-${MAX} -n 1)
+          done
+          echo "chainida=$a" >> "$GITHUB_OUTPUT"
+          echo "chainidb=$b" >> "$GITHUB_OUTPUT"
+
       - name: Run local testnet
         run: |
           PWD=`pwd`
@@ -39,6 +52,8 @@ jobs:
                --wallet-private-key=${{ secrets.LOCAL_TESTNET_WALLET_PK}} \
                --coordinator-private-key=${{ secrets.LOCAL_TESTNET_COORDINATOR_PK }} \
                --genesis-balance-wei=10000000000000000000 \
+               --rollup-a-id ${{ steps.chainids.outputs.chainida }}\
+               --rollup-b-id ${{ steps.chainids.outputs.chainidb }}\
                --compose-network-name=hoodi \
                --dispute-network-name=hoodi \
                --dispute-owner-address=${{ secrets.LOCAL_TESTNET_WALLET_ADDRESS}} \
@@ -62,4 +77,7 @@ jobs:
           path: rollup-probe
       - name: Run smoke tests
         working-directory: rollup-probe
-        run: make smoke-test
+        run: |
+          cp ../local-testnet/output.yaml configs/config.yaml
+          make build
+          make smoke-test
