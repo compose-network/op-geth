@@ -15,7 +15,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Run local testnet
-        working-directory: local-testnet
         run: |
           PWD=`pwd`
           docker run --rm \
