@@ -332,11 +332,17 @@ func (t *sequencerTxTracker) buildBundles() ([]sequencerBundleEntry, []sequencer
 	for xtID := range groups {
 		xtIDs = append(xtIDs, xtID)
 	}
-	sort.Slice(xtIDs, func(i, j int) bool {
-		return groups[xtIDs[i]].firstSeq < groups[xtIDs[j]].firstSeq
-	})
 
-	pending := make([]sequencerPendingBundle, 0)
+	sort.Slice(xtIDs, func(i, j int) bool {
+		gi := groups[xtIDs[i]]
+		gj := groups[xtIDs[j]]
+
+		if len(gi.originals) > 0 && len(gj.originals) > 0 {
+			return gi.originals[0].tx.Nonce() < gj.originals[0].tx.Nonce()
+		}
+
+		return gi.firstSeq < gj.firstSeq
+	})
 
 	for _, xtID := range xtIDs {
 		g := groups[xtID]
@@ -357,23 +363,9 @@ func (t *sequencerTxTracker) buildBundles() ([]sequencerBundleEntry, []sequencer
 		for ; j < len(g.originals); j++ {
 			ready = append(ready, sequencerBundleEntry{tx: g.originals[j].tx, xtID: xtID, kind: g.originals[j].kind, status: g.originals[j].status})
 		}
-
-		if i < len(g.puts) {
-			items := make([]sequencerPendingItem, 0, len(g.puts)-i)
-			for ; i < len(g.puts); i++ {
-				items = append(items, sequencerPendingItem{kind: g.puts[i].kind, status: g.puts[i].status})
-			}
-			pending = append(pending, sequencerPendingBundle{xtID: xtID, items: items})
-		}
 	}
 
-	if len(pending) == 0 {
-		return ready, nil
-	}
-	sort.Slice(pending, func(i, j int) bool {
-		return groups[pending[i].xtID].firstSeq < groups[pending[j].xtID].firstSeq
-	})
-	return ready, pending
+	return ready, nil
 }
 
 func (t *sequencerTxTracker) allXTIDsLocked() map[string]struct{} {
