@@ -337,8 +337,10 @@ func (t *sequencerTxTracker) buildBundles() ([]sequencerBundleEntry, []sequencer
 		gi := groups[xtIDs[i]]
 		gj := groups[xtIDs[j]]
 
-		if len(gi.originals) > 0 && len(gj.originals) > 0 {
-			return gi.originals[0].tx.Nonce() < gj.originals[0].tx.Nonce()
+		// Sort by putInbox nonce (coordinator address) to ensure correct execution order
+		// putInbox transactions must execute in their nonce order, regardless of original tx nonces
+		if len(gi.puts) > 0 && len(gj.puts) > 0 {
+			return gi.puts[0].tx.Nonce() < gj.puts[0].tx.Nonce()
 		}
 
 		return gi.firstSeq < gj.firstSeq
