@@ -33,7 +33,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/core/ssv"
-	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/eth/tracers/native"
 
 	"github.com/ethereum/go-ethereum"
@@ -843,6 +842,11 @@ func (b *EthAPIBackend) SimulateTransaction(
 		return nil, err
 	}
 
+	// For speculative simulation during SBCP, skip nonce checks to allow
+	// simulating transactions submitted in parallel batches with future nonces.
+	// The actual nonce validation will happen during real block execution.
+	msg.SkipNonceChecks = true
+
 	blockContext := core.NewEVMBlockContext(header, b.eth.blockchain, nil, b.ChainConfig(), stateDB)
 
 	// Pre-apply staging transactions without tracing
@@ -868,19 +872,10 @@ func (b *EthAPIBackend) SimulateTransaction(
 				log.Warn("[SSV] Failed to build staged putInbox message", "txHash", staged.Hash(), "err", err)
 				continue
 			}
+			stageMsg.SkipNonceChecks = true
 
 			stageGasPool := new(core.GasPool).AddGas(header.GasLimit)
 			stateDB.SetTxContext(staged.Hash(), stateDB.TxIndex()+1)
-			if wants := staged.Nonce(); stateDB.GetNonce(stageMsg.From) != wants {
-				prev := stateDB.GetNonce(stageMsg.From)
-				stateDB.SetNonce(stageMsg.From, wants, tracing.NonceChangeUnspecified)
-				log.Info("[SSV] Pre-apply putInbox adjusted nonce in simulation",
-					"from", stageMsg.From.Hex(),
-					"prev", prev,
-					"wants", wants,
-					"staged_hash", staged.Hash().Hex(),
-				)
-			}
 			if _, err := core.ApplyMessage(stagingEVM, stageMsg, stageGasPool); err != nil {
 				log.Warn("[SSV] Failed to pre-apply putInbox transaction", "txHash", staged.Hash(), "err", err)
 				continue
@@ -904,19 +899,10 @@ func (b *EthAPIBackend) SimulateTransaction(
 				log.Warn("[SSV] Failed to build staged original message", "txHash", staged.Hash(), "err", err)
 				continue
 			}
+			stageMsg.SkipNonceChecks = true
 
 			stageGasPool := new(core.GasPool).AddGas(header.GasLimit)
 			stateDB.SetTxContext(staged.Hash(), stateDB.TxIndex()+1)
-			if wants := staged.Nonce(); stateDB.GetNonce(stageMsg.From) != wants {
-				prev := stateDB.GetNonce(stageMsg.From)
-				stateDB.SetNonce(stageMsg.From, wants, tracing.NonceChangeUnspecified)
-				log.Info("[SSV] Pre-apply original adjusted nonce in simulation",
-					"from", stageMsg.From.Hex(),
-					"prev", prev,
-					"wants", wants,
-					"staged_hash", staged.Hash().Hex(),
-				)
-			}
 			if _, err := core.ApplyMessage(stagingEVM, stageMsg, stageGasPool); err != nil {
 				log.Warn("[SSV] Failed to pre-apply original transaction", "txHash", staged.Hash(), "err", err)
 				continue
