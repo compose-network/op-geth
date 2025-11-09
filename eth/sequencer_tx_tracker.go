@@ -328,50 +328,38 @@ func (t *sequencerTxTracker) buildBundles() ([]sequencerBundleEntry, []sequencer
 		return ready, nil
 	}
 
-	xtIDs := make([]string, 0, len(groups))
-	for xtID := range groups {
-		xtIDs = append(xtIDs, xtID)
+	var allPuts []sequencerBundleEntry
+	var allOriginals []sequencerBundleEntry
+
+	for xtID, g := range groups {
+		for _, put := range g.puts {
+			allPuts = append(allPuts, sequencerBundleEntry{
+				tx:     put.tx,
+				xtID:   xtID,
+				kind:   put.kind,
+				status: put.status,
+			})
+		}
+		for _, orig := range g.originals {
+			allOriginals = append(allOriginals, sequencerBundleEntry{
+				tx:     orig.tx,
+				xtID:   xtID,
+				kind:   orig.kind,
+				status: orig.status,
+			})
+		}
 	}
 
-	sort.Slice(xtIDs, func(i, j int) bool {
-		gi := groups[xtIDs[i]]
-		gj := groups[xtIDs[j]]
-
-		// Sort by putInbox nonce if both XTs have putInbox (receiver side)
-		// putInbox transactions from coordinator must execute in nonce order
-		if len(gi.puts) > 0 && len(gj.puts) > 0 {
-			return gi.puts[0].tx.Nonce() < gj.puts[0].tx.Nonce()
-		}
-
-		// Sort by original nonce if both XTs have originals (sender side or mixed)
-		// original transactions from user must also execute in nonce order
-		if len(gi.originals) > 0 && len(gj.originals) > 0 {
-			return gi.originals[0].tx.Nonce() < gj.originals[0].tx.Nonce()
-		}
-
-		return gi.firstSeq < gj.firstSeq
+	sort.Slice(allPuts, func(i, j int) bool {
+		return allPuts[i].tx.Nonce() < allPuts[j].tx.Nonce()
 	})
 
-	for _, xtID := range xtIDs {
-		g := groups[xtID]
+	sort.Slice(allOriginals, func(i, j int) bool {
+		return allOriginals[i].tx.Nonce() < allOriginals[j].tx.Nonce()
+	})
 
-		sort.Slice(g.puts, func(i, j int) bool { return g.puts[i].sequence < g.puts[j].sequence })
-		sort.Slice(g.originals, func(i, j int) bool { return g.originals[i].sequence < g.originals[j].sequence })
-
-		i, j := 0, 0
-		for i < len(g.puts) && j < len(g.originals) {
-			ready = append(ready,
-				sequencerBundleEntry{tx: g.puts[i].tx, xtID: xtID, kind: g.puts[i].kind, status: g.puts[i].status},
-				sequencerBundleEntry{tx: g.originals[j].tx, xtID: xtID, kind: g.originals[j].kind, status: g.originals[j].status},
-			)
-			i++
-			j++
-		}
-
-		for ; j < len(g.originals); j++ {
-			ready = append(ready, sequencerBundleEntry{tx: g.originals[j].tx, xtID: xtID, kind: g.originals[j].kind, status: g.originals[j].status})
-		}
-	}
+	ready = append(ready, allPuts...)
+	ready = append(ready, allOriginals...)
 
 	return ready, nil
 }
