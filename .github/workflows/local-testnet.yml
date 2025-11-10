@@ -16,6 +16,18 @@ jobs:
         uses: docker/setup-buildx-action@v3
       - name: Inject enhanced GitHub environment variables
         uses: rlespinasse/github-slug-action@v5
+      - name: Generate GitHub App Token
+        id: generate-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.PULL_PRIVATE_GITHUB_APP_ID }}
+          private-key: ${{ secrets.PULL_PRIVATE_GITHUB_APP_KEY }}
+      - name: Checkout rollup-probe repository
+        uses: actions/checkout@v4
+        with:
+          repository: compose-network/rollup-probe
+          token: ${{ steps.generate-token.outputs.token }}
+          path: rollup-probe
       - name: Generate two random chain IDs (>=100000)
         id: chainids
         run: |
