@@ -849,9 +849,36 @@ func (b *EthAPIBackend) SimulateTransaction(
 
 	blockContext := core.NewEVMBlockContext(header, b.eth.blockchain, nil, b.ChainConfig(), stateDB)
 
-	// Create fresh tracer and EVM for the actual transaction being simulated.
-	// This ensures only the target transaction's mailbox operations are captured,
-	// not any operations from pre-applied staging transactions.
+	if ctx.Value("simulation") != nil {
+		stagingVMConfig := vm.Config{}
+		if b.eth.blockchain.GetVMConfig() != nil {
+			stagingVMConfig = *b.eth.blockchain.GetVMConfig()
+		}
+		stagingVMConfig.Tracer = nil
+		stagingVMConfig.EnablePreimageRecording = true
+
+		stagingEVM := vm.NewEVM(blockContext, stateDB, b.ChainConfig(), stagingVMConfig)
+
+		for _, staged := range b.GetPendingPutInboxTxs() {
+			if staged == nil || staged.Hash() == tx.Hash() {
+				continue
+			}
+
+			stageMsg, err := core.TransactionToMessage(staged, signer, header.BaseFee)
+			if err != nil {
+				continue
+			}
+			stageMsg.SkipNonceChecks = true
+
+			stageGasPool := new(core.GasPool).AddGas(header.GasLimit)
+			stateDB.SetTxContext(staged.Hash(), stateDB.TxIndex()+1)
+			if _, err := core.ApplyMessage(stagingEVM, stageMsg, stageGasPool); err != nil {
+				continue
+			}
+			stateDB.Finalise(true)
+		}
+	}
+
 	mailboxAddresses := b.GetMailboxAddresses()
 	tracer := native.NewSSVTracer(mailboxAddresses)
 
