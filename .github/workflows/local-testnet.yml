@@ -14,6 +14,11 @@ jobs:
       contains(github.event.comment.body, '/test') &&
       (github.event.comment.author_association == 'MEMBER' ||
        github.event.comment.author_association == 'OWNER')
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      statuses: write
     steps:
       - name: Add reaction to comment
         uses: peter-evans/create-or-update-comment@v4
@@ -26,14 +31,30 @@ jobs:
         with:
           ref: refs/pull/${{ github.event.issue.number }}/head
 
-      - name: Get PR branch name
+      - name: Get PR info
         id: pr-info
         run: |
           PR_NUMBER=${{ github.event.issue.number }}
-          BRANCH_NAME=$(gh pr view $PR_NUMBER --json headRefName --jq '.headRefName')
+          PR_DATA=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/pulls/${PR_NUMBER}")
+          BRANCH_NAME=$(echo "$PR_DATA" | jq -r '.head.ref')
+          COMMIT_SHA=$(echo "$PR_DATA" | jq -r '.head.sha')
           echo "branch=$BRANCH_NAME" >> "$GITHUB_OUTPUT"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          echo "sha=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Set status to pending
+        run: |
+          curl -s -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/statuses/${{ steps.pr-info.outputs.sha }}" \
+            -d '{
+              "state": "pending",
+              "description": "Local testnet tests are running...",
+              "context": "Local Testnet CI",
+              "target_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }'
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -104,6 +125,7 @@ jobs:
           token: ${{ steps.generate-token.outputs.token }}
           path: rollup-probe
       - name: Run smoke tests
+        id: smoke-tests
         working-directory: rollup-probe
         run: |
           pwd
@@ -112,3 +134,31 @@ jobs:
           mkdir -p bin && go test -c ./test/ -o bin/probe
           echo "Running smoke tests with INFO log level..."
           LOG_LEVEL=INFO bin/probe -test.v -test.count=1 -test.run="TestMintTokensCrossRollup|TestSendCrossTxBridgeFromAToB|TestSendCrossTxBridgeFromBToA|TestSendOnAAndFailingSelfMoveBalanceOnB|TestSendCrossTxBridgeWithOutOfGasOnB|TestSelfMoveBalanceOnAandreceiveTokensOnB"
+
+      - name: Set status to success
+        if: success()
+        run: |
+          curl -s -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/statuses/${{ steps.pr-info.outputs.sha }}" \
+            -d '{
+              "state": "success",
+              "description": "Local testnet tests passed!",
+              "context": "Local Testnet CI",
+              "target_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }'
+
+      - name: Set status to failure
+        if: failure()
+        run: |
+          curl -s -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/statuses/${{ steps.pr-info.outputs.sha }}" \
+            -d '{
+              "state": "failure",
+              "description": "Local testnet tests failed",
+              "context": "Local Testnet CI",
+              "target_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }'
