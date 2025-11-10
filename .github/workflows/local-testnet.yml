@@ -80,6 +80,7 @@ jobs:
           repository: compose-network/rollup-probe
           token: ${{ steps.generate-token.outputs.token }}
           path: rollup-probe
+          ref: trim-0x-prefix
       - name: Run smoke tests
         working-directory: rollup-probe
         run: |
