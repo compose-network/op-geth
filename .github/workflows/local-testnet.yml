@@ -63,6 +63,9 @@ jobs:
                --op-geth-branch=${GITHUB_REF_NAME_SLUG} \
                || docker ps -a
           set -x
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.0'
       - name: Generate GitHub App Token
         id: generate-token
         uses: actions/create-github-app-token@v1
