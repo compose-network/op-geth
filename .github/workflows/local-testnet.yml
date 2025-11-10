@@ -61,7 +61,7 @@ jobs:
                --publisher-url=https://github.com/compose-network/publisher.git \
                --publisher-branch=stage \
                --op-geth-url=https://github.com/compose-network/op-geth.git \
-               --op-geth-branch=${GITHUB_REF_NAME_SLUG} \
+               --op-geth-branch=${GITHUB_HEAD_REF_SLUG} \
                || docker ps -a
           set -x
       - uses: actions/setup-go@v6
