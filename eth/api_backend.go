@@ -1310,14 +1310,78 @@ func (b *EthAPIBackend) assembleSequencerBundle() (types.Transactions, []sequenc
 		return types.Transactions{}, ready, pending
 	}
 
-	txs := make(types.Transactions, 0, len(ready))
+	// Filter transactions to ensure continuous nonce sequences per account
+	// Stop at the first gap to avoid "nonce too high" errors
+	filteredReady := make([]sequencerBundleEntry, 0, len(ready))
+	accountNonces := make(map[common.Address]uint64) // Track expected next nonce per account
+	signer := types.LatestSignerForChainID(b.ChainConfig().ChainID)
+
+	// Get current state to initialize account nonces
+	stateDB, err := b.eth.blockchain.State()
+	if err != nil {
+		log.Warn("[SSV] Failed to get state for nonce validation", "error", err)
+		// Fallback: return all transactions without filtering
+		txs := make(types.Transactions, 0, len(ready))
+		for _, entry := range ready {
+			if entry.tx != nil {
+				txs = append(txs, entry.tx)
+			}
+		}
+		return txs, ready, pending
+	}
+
 	for _, entry := range ready {
+		if entry.tx == nil {
+			continue
+		}
+
+		from, err := types.Sender(signer, entry.tx)
+		if err != nil {
+			log.Warn("[SSV] Failed to extract sender", "txHash", entry.tx.Hash().Hex(), "error", err)
+			continue
+		}
+
+		// Initialize expected nonce for this account if not already set
+		if _, exists := accountNonces[from]; !exists {
+			accountNonces[from] = stateDB.GetNonce(from)
+		}
+
+		expectedNonce := accountNonces[from]
+		txNonce := entry.tx.Nonce()
+
+		// Check if this transaction has the expected nonce
+		if txNonce == expectedNonce {
+			// Valid: continuous sequence
+			filteredReady = append(filteredReady, entry)
+			accountNonces[from] = expectedNonce + 1
+		} else if txNonce < expectedNonce {
+			// Already included or executed
+			log.Info("[SSV] Skipping transaction with old nonce",
+				"txHash", entry.tx.Hash().Hex(),
+				"from", from.Hex(),
+				"txNonce", txNonce,
+				"expectedNonce", expectedNonce)
+		} else {
+			// Gap detected: stop including transactions from this account
+			log.Warn("[SSV] Nonce gap detected, stopping account transactions",
+				"from", from.Hex(),
+				"txNonce", txNonce,
+				"expectedNonce", expectedNonce,
+				"gap", txNonce-expectedNonce,
+				"txHash", entry.tx.Hash().Hex())
+			// Mark this account as having a gap - don't process any more transactions from it
+			accountNonces[from] = ^uint64(0) // Set to max value to skip all future txs from this account
+		}
+	}
+
+	txs := make(types.Transactions, 0, len(filteredReady))
+	for _, entry := range filteredReady {
 		if entry.tx != nil {
 			txs = append(txs, entry.tx)
 		}
 	}
 
-	return txs, ready, pending
+	return txs, filteredReady, pending
 }
 
 // buildSequencerOnlyList assembles only the sequencer-managed transactions preserving
