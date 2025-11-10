@@ -895,27 +895,30 @@ func (miner *Miner) fillTransactionsWithSequencerOrdering(interrupt *atomic.Int3
 			}
 		}
 
-		// Commit backend-ordered sequencer txs atomically
-		// This happens in BuildingFree (after SCP) or Submission (final block)
 		sequencerTxCount := 0
 		if len(orderedSequencerTxs) > 0 {
-			simEnv, err := miner.buildSequencerSimulationEnv(env)
-			if err != nil {
-				log.Error("[SSV] Failed to initialise sequencer simulation environment", "err", err)
-			} else if err := miner.applySequencerBundle(simEnv, orderedSequencerTxs); err != nil {
-				log.Error("[SSV] Sequencer transaction bundle rejected during simulation",
-					"err", err, "attempted", len(orderedSequencerTxs))
-				if notifyErr := backend.OnBlockBuildingComplete(env.rpcCtx, nil, false, false); notifyErr != nil {
-					log.Warn("[SSV] Failed to notify backend about bundle failure", "err", notifyErr)
+			for _, tx := range orderedSequencerTxs {
+				if env.gasPool != nil && env.gasPool.Gas() < params.TxGas {
+					log.Warn("[SSV] Insufficient gas for sequencer transaction, stopping bundle",
+						"txHash", tx.Hash().Hex(), "remaining", env.gasPool.Gas())
+					break
 				}
-			} else {
-				miner.applySequencerSimulationResults(env, simEnv)
-				sequencerTxCount = len(simEnv.txs)
-				log.Info("[SSV] Committed sequencer transactions atomically",
-					"putInbox", len(backend.GetPendingPutInboxTxs()),
-					"original", len(backend.GetPendingOriginalTxs()),
-					"total", sequencerTxCount)
+
+				env.state.SetTxContext(tx.Hash(), env.tcount)
+				if err := miner.commitTransaction(env, tx); err != nil {
+					log.Error("[SSV] Failed to commit sequencer transaction",
+						"txHash", tx.Hash().Hex(), "err", err)
+					tx.SetRejected()
+					break
+				}
+				sequencerTxCount++
 			}
+
+			log.Info("[SSV] Committed sequencer transactions",
+				"putInbox", len(backend.GetPendingPutInboxTxs()),
+				"original", len(backend.GetPendingOriginalTxs()),
+				"committed", sequencerTxCount,
+				"attempted", len(orderedSequencerTxs))
 		}
 
 		// Filter sequencer-managed txs out of account-based pools to avoid premature or double inclusion
@@ -967,89 +970,6 @@ func (miner *Miner) fillTransactionsWithSequencerOrdering(interrupt *atomic.Int3
 	}
 
 	return nil
-}
-
-// buildSequencerSimulationEnv returns an isolated environment that can be used to
-// simulate sequencer-managed bundles without mutating the live block state.
-// SSV
-func (miner *Miner) buildSequencerSimulationEnv(env *environment) (*environment, error) {
-	stateCopy := env.state.Copy()
-	headerCopy := types.CopyHeader(env.header)
-
-	var gasPoolCopy *core.GasPool
-	if env.gasPool != nil {
-		gasPoolCopy = new(core.GasPool).AddGas(env.gasPool.Gas())
-	} else {
-		gasPoolCopy = new(core.GasPool).AddGas(headerCopy.GasLimit)
-	}
-
-	blockCtx := core.NewEVMBlockContext(headerCopy, miner.chain, &env.coinbase, miner.chainConfig, stateCopy)
-	simEVM := vm.NewEVM(blockCtx, stateCopy, miner.chainConfig, env.evm.Config)
-
-	simEnv := &environment{
-		signer:   env.signer,
-		state:    stateCopy,
-		gasPool:  gasPoolCopy,
-		coinbase: env.coinbase,
-		header:   headerCopy,
-		evm:      simEVM,
-		noTxs:    env.noTxs,
-		rpcCtx:   env.rpcCtx,
-	}
-
-	simEnv.tcount = env.tcount
-	simEnv.size = env.size
-	simEnv.blobs = env.blobs
-
-	return simEnv, nil
-}
-
-// applySequencerBundle executes the ordered sequencer transactions against a simulation
-// environment, guaranteeing that either all transactions succeed or the bundle is rejected.
-// SSV
-func (miner *Miner) applySequencerBundle(simEnv *environment, txs types.Transactions) error {
-	for i, tx := range txs {
-		if simEnv.gasPool != nil && simEnv.gasPool.Gas() < params.TxGas {
-			return fmt.Errorf("insufficient gas before sequencer tx %d (%s)", i, tx.Hash())
-		}
-
-		simEnv.state.SetTxContext(tx.Hash(), simEnv.tcount)
-		if err := miner.commitTransaction(simEnv, tx); err != nil {
-			tx.SetRejected()
-			return fmt.Errorf("sequencer tx %d (%s) failed: %w", i, tx.Hash(), err)
-		}
-	}
-	return nil
-}
-
-// applySequencerSimulationResults syncs the successful simulation results back into the live
-// environment so that subsequent block assembly continues from the committed bundle state.
-// SSV
-func (miner *Miner) applySequencerSimulationResults(target, simulated *environment) {
-	target.state = simulated.state
-	target.evm = simulated.evm
-	target.gasPool = simulated.gasPool
-	target.tcount = simulated.tcount
-	target.size = simulated.size
-	target.blobs = simulated.blobs
-
-	if len(simulated.txs) > 0 {
-		target.txs = append(target.txs, simulated.txs...)
-	}
-	if len(simulated.receipts) > 0 {
-		target.receipts = append(target.receipts, simulated.receipts...)
-	}
-	if len(simulated.sidecars) > 0 {
-		target.sidecars = append(target.sidecars, simulated.sidecars...)
-	}
-
-	target.header.GasUsed = simulated.header.GasUsed
-	if simulated.header.BlobGasUsed != nil {
-		if target.header.BlobGasUsed == nil {
-			target.header.BlobGasUsed = new(uint64)
-		}
-		*target.header.BlobGasUsed = *simulated.header.BlobGasUsed
-	}
 }
 
 // commitAccountBasedTransactions commits transactions while maintaining per-account nonce ordering
