@@ -878,22 +878,18 @@ func (miner *Miner) fillTransactionsWithSequencerOrdering(interrupt *atomic.Int3
 			log.Warn("[SSV] Failed to get backend-ordered sequencer txs", "err", err)
 		}
 
-		// Build a skip set to exclude sequencer txs from the normal tx pools
-		skip := make(map[common.Hash]struct{}, 0)
-		if len(orderedSequencerTxs) > 0 {
-			// BuildingFree or Submission state: skip txs that backend is managing via sequencer path
-			for _, tx := range orderedSequencerTxs {
-				skip[tx.Hash()] = struct{}{}
-			}
-		} else {
-			// BuildingLocked state: skip ALL pending sequencer-managed txs (not yet ready for inclusion)
-			for _, tx := range backend.GetPendingPutInboxTxs() {
-				skip[tx.Hash()] = struct{}{}
-			}
-			for _, tx := range backend.GetPendingOriginalTxs() {
+		// sequencer-managed transactions out of the normal txpool
+		skip := make(map[common.Hash]struct{})
+		addToSkip := func(txs []*types.Transaction) {
+			for _, tx := range txs {
+				if tx == nil {
+					continue
+				}
 				skip[tx.Hash()] = struct{}{}
 			}
 		}
+		addToSkip(backend.GetPendingPutInboxTxs())
+		addToSkip(backend.GetPendingOriginalTxs())
 
 		sequencerTxCount := 0
 		if len(orderedSequencerTxs) > 0 {
