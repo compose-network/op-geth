@@ -145,7 +145,7 @@ jobs:
             # Add workflow run link
             echo "" >> test-summary.md
             echo "---" >> test-summary.md
-            echo "📊 [View full test logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> test-summary.md
+            echo "📊 [View full test logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) - look for the 'Run smoke tests' step of the workflow." >> test-summary.md
 
             # Post comment to PR
             COMMENT_BODY=$(cat test-summary.md | jq -Rs .)
