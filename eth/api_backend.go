@@ -1314,6 +1314,7 @@ func (b *EthAPIBackend) assembleSequencerBundle() (types.Transactions, []sequenc
 	// Stop at the first gap to avoid "nonce too high" errors
 	filteredReady := make([]sequencerBundleEntry, 0, len(ready))
 	accountNonces := make(map[common.Address]uint64) // Track expected next nonce per account
+	blockedAccounts := make(map[common.Address]struct{})
 	signer := types.LatestSignerForChainID(b.ChainConfig().ChainID)
 
 	// Get current state to initialize account nonces
@@ -1338,6 +1339,16 @@ func (b *EthAPIBackend) assembleSequencerBundle() (types.Transactions, []sequenc
 		from, err := types.Sender(signer, entry.tx)
 		if err != nil {
 			log.Warn("[SSV] Failed to extract sender", "txHash", entry.tx.Hash().Hex(), "error", err)
+			continue
+		}
+
+		// If this account experienced a nonce gap earlier in this pass, defer the remaining
+		// transactions until the missing nonce arrives.
+		if _, blocked := blockedAccounts[from]; blocked {
+			log.Debug("[SSV] Deferring sequencer transactions due to prior nonce gap",
+				"from", from.Hex(),
+				"txHash", entry.tx.Hash().Hex(),
+				"txNonce", entry.tx.Nonce())
 			continue
 		}
 
@@ -1369,8 +1380,10 @@ func (b *EthAPIBackend) assembleSequencerBundle() (types.Transactions, []sequenc
 				"expectedNonce", expectedNonce,
 				"gap", txNonce-expectedNonce,
 				"txHash", entry.tx.Hash().Hex())
-			// Mark this account as having a gap - don't process any more transactions from it
-			accountNonces[from] = ^uint64(0) // Set to max value to skip all future txs from this account
+			// Mark this account as having a gap so the remaining entries are deferred until we
+			// receive the missing nonce. This avoids marking the later nonces as "old" and
+			// allows the bundle to resume automatically once the gap is filled.
+			blockedAccounts[from] = struct{}{}
 		}
 	}
 
