@@ -84,6 +84,4 @@ jobs:
           cp ../output.yaml configs/config.yaml
           mkdir -p bin && go test -c ./test/ -o bin/probe
           echo "Running smoke tests with INFO log level..."
-          LOG_LEVEL=INFO bin/probe -test.v -test.count=1 -test.run="TestMintTokensCrossRollup|TestSendCrossTxBridgeFr
-  omAToB|TestSendCrossTxBridgeFromBToA|TestSendOnAAndFailingSelfMoveBalanceOnB|TestSendCrossTxBridgeWithOutOf
-  GasOnB|TestSelfMoveBalanceOnAandreceiveTokensOnB"
+          LOG_LEVEL=INFO bin/probe -test.v -test.count=1 -test.run="TestMintTokensCrossRollup|TestSendCrossTxBridgeFromAToB|TestSendCrossTxBridgeFromBToA|TestSendOnAAndFailingSelfMoveBalanceOnB|TestSendCrossTxBridgeWithOutOfGasOnB|TestSelfMoveBalanceOnAandreceiveTokensOnB"
