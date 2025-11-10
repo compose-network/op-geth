@@ -90,12 +90,12 @@ func main() {
 	bridgeB := common.HexToAddress(rollupB.Bridge)
 
 	// Get starting nonces
-	startingNonceA, err := getNonceFor(rollupA.RPC, addressA)
+	startingNonceA, err := getPendingNonce(rollupA.RPC, addressA)
 	if err != nil {
 		log.Fatal("Failed to get nonce for address A:", err)
 	}
 
-	startingNonceB, err := getNonceFor(rollupB.RPC, addressB)
+	startingNonceB, err := getPendingNonce(rollupB.RPC, addressB)
 	if err != nil {
 		log.Fatal("Failed to get nonce for address B:", err)
 	}
@@ -198,10 +198,23 @@ func runBatchMode(
 
 	successCount := 0
 	failCount := 0
+	nextNonceA := startingNonceA
+	nextNonceB := startingNonceB
 
 	for i := 0; i < numTxs; i++ {
-		currentNonceA := startingNonceA + uint64(i)
-		currentNonceB := startingNonceB + uint64(i)
+		if pendingNonceA, err := getPendingNonce(rollupA.RPC, addressA); err == nil && pendingNonceA > nextNonceA {
+			nextNonceA = pendingNonceA
+		} else if err != nil {
+			log.Printf("⚠️ [%d/%d] Failed to refresh pending nonce for rollup A: %v (using %d)", i+1, numTxs, err, nextNonceA)
+		}
+		if pendingNonceB, err := getPendingNonce(rollupB.RPC, addressB); err == nil && pendingNonceB > nextNonceB {
+			nextNonceB = pendingNonceB
+		} else if err != nil {
+			log.Printf("⚠️ [%d/%d] Failed to refresh pending nonce for rollup B: %v (using %d)", i+1, numTxs, err, nextNonceB)
+		}
+
+		currentNonceA := nextNonceA
+		currentNonceB := nextNonceB
 
 		// Generate unique session ID for each transaction pair
 		sessionId := generateRandomSessionID()
@@ -235,6 +248,8 @@ func runBatchMode(
 
 		log.Printf("✓ [%d/%d] Successfully submitted", i+1, numTxs)
 		successCount++
+		nextNonceA = currentNonceA + 1
+		nextNonceB = currentNonceB + 1
 
 		// Sleep before next transaction (except for the last one)
 		if i < numTxs-1 {
@@ -397,15 +412,16 @@ func parsePrivateKey(privKeyHex string) *ecdsa.PrivateKey {
 	return privateKey
 }
 
-func getNonceFor(networkRPCAddr string, address common.Address) (uint64, error) {
+func getPendingNonce(networkRPCAddr string, address common.Address) (uint64, error) {
 	client, err := ethclient.Dial(networkRPCAddr)
 	if err != nil {
 		return 0, err
 	}
+	defer client.Close()
 
-	nonce, err := client.NonceAt(context.Background(), address, nil)
+	nonce, err := client.PendingNonceAt(context.Background(), address)
 	if err != nil {
-		return 0, fmt.Errorf("failed to retrieve state nonce: %w", err)
+		return 0, fmt.Errorf("failed to retrieve pending nonce: %w", err)
 	}
 
 	return nonce, nil
