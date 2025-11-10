@@ -60,19 +60,6 @@ jobs:
         uses: docker/setup-buildx-action@v3
       - name: Inject enhanced GitHub environment variables
         uses: rlespinasse/github-slug-action@v5
-      - name: Generate two random chain IDs (>=100000)
-        id: chainids
-        run: |
-          MIN=100000
-          MAX=2147483646   # 2^31-1 (JS/tooling-safe upper bound)
-          a=$(shuf -i ${MIN}-${MAX} -n 1)
-          b=$(shuf -i ${MIN}-${MAX} -n 1)
-          while [ "$b" -eq "$a" ]; do
-            b=$(shuf -i ${MIN}-${MAX} -n 1)
-          done
-          echo "chainida=77777" >> "$GITHUB_OUTPUT"
-          echo "chainidb=88888" >> "$GITHUB_OUTPUT"
-
       - name: Run local testnet
         run: |
           PWD=`pwd`
@@ -90,8 +77,6 @@ jobs:
                --wallet-private-key=${{ secrets.LOCAL_TESTNET_WALLET_PK}} \
                --coordinator-private-key=${{ secrets.LOCAL_TESTNET_COORDINATOR_PK }} \
                --genesis-balance-wei=10000000000000000000 \
-               --rollup-a-id ${{ steps.chainids.outputs.chainida }}\
-               --rollup-b-id ${{ steps.chainids.outputs.chainidb }}\
                --compose-network-name=hoodi \
                --dispute-network-name=hoodi \
                --dispute-owner-address=${{ secrets.LOCAL_TESTNET_WALLET_ADDRESS}} \
@@ -110,7 +95,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25.0'
-      - name: Generate GitHub App Token
+      - name: Generate GitHub App Token for Pull rollup probe
         id: generate-token
         uses: actions/create-github-app-token@v1
         with:
@@ -126,6 +111,7 @@ jobs:
           path: rollup-probe
       - name: Run smoke tests
         id: smoke-tests
+        continue-on-error: true
         working-directory: rollup-probe
         run: |
           pwd
@@ -133,10 +119,47 @@ jobs:
           cat configs/config.yaml
           mkdir -p bin && go test -c ./test/ -o bin/probe
           echo "Running smoke tests with INFO log level..."
-          LOG_LEVEL=INFO bin/probe -test.v -test.count=1 -test.run="TestMintTokensCrossRollup|TestSendCrossTxBridgeFromAToB|TestSendCrossTxBridgeFromBToA|TestSendOnAAndFailingSelfMoveBalanceOnB|TestSendCrossTxBridgeWithOutOfGasOnB|TestSelfMoveBalanceOnAandreceiveTokensOnB"
+          LOG_LEVEL=INFO bin/probe -test.v -test.count=1 -test.run="TestMintTokensCrossRollup|TestSendCrossTxBridgeFromAToB|TestSendCrossTxBridgeFromBToA|TestSendOnAAndFailingSelfMoveBalanceOnB|TestSendCrossTxBridgeWithOutOfGasOnB|TestSelfMoveBalanceOnAandreceiveTokensOnB" 2>&1 | tee test-output.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Parse test results and post comment
+        if: always() && steps.smoke-tests.outcome != 'skipped'
+        working-directory: rollup-probe
+        run: |
+          # Parse test results from the log file
+          if [ -f test-output.log ]; then
+            echo "## Test Results" > test-summary.md
+            echo "" >> test-summary.md
+
+            # Extract test results
+            grep -E "^(--- PASS:|--- FAIL:)" test-output.log | while read -r line; do
+              if echo "$line" | grep -q "PASS:"; then
+                test_name=$(echo "$line" | sed 's/--- PASS: \(.*\) (.*/\1/')
+                echo "🟢 **$test_name** - PASS" >> test-summary.md
+              elif echo "$line" | grep -q "FAIL:"; then
+                test_name=$(echo "$line" | sed 's/--- FAIL: \(.*\) (.*/\1/')
+                echo "🔴 **$test_name** - FAIL" >> test-summary.md
+              fi
+            done
+
+            # Add workflow run link
+            echo "" >> test-summary.md
+            echo "---" >> test-summary.md
+            echo "📊 [View full test logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> test-summary.md
+
+            # Post comment to PR
+            COMMENT_BODY=$(cat test-summary.md | jq -Rs .)
+            curl -s -X POST \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments" \
+              -d "{\"body\": $COMMENT_BODY}"
+          else
+            echo "No test output file found"
+          fi
 
       - name: Set status to success
-        if: success()
+        if: steps.smoke-tests.outcome == 'success'
         run: |
           curl -s -X POST \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
@@ -150,7 +173,7 @@ jobs:
             }'
 
       - name: Set status to failure
-        if: failure()
+        if: steps.smoke-tests.outcome == 'failure' || failure()
         run: |
           curl -s -X POST \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
