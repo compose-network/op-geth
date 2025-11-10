@@ -1,0 +1,92 @@
+name: Local Testnet
+
+on:
+  pull_request:
+    branches:
+      - prod
+      - stage
+  workflow_dispatch:
+
+jobs:
+  run-testnet:
+    runs-on: public-isolated
+    environment:
+      name: ci-e2e
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Inject enhanced GitHub environment variables
+        uses: rlespinasse/github-slug-action@v5
+      - name: Generate two random chain IDs (>=100000)
+        id: chainids
+        run: |
+          MIN=100000
+          MAX=2147483646   # 2^31-1 (JS/tooling-safe upper bound)
+          a=$(shuf -i ${MIN}-${MAX} -n 1)
+          b=$(shuf -i ${MIN}-${MAX} -n 1)
+          while [ "$b" -eq "$a" ]; do
+            b=$(shuf -i ${MIN}-${MAX} -n 1)
+          done
+          echo "chainida=$a" >> "$GITHUB_OUTPUT"
+          echo "chainidb=$b" >> "$GITHUB_OUTPUT"
+
+      - name: Run local testnet
+        run: |
+          PWD=`pwd`
+          docker run --rm \
+             --add-host=host.docker.internal:host-gateway \
+             -v /var/run/docker.sock:/var/run/docker.sock \
+             -v ${PWD}:/workspace \
+             -w /workspace \
+             -e HOST_PROJECT_PATH=${PWD} \
+             ghcr.io/compose-network/local-testnet:latest l2 \
+               --l1-chain-id ${{ secrets.LOCAL_TESTNET_L1_CHAIN_ID }} \
+               --l1-cl-url=${{ secrets.LOCAL_TESTNET_L1_CL }} \
+               --l1-el-url=${{ secrets.LOCAL_TESTNET_L1_EL}} \
+               --wallet-address=${{ secrets.LOCAL_TESTNET_WALLET_ADDRESS}} \
+               --wallet-private-key=${{ secrets.LOCAL_TESTNET_WALLET_PK}} \
+               --coordinator-private-key=${{ secrets.LOCAL_TESTNET_COORDINATOR_PK }} \
+               --genesis-balance-wei=10000000000000000000 \
+               --rollup-a-id ${{ steps.chainids.outputs.chainida }}\
+               --rollup-b-id ${{ steps.chainids.outputs.chainidb }}\
+               --compose-network-name=hoodi \
+               --dispute-network-name=hoodi \
+               --dispute-owner-address=${{ secrets.LOCAL_TESTNET_WALLET_ADDRESS}} \
+               --dispute-proposer-address=${{ secrets.LOCAL_TESTNET_WALLET_ADDRESS}} \
+               --dispute-admin-address=${{ secrets.LOCAL_TESTNET_WALLET_ADDRESS}} \
+               --dispute-verifier-address=${{ secrets.LOCAL_TESTNET_VERIFIER_WALLET}} \
+               --dispute-aggregation-vkey=${{ secrets.LOCAL_TESTNET_VERIFIER_PK}} \
+               --compose-contracts-url=https://github.com/compose-network/contracts.git \
+               --compose-contracts-branch=develop \
+               --publisher-url=https://github.com/compose-network/publisher.git \
+               --publisher-branch=stage \
+               --op-geth-url=https://github.com/compose-network/op-geth.git \
+               --op-geth-branch=${GITHUB_REF_NAME_SLUG} \
+               || docker ps -a
+          set -x
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.0'
+      - name: Generate GitHub App Token
+        id: generate-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.PULL_PRIVATE_GITHUB_APP_ID }}
+          private-key: ${{ secrets.PULL_PRIVATE_GITHUB_APP_KEY }}
+          repositories: |
+            rollup-probe
+      - name: Checkout rollup-probe repository
+        uses: actions/checkout@v4
+        with:
+          repository: compose-network/rollup-probe
+          token: ${{ steps.generate-token.outputs.token }}
+          path: rollup-probe
+      - name: Run smoke tests
+        working-directory: rollup-probe
+        run: |
+          pwd
+          cp ../output.yaml configs/config.yaml
+          cat configs/config.yaml
+          mkdir -p bin && go test -c ./test/ -o bin/probe
+          echo "Running smoke tests with INFO log level..."
+          LOG_LEVEL=INFO bin/probe -test.v -test.count=1 -test.run="TestMintTokensCrossRollup|TestSendCrossTxBridgeFromAToB|TestSendCrossTxBridgeFromBToA|TestSendOnAAndFailingSelfMoveBalanceOnB|TestSendCrossTxBridgeWithOutOfGasOnB|TestSelfMoveBalanceOnAandreceiveTokensOnB"
