@@ -63,9 +63,6 @@ jobs:
                --op-geth-branch=${GITHUB_REF_NAME_SLUG} \
                || docker ps -a
           set -x
-          ls -lha
-          pwd
-          ls -lha ../
       - name: Generate GitHub App Token
         id: generate-token
         uses: actions/create-github-app-token@v1
@@ -84,8 +81,6 @@ jobs:
         working-directory: rollup-probe
         run: |
           pwd
-          ls -lha
-          ls -lha ../
-          cp ../local-testnet/output.yaml configs/config.yaml
+          cp ../output.yaml configs/config.yaml
           make build
           make smoke-test
