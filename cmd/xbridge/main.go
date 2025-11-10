@@ -366,9 +366,9 @@ func getNonceFor(networkRPCAddr string, address common.Address) (uint64, error) 
 		return 0, err
 	}
 
-	nonce, err := client.PendingNonceAt(context.Background(), address)
+	nonce, err := client.NonceAt(context.Background(), address, nil)
 	if err != nil {
-		return 0, fmt.Errorf("failed to retrieve pending nonce: %w", err)
+		return 0, fmt.Errorf("failed to retrieve state nonce: %w", err)
 	}
 
 	return nonce, nil
