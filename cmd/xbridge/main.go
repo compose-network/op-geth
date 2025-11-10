@@ -48,10 +48,15 @@ func main() {
 	numTxs := flag.Int("num", 1, "Number of transactions to send in batch mode")
 	delayMs := flag.Int("delay", 500, "Delay in milliseconds between transactions in batch mode")
 	amountValue := flag.Int64("amount", 100000, "Token amount to send")
+	failRollup := flag.String("fail-rollup", "", "Simulate rollup failure (A, B, or empty for normal operation)")
 	flag.Parse()
 
 	if *batchMode && *numTxs < 1 {
 		log.Fatal("Number of transactions must be at least 1 in batch mode")
+	}
+
+	if *failRollup != "" && *failRollup != "A" && *failRollup != "B" {
+		log.Fatal("fail-rollup must be either 'A', 'B', or empty")
 	}
 
 	config := loadConfigFromYAML(configFile)
@@ -95,6 +100,10 @@ func main() {
 		log.Fatal("Failed to get nonce for address B:", err)
 	}
 
+	if *failRollup != "" {
+		log.Printf("⚠️ FAILURE MODE: Rollup %s transactions will be sent but designed to fail during execution", *failRollup)
+	}
+
 	if *batchMode {
 		log.Printf("Running in BATCH mode: %d transactions with %dms delay", *numTxs, *delayMs)
 		log.Printf("Address A: %s (starting nonce: %d)", addressA.Hex(), startingNonceA)
@@ -108,6 +117,7 @@ func main() {
 			startingNonceA, startingNonceB,
 			*numTxs, time.Duration(*delayMs)*time.Millisecond,
 			big.NewInt(*amountValue),
+			*failRollup,
 		)
 	} else {
 		log.Printf("Running in SINGLE mode")
@@ -121,6 +131,7 @@ func main() {
 			tokenA, bridgeA, bridgeB,
 			startingNonceA, startingNonceB,
 			big.NewInt(*amountValue),
+			*failRollup,
 		)
 	}
 }
@@ -133,6 +144,7 @@ func runSingleMode(
 	tokenA, bridgeA, bridgeB common.Address,
 	nonceA, nonceB uint64,
 	amount *big.Int,
+	failRollup string,
 ) {
 	ctx := context.Background()
 
@@ -149,6 +161,7 @@ func runSingleMode(
 		tokenA, bridgeA, bridgeB,
 		nonceA, nonceB,
 		amount, sessionId,
+		failRollup,
 	)
 	if err != nil {
 		log.Fatalf("Failed to create transaction pair: %v", err)
@@ -160,7 +173,11 @@ func runSingleMode(
 		log.Fatalf("Failed to send transaction: %v", err)
 	}
 
-	fmt.Printf("✓ Successfully submitted cross-chain transaction\n")
+	if failRollup != "" {
+		fmt.Printf("⚠️ Cross-chain transaction submitted with Rollup %s designed to fail during execution\n", failRollup)
+	} else {
+		fmt.Printf("✓ Successfully submitted cross-chain transaction\n")
+	}
 }
 
 func runBatchMode(
@@ -173,6 +190,7 @@ func runBatchMode(
 	numTxs int,
 	delay time.Duration,
 	amount *big.Int,
+	failRollup string,
 ) {
 	ctx := context.Background()
 
@@ -199,6 +217,7 @@ func runBatchMode(
 			tokenA, bridgeA, bridgeB,
 			currentNonceA, currentNonceB,
 			amount, sessionId,
+			failRollup,
 		)
 		if err != nil {
 			log.Printf("✗ [%d/%d] Failed to create transaction pair: %v", i+1, numTxs, err)
@@ -228,6 +247,9 @@ func runBatchMode(
 	fmt.Printf("Successful: %d\n", successCount)
 	fmt.Printf("Failed: %d\n", failCount)
 	fmt.Printf("Success rate: %.1f%%\n", float64(successCount)/float64(numTxs)*100)
+	if failRollup != "" {
+		fmt.Printf("\n⚠️ Note: All transactions included Rollup %s with corrupted data (designed to fail during execution)\n", failRollup)
+	}
 }
 
 func createBridgeTransactionPair(
@@ -237,8 +259,17 @@ func createBridgeTransactionPair(
 	tokenA, bridgeA, bridgeB common.Address,
 	nonceA, nonceB uint64,
 	amount, sessionId *big.Int,
+	failRollup string,
 ) (*rollupv1.XTRequest, error) {
+	corruptedSessionId := new(big.Int).Add(sessionId, big.NewInt(999999))
+
 	// Create send transaction (A -> B)
+	sendSessionId := sessionId
+	if failRollup == "A" {
+		sendSessionId = corruptedSessionId
+		log.Printf("  Corrupting rollup A transaction with mismatched session ID (will fail during execution)")
+	}
+
 	sendParams := BridgeParams{
 		ChainSrc:   chainAId,
 		ChainDest:  chainBId,
@@ -246,7 +277,7 @@ func createBridgeTransactionPair(
 		Sender:     addressA,
 		Receiver:   addressB,
 		Amount:     amount,
-		SessionId:  sessionId,
+		SessionId:  sendSessionId,
 		DestBridge: bridgeB,
 		SrcBridge:  bridgeA,
 	}
@@ -262,6 +293,12 @@ func createBridgeTransactionPair(
 	}
 
 	// Create receive transaction (B receives from A)
+	receiveSessionId := sessionId
+	if failRollup == "B" {
+		receiveSessionId = corruptedSessionId
+		log.Printf("  Corrupting rollup B transaction with mismatched session ID (will fail during execution)")
+	}
+
 	receiveParams := BridgeParams{
 		ChainSrc:   chainAId,
 		ChainDest:  chainBId,
@@ -269,7 +306,7 @@ func createBridgeTransactionPair(
 		Sender:     addressA,
 		Receiver:   addressB,
 		Amount:     amount,
-		SessionId:  sessionId,
+		SessionId:  receiveSessionId,
 		DestBridge: bridgeB,
 		SrcBridge:  bridgeA,
 	}
@@ -284,7 +321,7 @@ func createBridgeTransactionPair(
 		return nil, fmt.Errorf("failed to marshal receive transaction: %w", err)
 	}
 
-	// Create XTRequest
+	// Create XTRequest with both transactions (one may be corrupted to fail)
 	return &rollupv1.XTRequest{
 		Transactions: []*rollupv1.TransactionRequest{
 			{

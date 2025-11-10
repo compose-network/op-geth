@@ -2230,6 +2230,46 @@ func (b *EthAPIBackend) cleanupAbortedTransactionCallback(ctx context.Context, x
 		return nil
 	}
 	key := hexutil.Encode(xtID.Hash)
+
+	// Clear any pending blocks that contain the aborted transaction
+	// This prevents sending stale blocks built before the abort decision
+	b.pendingBlockMutex.Lock()
+	if len(b.pendingBlocks) > 0 {
+		// Check if any pending blocks contain transactions with this xtID
+		needsClear := false
+		b.sequencerTxMutex.RLock()
+		if b.txTracker != nil {
+			for _, block := range b.pendingBlocks {
+				for _, tx := range block.Transactions() {
+					if record := b.txTracker.record(tx.Hash()); record != nil && record.xtID == key {
+						needsClear = true
+						break
+					}
+				}
+				if needsClear {
+					break
+				}
+			}
+		}
+		b.sequencerTxMutex.RUnlock()
+
+		if needsClear {
+			clearedCount := len(b.pendingBlocks)
+			b.pendingBlocks = nil
+			log.Info("[SSV] Cleared pending blocks containing aborted transaction",
+				"xtID", key,
+				"blockCount", clearedCount)
+
+			// Force miner to rebuild payload without the aborted transaction
+			if miner := b.eth.miner; miner != nil {
+				log.Info("[SSV] Forcing payload rebuild after clearing aborted blocks", "xtID", key)
+				miner.InvalidatePendingCache()
+			}
+		}
+	}
+	b.pendingBlockMutex.Unlock()
+
+	// Remove staged transactions
 	removedPut, removedOriginal := b.dropTransactionsForXtKey(key, true)
 	if removedPut+removedOriginal > 0 {
 		log.Info("[SSV] Dropped aborted transactions via callback",
