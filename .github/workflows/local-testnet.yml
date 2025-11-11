@@ -63,6 +63,7 @@ jobs:
         uses: rlespinasse/github-slug-action@v5
       - name: Run local testnet
         run: |
+          set -e  # Exit immediately if any command fails
           PWD=`pwd`
           docker run --rm \
              --add-host=host.docker.internal:host-gateway \
@@ -90,9 +91,7 @@ jobs:
                --publisher-url=https://github.com/compose-network/publisher.git \
                --publisher-branch=stage \
                --op-geth-url=https://github.com/compose-network/op-geth.git \
-               --op-geth-branch=${{ steps.pr-info.outputs.branch }} \
-               || docker ps -a
-          set -x
+               --op-geth-branch=${{ steps.pr-info.outputs.branch }}
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25.0'
