@@ -31,6 +31,7 @@ jobs:
         with:
           ref: refs/pull/${{ github.event.issue.number }}/head
 
+
       - name: Get PR info
         id: pr-info
         run: |
@@ -38,8 +39,8 @@ jobs:
           PR_DATA=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             -H "Accept: application/vnd.github.v3+json" \
             "https://api.github.com/repos/${{ github.repository }}/pulls/${PR_NUMBER}")
-          BRANCH_NAME=$(echo "$PR_DATA" | grep -o '"ref"[[:space:]]*:[[:space:]]*"[^"]*"' | grep 'head' -A 1 | tail -1 | sed 's/.*"ref"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
-          COMMIT_SHA=$(echo "$PR_DATA" | grep -o '"sha"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"sha"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+          BRANCH_NAME=$(echo "$PR_DATA" | jq -r '.head.ref')
+          COMMIT_SHA=$(echo "$PR_DATA" | jq -r '.head.sha')
           echo "branch=$BRANCH_NAME" >> "$GITHUB_OUTPUT"
           echo "sha=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
 
