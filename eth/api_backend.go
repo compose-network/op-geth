@@ -736,7 +736,11 @@ func (b *EthAPIBackend) handleSequencerMessage(
 // SSV
 func (b *EthAPIBackend) StartCallbackFn() spconsensus.StartFn {
 	return func(ctx context.Context, from string, instance *composeproto.StartInstance) error {
-		//b.coordinator.PeriodSequencer().OnStartInstance()
+		err := b.coordinator.PeriodSequencer().OnStartInstance(compose.InstanceID(instance.GetInstanceId()))
+		if err != nil {
+			return err
+		}
+
 		return b.coordinator.InstanceSequencer().StartInstance(instance)
 	}
 }
@@ -768,7 +772,12 @@ func (b *EthAPIBackend) DecisionCallbackFn() spconsensus.DecisionFn {
 			return fmt.Errorf("instance sequencer not configured")
 		}
 
-		return b.coordinator.InstanceSequencer().Decide(*instanceID, decision)
+		err := b.coordinator.InstanceSequencer().Decide(*instanceID, decision)
+		if err != nil {
+			return err
+		}
+
+		return b.coordinator.PeriodSequencer().OnDecidedInstance(*instanceID)
 	}
 }
 
