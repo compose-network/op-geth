@@ -8,7 +8,7 @@ on:
 jobs:
   run-testnet:
     container:
-      image: ubuntu:25.10
+      image: buildpack-deps:noble
     runs-on: public-isolated
     # Only run if the comment is on a PR, contains /test, and user is org member
     if: |
