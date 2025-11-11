@@ -145,6 +145,57 @@ type EthAPIBackend struct {
 	pendingBlockMutex sync.RWMutex
 	pendingBlocks     []*types.Block
 	pendingBlockSlot  uint64
+
+	// SSV: Track xtIDs that have been aborted in the current slot to prevent re-pooling
+	abortedXtMutex sync.RWMutex
+	abortedXt      map[string]struct{}
+}
+
+// --- Aborted XT tracking ----------------------------------------------------
+
+func (b *EthAPIBackend) markXtAborted(key string) {
+	if key == "" {
+		return
+	}
+	b.abortedXtMutex.Lock()
+	if b.abortedXt == nil {
+		b.abortedXt = make(map[string]struct{})
+	}
+	// store both 0x-prefixed and non-prefixed variants for robustness
+	b.abortedXt[key] = struct{}{}
+	if strings.HasPrefix(key, "0x") {
+		b.abortedXt[key[2:]] = struct{}{}
+	} else {
+		b.abortedXt["0x"+key] = struct{}{}
+	}
+	b.abortedXtMutex.Unlock()
+}
+
+func (b *EthAPIBackend) isXtAborted(key string) bool {
+	if key == "" {
+		return false
+	}
+	b.abortedXtMutex.RLock()
+	_, ok := b.abortedXt[key]
+	if !ok {
+		if strings.HasPrefix(key, "0x") {
+			_, ok = b.abortedXt[key[2:]]
+		} else {
+			_, ok = b.abortedXt["0x"+key]
+		}
+	}
+	b.abortedXtMutex.RUnlock()
+	return ok
+}
+
+func (b *EthAPIBackend) clearAbortedXts() {
+	b.abortedXtMutex.Lock()
+	if b.abortedXt != nil {
+		for k := range b.abortedXt {
+			delete(b.abortedXt, k)
+		}
+	}
+	b.abortedXtMutex.Unlock()
 }
 
 type sequencerTxKind int
@@ -1297,6 +1348,12 @@ func (b *EthAPIBackend) assembleSequencerBundle() (types.Transactions, []sequenc
 			continue
 		}
 
+		// Skip entries belonging to an aborted XT
+		if entry.xtID != "" && b.isXtAborted(entry.xtID) {
+			log.Info("[SSV] Skipping aborted XT in bundle assembly", "xtID", entry.xtID, "txHash", entry.tx.Hash().Hex(), "nonce", entry.tx.Nonce())
+			continue
+		}
+
 		from, err := types.Sender(signer, entry.tx)
 		if err != nil {
 			log.Warn("[SSV] Failed to extract sender", "txHash", entry.tx.Hash().Hex(), "error", err)
@@ -1752,6 +1809,15 @@ func (b *EthAPIBackend) waitForPutInboxTransactionsToBeProcessed() error {
 func (b *EthAPIBackend) poolPayloadTx(
 	ctx context.Context,
 	tx *types.Transaction) {
+	// Abort-aware guard: if this tx belongs to an XT that has been aborted,
+	// skip staging and avoid re-adding it to the txpool.
+	if xtKey := xtIDFromCtx(ctx); xtKey != "" {
+		if b.isXtAborted(xtKey) {
+			log.Info("[SSV] Skipping pool for aborted XT", "xtID", xtKey, "txHash", tx.Hash().Hex(), "nonce", tx.Nonce())
+			return
+		}
+	}
+
 	b.sequencerTxMutex.Lock()
 	b.addSequencerEntryLocked(tx, sequencerTxOriginal)
 	b.sequencerTxMutex.Unlock()
@@ -2034,6 +2100,9 @@ func (b *EthAPIBackend) NotifySlotStart(startSlot *rollupv1.StartSlot) error {
 	b.pendingBlockSlot = startSlot.Slot
 	b.pendingBlockMutex.Unlock()
 
+	// Clear aborted xtIDs for the new slot scope
+	b.clearAbortedXts()
+
 	// Clear any lingering sequencer transactions from previous slot.
 	b.sequencerTxMutex.Lock()
 	tracker := b.ensureTrackerLocked()
@@ -2187,7 +2256,6 @@ func (b *EthAPIBackend) NotifyStateChange(from, to sequencer.State, slot uint64)
 			miner.InvalidatePendingCache()
 		}
 	}
-
 	return nil
 }
 
@@ -2204,6 +2272,9 @@ func (b *EthAPIBackend) cleanupAbortedTransactionCallback(ctx context.Context, x
 		return nil
 	}
 	key := hexutil.Encode(xtID.Hash)
+
+	// Remember aborted xtID to prevent any future pooling attempts this slot.
+	b.markXtAborted(key)
 
 	// Clear any pending blocks that contain the aborted transaction
 	// This prevents sending stale blocks built before the abort decision
@@ -2572,26 +2643,38 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 				)
 			}
 
-			// Pool transactions immediately when they become successful
+			// Pool transactions immediately when they become successful,
+			// unless the XT has been aborted meanwhile.
 			_, done := txDone[simState.Tx.Hash().Hex()]
+			xtKey := hexutil.Encode(xtID.Hash)
 			if newSimState.Success && !done && len(newSimState.Dependencies) == 0 {
-				log.Info("[SSV] Pooling transaction after re-simulation", "hash", simState.Tx.Hash().Hex(), "xtID", xtID.Hex())
-				b.poolPayloadTx(ctxWithXtID(ctx, xtID), simState.Tx)
-				b.assignXtKeyToHash(simState.Tx, xtID)
-				txDone[simState.Tx.Hash().Hex()] = struct{}{}
+				if b.isXtAborted(xtKey) {
+					log.Info("[SSV] Not pooling aborted XT after re-simulation", "xtID", xtKey, "hash", simState.Tx.Hash().Hex())
+				} else {
+					log.Info("[SSV] Pooling transaction after re-simulation", "hash", simState.Tx.Hash().Hex(), "xtID", xtKey)
+					b.poolPayloadTx(ctxWithXtID(ctx, xtID), simState.Tx)
+					b.assignXtKeyToHash(simState.Tx, xtID)
+					txDone[simState.Tx.Hash().Hex()] = struct{}{}
+				}
 			}
 		}
 	}
 
-	// Final check - pool any remaining successful transactions that weren't pooled yet
+	// Final check - pool any remaining successful transactions that weren't pooled yet,
+	// unless the XT has been aborted.
 	for _, simState := range coordinationStates {
 		tx := simState.Tx
 		_, done := txDone[tx.Hash().Hex()]
+		xtKey := hexutil.Encode(xtID.Hash)
 		if simState.Success && !done && len(simState.Dependencies) == 0 {
-			log.Info("[SSV] Pooling remaining successful transaction", "hash", tx.Hash().Hex(), "xtID", xtID.Hex())
-			b.poolPayloadTx(ctxWithXtID(ctx, xtID), tx)
-			b.assignXtKeyToHash(tx, xtID)
-			txDone[tx.Hash().Hex()] = struct{}{}
+			if b.isXtAborted(xtKey) {
+				log.Info("[SSV] Not pooling aborted XT in final sweep", "xtID", xtKey, "hash", tx.Hash().Hex())
+			} else {
+				log.Info("[SSV] Pooling remaining successful transaction", "hash", tx.Hash().Hex(), "xtID", xtKey)
+				b.poolPayloadTx(ctxWithXtID(ctx, xtID), tx)
+				b.assignXtKeyToHash(tx, xtID)
+				txDone[tx.Hash().Hex()] = struct{}{}
+			}
 		}
 	}
 
