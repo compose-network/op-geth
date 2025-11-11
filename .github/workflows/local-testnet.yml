@@ -109,6 +109,16 @@ jobs:
           repository: compose-network/rollup-probe
           token: ${{ steps.generate-token.outputs.token }}
           path: rollup-probe
+
+      - name: Parse test pattern from Makefile
+        id: parse-tests
+        working-directory: rollup-probe
+        run: |
+          # Extract the test pattern from the smoke-test target in the Makefile
+          TEST_PATTERN=$(grep -A 5 '^smoke-test:' Makefile | grep -o '\-test\.run="[^"]*"' | sed 's/-test\.run="\(.*\)"/\1/')
+          echo "pattern=$TEST_PATTERN" >> "$GITHUB_OUTPUT"
+          echo "Extracted test pattern: $TEST_PATTERN"
+
       - name: Run smoke tests
         id: smoke-tests
         continue-on-error: true
@@ -117,7 +127,8 @@ jobs:
           cp ../output.yaml configs/config.yaml
           mkdir -p bin && go test -c ./test/ -o bin/probe
           echo "Running smoke tests with INFO log level..."
-          LOG_LEVEL=INFO bin/probe -test.v -test.count=1 -test.run="TestMintTokensCrossRollup|TestSendCrossTxBridgeFromAToB|TestSendCrossTxBridgeFromBToA|TestSendOnAAndFailingSelfMoveBalanceOnB|TestSendCrossTxBridgeWithOutOfGasOnB|TestSelfMoveBalanceOnAandreceiveTokensOnB" 2>&1 | tee test-output.log
+          echo "Test pattern from Makefile: ${{ steps.parse-tests.outputs.pattern }}"
+          LOG_LEVEL=INFO bin/probe -test.v -test.count=1 -test.run="${{ steps.parse-tests.outputs.pattern }}" 2>&1 | tee test-output.log
           exit ${PIPESTATUS[0]}
 
       - name: Parse test results and post comment
