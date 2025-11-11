@@ -7,8 +7,6 @@ on:
 
 jobs:
   run-testnet:
-    container:
-      image: buildpack-deps:noble
     runs-on: public-isolated
     # Only run if the comment is on a PR, contains /test, and user is org member
     if: |
@@ -27,6 +25,21 @@ jobs:
         with:
           comment-id: ${{ github.event.comment.id }}
           reactions: 'rocket'
+
+      - name: Install make via BusyBox
+        run: |
+          mkdir -p $HOME/bin
+          # Download BusyBox static binary (includes make)
+          curl -L https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox -o $HOME/bin/busybox
+          chmod +x $HOME/bin/busybox
+          # Create make symlink to busybox
+          ln -s $HOME/bin/busybox $HOME/bin/make
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Test make installation
+        run: |
+          which make
+          make --version || echo "Note: BusyBox make has limited features compared to GNU make"
 
       - name: Checkout PR code
         uses: actions/checkout@v4
@@ -116,9 +129,7 @@ jobs:
         continue-on-error: true
         working-directory: rollup-probe
         run: |
-          pwd
           cp ../output.yaml configs/config.yaml
-          cat configs/config.yaml
           mkdir -p bin && go test -c ./test/ -o bin/probe
           echo "Running smoke tests with INFO log level..."
           LOG_LEVEL=INFO bin/probe -test.v -test.count=1 -test.run="TestMintTokensCrossRollup|TestSendCrossTxBridgeFromAToB|TestSendCrossTxBridgeFromBToA|TestSendOnAAndFailingSelfMoveBalanceOnB|TestSendCrossTxBridgeWithOutOfGasOnB|TestSelfMoveBalanceOnAandreceiveTokensOnB" 2>&1 | tee test-output.log
