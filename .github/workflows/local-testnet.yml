@@ -31,7 +31,6 @@ jobs:
         with:
           ref: refs/pull/${{ github.event.issue.number }}/head
 
-
       - name: Get PR info
         id: pr-info
         run: |
@@ -95,24 +94,15 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25.0'
-      - name: Generate GitHub App Token for Pull rollup probe
-        id: generate-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.PULL_PRIVATE_GITHUB_APP_ID }}
-          private-key: ${{ secrets.PULL_PRIVATE_GITHUB_APP_KEY }}
-          repositories: |
-            rollup-probe
-      - name: Checkout rollup-probe repository
+      - name: Checkout dome test repository
         uses: actions/checkout@v4
         with:
-          repository: compose-network/rollup-probe
-          token: ${{ steps.generate-token.outputs.token }}
-          path: rollup-probe
+          repository: compose-network/dome
+          path: dome
 
       - name: Parse test pattern from Makefile
         id: parse-tests
-        working-directory: rollup-probe
+        working-directory: dome
         run: |
           # Extract the test pattern from the smoke-test target in the Makefile
           TEST_PATTERN=$(grep -A 5 '^smoke-test:' Makefile | grep -o '\-test\.run="[^"]*"' | sed 's/-test\.run="\(.*\)"/\1/')
@@ -122,18 +112,18 @@ jobs:
       - name: Run smoke tests
         id: smoke-tests
         continue-on-error: true
-        working-directory: rollup-probe
+        working-directory: dome
         run: |
           cp ../output.yaml configs/config.yaml
-          mkdir -p bin && go test -c ./test/ -o bin/probe
+          mkdir -p bin && go test -c ./test/ -o bin/dome
           echo "Running smoke tests with INFO log level..."
           echo "Test pattern from Makefile: ${{ steps.parse-tests.outputs.pattern }}"
-          LOG_LEVEL=INFO bin/probe -test.v -test.count=1 -test.run="${{ steps.parse-tests.outputs.pattern }}" 2>&1 | tee test-output.log
+          LOG_LEVEL=INFO bin/dome -test.v -test.count=1 -test.run="${{ steps.parse-tests.outputs.pattern }}" 2>&1 | tee test-output.log
           exit ${PIPESTATUS[0]}
 
       - name: Parse test results and post comment
         if: always() && steps.smoke-tests.outcome != 'skipped'
-        working-directory: rollup-probe
+        working-directory: dome
         run: |
           # Parse test results from the log file
           if [ -f test-output.log ]; then
