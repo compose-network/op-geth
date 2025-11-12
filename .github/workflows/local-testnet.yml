@@ -1,9 +1,12 @@
-name: Local Testnet
+name: Secure Local Testnet on PR Comment
+
+# This workflow is designed for restricted GitHub runners that only allow
+# actions from the compose-network/github-actions repository.
+# All steps use composite actions from this repo to prevent malicious code execution.
 
 on:
   issue_comment:
     types: [created]
-  workflow_dispatch:
 
 jobs:
   run-testnet:
@@ -20,168 +23,50 @@ jobs:
       pull-requests: write
       statuses: write
     steps:
+      # Step 1: Add reaction to comment (uses our action)
       - name: Add reaction to comment
-        uses: peter-evans/create-or-update-comment@v4
+        uses: compose-network/github-actions/actions/add-reaction@v0.2.0
         with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           comment-id: ${{ github.event.comment.id }}
-          reactions: 'rocket'
+          reaction: 'rocket'
 
-      - name: Checkout PR code
-        uses: actions/checkout@v4
-        with:
-          ref: refs/pull/${{ github.event.issue.number }}/head
-
+      # Step 2: Get PR information (uses our action)
       - name: Get PR info
         id: pr-info
-        run: |
-          PR_NUMBER=${{ github.event.issue.number }}
-          PR_DATA=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/${{ github.repository }}/pulls/${PR_NUMBER}")
-          BRANCH_NAME=$(echo "$PR_DATA" | jq -r '.head.ref')
-          COMMIT_SHA=$(echo "$PR_DATA" | jq -r '.head.sha')
-          echo "branch=$BRANCH_NAME" >> "$GITHUB_OUTPUT"
-          echo "sha=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+        uses: compose-network/github-actions/actions/get-pr-info@v0.2.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pr-number: ${{ github.event.issue.number }}
 
-      - name: Set status to pending
-        run: |
-          curl -s -X POST \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/${{ github.repository }}/statuses/${{ steps.pr-info.outputs.sha }}" \
-            -d '{
-              "state": "pending",
-              "description": "Local testnet tests are running...",
-              "context": "Local Testnet CI",
-              "target_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            }'
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Inject enhanced GitHub environment variables
-        uses: rlespinasse/github-slug-action@v5
+      # Step 4: Run local testnet (uses our action)
       - name: Run local testnet
-        run: |
-          set -e  # Exit immediately if any command fails
-          PWD=`pwd`
-          docker run --rm \
-             --add-host=host.docker.internal:host-gateway \
-             -v /var/run/docker.sock:/var/run/docker.sock \
-             -v ${PWD}:/workspace \
-             -w /workspace \
-             -e HOST_PROJECT_PATH=${PWD} \
-             ghcr.io/compose-network/local-testnet:latest l2 \
-               --l1-chain-id ${{ secrets.LOCAL_TESTNET_L1_CHAIN_ID }} \
-               --l1-cl-url=${{ secrets.LOCAL_TESTNET_L1_CL }} \
-               --l1-el-url=${{ secrets.LOCAL_TESTNET_L1_EL}} \
-               --wallet-address=${{ secrets.LOCAL_TESTNET_WALLET_ADDRESS}} \
-               --wallet-private-key=${{ secrets.LOCAL_TESTNET_WALLET_PK}} \
-               --coordinator-private-key=${{ secrets.LOCAL_TESTNET_COORDINATOR_PK }} \
-               --genesis-balance-wei=10000000000000000000 \
-               --compose-network-name=hoodi \
-               --dispute-network-name=hoodi \
-               --dispute-owner-address=${{ secrets.LOCAL_TESTNET_WALLET_ADDRESS}} \
-               --dispute-proposer-address=${{ secrets.LOCAL_TESTNET_WALLET_ADDRESS}} \
-               --dispute-admin-address=${{ secrets.LOCAL_TESTNET_WALLET_ADDRESS}} \
-               --dispute-verifier-address=${{ secrets.LOCAL_TESTNET_VERIFIER_WALLET}} \
-               --dispute-aggregation-vkey=${{ secrets.LOCAL_TESTNET_VERIFIER_PK}} \
-               --compose-contracts-url=https://github.com/compose-network/contracts.git \
-               --compose-contracts-branch=develop \
-               --publisher-url=https://github.com/compose-network/publisher.git \
-               --publisher-branch=stage \
-               --op-geth-url=https://github.com/compose-network/op-geth.git \
-               --op-geth-branch=${{ steps.pr-info.outputs.branch }}
-      - uses: actions/setup-go@v6
+        uses: compose-network/github-actions/actions/local-testnet@v0.2.0
         with:
-          go-version: '1.25.0'
-      - name: Checkout dome test repository
-        uses: actions/checkout@v4
-        with:
-          repository: compose-network/dome
-          path: dome
+          # Required: Repository branches
+          op-geth-branch: ${{ steps.pr-info.outputs.branch }}
+          publisher-branch: 'stage'
 
-      - name: Parse test pattern from Makefile
-        id: parse-tests
-        working-directory: dome
-        run: |
-          # Extract the test pattern from the smoke-test target in the Makefile
-          TEST_PATTERN=$(grep -A 5 '^smoke-test:' Makefile | grep -o '\-test\.run="[^"]*"' | sed 's/-test\.run="\(.*\)"/\1/')
-          echo "pattern=$TEST_PATTERN" >> "$GITHUB_OUTPUT"
-          echo "Extracted test pattern: $TEST_PATTERN"
+          # Optional: Override Docker image tag
+          # local-testnet-image-tag: 'latest'
 
-      - name: Run smoke tests
-        id: smoke-tests
-        continue-on-error: true
-        working-directory: dome
-        run: |
-          cp ../output.yaml configs/config.yaml
-          mkdir -p bin && go test -c ./test/ -o bin/dome
-          echo "Running smoke tests with INFO log level..."
-          echo "Test pattern from Makefile: ${{ steps.parse-tests.outputs.pattern }}"
-          LOG_LEVEL=INFO bin/dome -test.v -test.count=1 -test.run="${{ steps.parse-tests.outputs.pattern }}" 2>&1 | tee test-output.log
-          exit ${PIPESTATUS[0]}
+          # PR information for status updates
+          pr-number: ${{ github.event.issue.number }}
+          pr-sha: ${{ steps.pr-info.outputs.sha }}
 
-      - name: Parse test results and post comment
-        if: always() && steps.smoke-tests.outcome != 'skipped'
-        working-directory: dome
-        run: |
-          # Parse test results from the log file
-          if [ -f test-output.log ]; then
-            echo "## Test Results" > test-summary.md
-            echo "" >> test-summary.md
+          # GitHub token
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-            # Extract test results
-            grep -E "^(--- PASS:|--- FAIL:)" test-output.log | while read -r line; do
-              if echo "$line" | grep -q "PASS:"; then
-                test_name=$(echo "$line" | sed 's/--- PASS: \(.*\) (.*/\1/')
-                echo "🟢 **$test_name** - PASS" >> test-summary.md
-              elif echo "$line" | grep -q "FAIL:"; then
-                test_name=$(echo "$line" | sed 's/--- FAIL: \(.*\) (.*/\1/')
-                echo "🔴 **$test_name** - FAIL" >> test-summary.md
-              fi
-            done
+          # L1 configuration
+          l1-chain-id: ${{ secrets.LOCAL_TESTNET_L1_CHAIN_ID }}
+          l1-cl-url: ${{ secrets.LOCAL_TESTNET_L1_CL }}
+          l1-el-url: ${{ secrets.LOCAL_TESTNET_L1_EL }}
 
-            # Add workflow run link
-            echo "" >> test-summary.md
-            echo "---" >> test-summary.md
-            echo "📊 [View full test logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) - look for the 'Run smoke tests' step of the workflow." >> test-summary.md
+          # Wallet configuration
+          wallet-address: ${{ secrets.LOCAL_TESTNET_WALLET_ADDRESS }}
+          wallet-private-key: ${{ secrets.LOCAL_TESTNET_WALLET_PK }}
+          coordinator-private-key: ${{ secrets.LOCAL_TESTNET_COORDINATOR_PK }}
 
-            # Post comment to PR
-            # Escape the content for JSON by replacing special characters
-            COMMENT_BODY=$(sed 's/\\/\\\\/g; s/"/\\"/g; s/$/\\n/g' test-summary.md | tr -d '\n' | sed 's/\\n$//')
-            curl -s -X POST \
-              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              -H "Accept: application/vnd.github.v3+json" \
-              "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments" \
-              -d "{\"body\": \"$COMMENT_BODY\"}"
-          else
-            echo "No test output file found"
-          fi
-
-      - name: Set status to success
-        if: steps.smoke-tests.outcome == 'success'
-        run: |
-          curl -s -X POST \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/${{ github.repository }}/statuses/${{ steps.pr-info.outputs.sha }}" \
-            -d '{
-              "state": "success",
-              "description": "Local testnet tests passed!",
-              "context": "Local Testnet CI",
-              "target_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            }'
-
-      - name: Set status to failure
-        if: steps.smoke-tests.outcome == 'failure' || failure()
-        run: |
-          curl -s -X POST \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/${{ github.repository }}/statuses/${{ steps.pr-info.outputs.sha }}" \
-            -d '{
-              "state": "failure",
-              "description": "Local testnet tests failed",
-              "context": "Local Testnet CI",
-              "target_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            }'
+          # Verifier configuration
+          verifier-wallet: ${{ secrets.LOCAL_TESTNET_VERIFIER_WALLET }}
+          verifier-key: ${{ secrets.LOCAL_TESTNET_VERIFIER_PK }}
