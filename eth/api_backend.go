@@ -1514,16 +1514,25 @@ func (b *EthAPIBackend) OnBlockBuildingComplete(
 	}
 
 	for xtID, check := range pairStatus {
-		if check.putIndex == -1 || check.originalIndex == -1 {
-			log.Error("[SSV] Incomplete cross-chain pair in block",
+		hasPut := check.putIndex != -1
+		hasOriginal := check.originalIndex != -1
+
+		if hasPut && hasOriginal {
+			if check.putIndex > check.originalIndex {
+				log.Error("[SSV] Cross-chain pair out of order",
+					"xtID", xtID,
+					"putIndex", check.putIndex,
+					"originalIndex", check.originalIndex,
+					"block", block.NumberU64())
+			}
+		} else if hasPut {
+			log.Error("[SSV] Incomplete cross-chain pair: putInbox without original",
 				"xtID", xtID,
 				"putIndex", check.putIndex,
-				"originalIndex", check.originalIndex,
 				"block", block.NumberU64())
-		} else if check.putIndex > check.originalIndex {
-			log.Error("[SSV] Cross-chain pair out of order",
+		} else if hasOriginal {
+			log.Debug("[SSV] Bridge contract transaction (no putInbox)",
 				"xtID", xtID,
-				"putIndex", check.putIndex,
 				"originalIndex", check.originalIndex,
 				"block", block.NumberU64())
 		}
