@@ -1306,7 +1306,6 @@ func (b *EthAPIBackend) assembleSequencerBundle() (types.Transactions, []sequenc
 			continue
 		}
 
-		// Skip entries belonging to an aborted XT
 		if entry.xtID != "" && b.isXtAborted(entry.xtID) {
 			log.Info("[SSV] Skipping aborted XT in bundle assembly", "xtID", entry.xtID, "txHash", entry.tx.Hash().Hex(), "nonce", entry.tx.Nonce())
 			continue
@@ -1318,8 +1317,13 @@ func (b *EthAPIBackend) assembleSequencerBundle() (types.Transactions, []sequenc
 			continue
 		}
 
-		// If this account experienced a nonce gap earlier in this pass, defer the remaining
-		// transactions until the missing nonce arrives.
+		// Original transactions are pre-signed with specific nonces and coordinated via SBCP RequestSeal.
+		// Skip nonce validation for these as the SP has already determined inclusion order.
+		if entry.kind == sequencerTxOriginal {
+			filteredReady = append(filteredReady, entry)
+			continue
+		}
+
 		if _, blocked := blockedAccounts[from]; blocked {
 			log.Debug("[SSV] Deferring sequencer transactions due to prior nonce gap",
 				"from", from.Hex(),
@@ -1328,7 +1332,6 @@ func (b *EthAPIBackend) assembleSequencerBundle() (types.Transactions, []sequenc
 			continue
 		}
 
-		// Initialize expected nonce for this account if not already set
 		if _, exists := accountNonces[from]; !exists {
 			accountNonces[from] = stateDB.GetNonce(from)
 		}
@@ -1336,29 +1339,22 @@ func (b *EthAPIBackend) assembleSequencerBundle() (types.Transactions, []sequenc
 		expectedNonce := accountNonces[from]
 		txNonce := entry.tx.Nonce()
 
-		// Check if this transaction has the expected nonce
 		if txNonce == expectedNonce {
-			// Valid: continuous sequence
 			filteredReady = append(filteredReady, entry)
 			accountNonces[from] = expectedNonce + 1
 		} else if txNonce < expectedNonce {
-			// Already included or executed
 			log.Info("[SSV] Skipping transaction with old nonce",
 				"txHash", entry.tx.Hash().Hex(),
 				"from", from.Hex(),
 				"txNonce", txNonce,
 				"expectedNonce", expectedNonce)
 		} else {
-			// Gap detected: stop including transactions from this account
 			log.Warn("[SSV] Nonce gap detected, stopping account transactions",
 				"from", from.Hex(),
 				"txNonce", txNonce,
 				"expectedNonce", expectedNonce,
 				"gap", txNonce-expectedNonce,
 				"txHash", entry.tx.Hash().Hex())
-			// Mark this account as having a gap so the remaining entries are deferred until we
-			// receive the missing nonce. This avoids marking the later nonces as "old" and
-			// allows the bundle to resume automatically once the gap is filled.
 			blockedAccounts[from] = struct{}{}
 		}
 	}
