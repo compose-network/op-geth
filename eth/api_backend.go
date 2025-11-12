@@ -1317,9 +1317,12 @@ func (b *EthAPIBackend) assembleSequencerBundle() (types.Transactions, []sequenc
 			continue
 		}
 
-		// Original transactions are pre-signed with specific nonces and coordinated via SBCP RequestSeal.
-		// Skip nonce validation for these as the SP has already determined inclusion order.
-		if entry.kind == sequencerTxOriginal {
+		// Both original and putInbox transactions are coordinated via SBCP RequestSeal.
+		// Original transactions are pre-signed with specific nonces.
+		// PutInbox transactions are sequencer-signed but created dynamically during xT processing.
+		// Both types skip nonce gap validation as the SP has already determined inclusion order
+		// via RequestSeal, and nonce validation will occur during EVM execution.
+		if entry.kind == sequencerTxOriginal || entry.kind == sequencerTxPutInbox {
 			filteredReady = append(filteredReady, entry)
 			continue
 		}
