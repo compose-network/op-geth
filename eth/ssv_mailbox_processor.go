@@ -7,6 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 
+	rollupv1 "github.com/compose-network/publisher/proto/rollup/v1"
+	spconsensus "github.com/compose-network/publisher/x/consensus"
+	"github.com/compose-network/publisher/x/superblock/sequencer"
+	"github.com/compose-network/publisher/x/transport"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -15,10 +19,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
-	rollupv1 "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/proto/rollup/v1"
-	spconsensus "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/consensus"
-	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/superblock/sequencer"
-	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/transport"
 	"github.com/ethereum/go-ethereum/log"
 
 	"math/big"

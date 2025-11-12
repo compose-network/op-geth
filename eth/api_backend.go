@@ -24,15 +24,16 @@ import (
 	"errors"
 	"fmt"
 
-	rollupv1 "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/proto/rollup/v1"
-	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/transport"
-
 	"math/big"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	rollupv1 "github.com/compose-network/publisher/proto/rollup/v1"
+	spconsensus "github.com/compose-network/publisher/x/consensus"
+	"github.com/compose-network/publisher/x/superblock/sequencer"
+	"github.com/compose-network/publisher/x/transport"
 	"github.com/ethereum/go-ethereum/core/ssv"
 	"github.com/ethereum/go-ethereum/eth/tracers/native"
 
@@ -58,9 +59,6 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
-
-	spconsensus "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/consensus"
-	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/superblock/sequencer"
 )
 
 // xtIDFromCtx extracts the xtID from context, if present, else returns empty string.

@@ -35,16 +35,15 @@ import (
 	"sync"
 	"time"
 
+	ssvlog "github.com/compose-network/publisher/log"
+	"github.com/compose-network/publisher/x/auth"
+	"github.com/compose-network/publisher/x/consensus"
+	"github.com/compose-network/publisher/x/superblock/sequencer"
+	"github.com/compose-network/publisher/x/superblock/sequencer/bootstrap"
+	"github.com/compose-network/publisher/x/superblock/slot"
+	"github.com/compose-network/publisher/x/transport"
+	"github.com/compose-network/publisher/x/transport/tcp"
 	"github.com/ethereum/go-ethereum/crypto"
-	ssvlog "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/log"
-	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/auth"
-	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/consensus"
-	spconsensus "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/consensus"
-	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/superblock/sequencer"
-	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/superblock/sequencer/bootstrap"
-	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/superblock/slot"
-	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/transport"
-	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/transport/tcp"
 	"github.com/rs/zerolog"
 
 	"github.com/ethereum/go-ethereum/accounts"
@@ -275,7 +274,7 @@ func New(conf *Config) (*Node, error) {
 
 	_, addrs := generateClients(conf.SequencerAddrs, authManager)
 	// Exclude self from peer list to avoid dialing ourselves
-	selfKey := spconsensus.ChainKeyUint64(uint64(chainIDInt64))
+	selfKey := consensus.ChainKeyUint64(uint64(chainIDInt64))
 	delete(addrs, selfKey)
 	node.sequencerAddrs = addrs
 	node.sequencerKey = parsePrivateKey(conf.SequencerKey)
@@ -395,7 +394,7 @@ func generateClients(addrs string, authManager auth.Manager) (map[string]transpo
 		// Normalize chain ID key: accept decimal or hex and store canonical hex key
 		var key string
 		if bi, ok := new(big.Int).SetString(rawID, 10); ok {
-			key = spconsensus.ChainKeyUint64(bi.Uint64())
+			key = consensus.ChainKeyUint64(bi.Uint64())
 		} else {
 			// Assume hex; strip optional 0x and lowercase
 			rid := strings.ToLower(strings.TrimPrefix(rawID, "0x"))

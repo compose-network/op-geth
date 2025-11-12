@@ -5,8 +5,8 @@ import (
 
 	"math/big"
 
+	rollupv1 "github.com/compose-network/publisher/proto/rollup/v1"
 	"github.com/ethereum/go-ethereum/common"
-	rollupv1 "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/proto/rollup/v1"
 )
 
 func TestMatchCIRCToDependency_LabelAndReceiverMatch(t *testing.T) {

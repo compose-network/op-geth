@@ -6,9 +6,9 @@ import (
 	"crypto/rand"
 	"fmt"
 
+	rollupv1 "github.com/compose-network/publisher/proto/rollup/v1"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/ethclient"
-	rollupv1 "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/proto/rollup/v1"
 
 	"log"
 	"math/big"

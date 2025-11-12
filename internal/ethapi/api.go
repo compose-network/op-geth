@@ -26,7 +26,7 @@ import (
 	"strings"
 	"time"
 
-	rollupv1 "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/proto/rollup/v1"
+	rollupv1 "github.com/compose-network/publisher/proto/rollup/v1"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/davecgh/go-spew/spew"

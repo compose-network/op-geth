@@ -34,8 +34,8 @@ import (
 	"testing"
 	"time"
 
+	rollupv1 "github.com/compose-network/publisher/proto/rollup/v1"
 	"github.com/ethereum/go-ethereum/core/ssv"
-	rollupv1 "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/proto/rollup/v1"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/internal/ethapi/override"
