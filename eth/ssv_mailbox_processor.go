@@ -726,7 +726,7 @@ func (mp *MailboxProcessor) getCoordinatorAddress(ctx context.Context, addr comm
 	return common.BytesToAddress(out), nil
 }
 
-func (mp *MailboxProcessor) createPutInboxTx(dep CrossRollupDependency, nonce uint64) (*types.Transaction, error) {
+func (mp *MailboxProcessor) createPutInboxTx(dep CrossRollupDependency, nonce uint64, bumpGas bool) (*types.Transaction, error) {
 	parsedABI, err := abi.JSON(strings.NewReader(mailboxABI))
 	if err != nil {
 		return nil, err
@@ -750,11 +750,22 @@ func (mp *MailboxProcessor) createPutInboxTx(dep CrossRollupDependency, nonce ui
 		return nil, fmt.Errorf("unable to select mailbox addr. No address configured for chain %d", mp.chainID)
 	}
 
+	gasTipCap := big.NewInt(1000000000)
+	gasFeeCap := big.NewInt(20000000000)
+
+	if bumpGas {
+		gasTipCap = new(big.Int).Mul(gasTipCap, big.NewInt(12))
+		gasTipCap = new(big.Int).Div(gasTipCap, big.NewInt(10))
+
+		gasFeeCap = new(big.Int).Mul(gasFeeCap, big.NewInt(12))
+		gasFeeCap = new(big.Int).Div(gasFeeCap, big.NewInt(10))
+	}
+
 	txData := &types.DynamicFeeTx{
 		ChainID:    new(big.Int).SetUint64(mp.chainID),
 		Nonce:      nonce,
-		GasTipCap:  big.NewInt(1000000000),
-		GasFeeCap:  big.NewInt(20000000000),
+		GasTipCap:  gasTipCap,
+		GasFeeCap:  gasFeeCap,
 		Gas:        500000,
 		To:         &mailboxAddr,
 		Value:      big.NewInt(0),
