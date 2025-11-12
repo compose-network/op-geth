@@ -61,6 +61,7 @@ type Coordinator interface {
 	GetState() State
 	GetStats() map[string]interface{}
 	GetActiveSCPInstanceCount() int
+	ShouldRejectXt(xtID string) bool
 
 	// Consensus access
 	Consensus() consensus.Coordinator
@@ -105,4 +106,5 @@ type SCPIntegrationInterface interface {
 	GetIncludedXTsHex() []string
 	GetLastDecidedSequenceNumber() (uint64, bool)
 	GetActiveCount() int
+	ShouldRejectXt(xtID string) bool
 }

@@ -19,6 +19,12 @@ type SCPContext struct {
 	Decision       *bool
 }
 
+// DecidedXT tracks the final decision for an XT in a slot
+type DecidedXT struct {
+	XtIDBytes []byte // raw xtID bytes
+	Included  bool   // true=included, false=aborted
+}
+
 type SCPIntegration struct {
 	mu           sync.RWMutex
 	chainID      []byte
@@ -29,7 +35,7 @@ type SCPIntegration struct {
 	activeContexts map[string]*SCPContext // xtID -> context
 
 	// per-slot tracked state
-	includedXTs map[string][]byte // hex xtID -> raw xtID bytes for this slot (decided=true)
+	decidedXTs map[string]*DecidedXT // hex xtID -> decision state for this slot
 	// last decided sequence number for monotonic StartSC enforcement
 	lastDecidedSeq    uint64
 	hasLastDecidedSeq bool
@@ -50,7 +56,7 @@ func NewSCPIntegration(
 		stateMachine:   stateMachine,
 		log:            log.With().Str("component", "scp_integration").Logger(),
 		activeContexts: make(map[string]*SCPContext),
-		includedXTs:    make(map[string][]byte),
+		decidedXTs:     make(map[string]*DecidedXT),
 		blockBuilder:   builder,
 	}
 }
@@ -124,11 +130,10 @@ func (si *SCPIntegration) HandleDecision(xtID *pb.XtID, decision bool) error {
 		}
 	}
 
-	// Track included XTs for superset check
-	if decision {
-		si.includedXTs[xtIDStr] = scpCtx.XtID.Hash
-	} else {
-		delete(si.includedXTs, xtIDStr)
+	// Track decision for superset check and re-pooling prevention
+	si.decidedXTs[xtIDStr] = &DecidedXT{
+		XtIDBytes: scpCtx.XtID.Hash,
+		Included:  decision,
 	}
 
 	// Clean up context after decision
@@ -184,7 +189,7 @@ func (si *SCPIntegration) ResetForSlot(slot uint64) {
 	defer si.mu.Unlock()
 	si.currentSlot = slot
 	si.activeContexts = make(map[string]*SCPContext)
-	si.includedXTs = make(map[string][]byte)
+	si.decidedXTs = make(map[string]*DecidedXT)
 	si.hasLastDecidedSeq = false
 }
 
@@ -192,11 +197,21 @@ func (si *SCPIntegration) ResetForSlot(slot uint64) {
 func (si *SCPIntegration) GetIncludedXTsHex() []string {
 	si.mu.RLock()
 	defer si.mu.RUnlock()
-	out := make([]string, 0, len(si.includedXTs))
-	for k := range si.includedXTs {
-		out = append(out, k)
+	out := make([]string, 0)
+	for k, decided := range si.decidedXTs {
+		if decided.Included {
+			out = append(out, k)
+		}
 	}
 	return out
+}
+
+// ShouldRejectXt returns true if the XT was decided against and should be rejected
+func (si *SCPIntegration) ShouldRejectXt(xtID string) bool {
+	si.mu.RLock()
+	defer si.mu.RUnlock()
+	decided, exists := si.decidedXTs[xtID]
+	return exists && !decided.Included
 }
 
 // GetLastDecidedSequenceNumber returns the last decided sequence and whether it exists

@@ -697,6 +697,14 @@ func (sc *SequencerCoordinator) GetActiveSCPInstanceCount() int {
 	return 0
 }
 
+// ShouldRejectXt returns true if the XT was decided against and should be rejected
+func (sc *SequencerCoordinator) ShouldRejectXt(xtID string) bool {
+	if sc.scpIntegration != nil {
+		return sc.scpIntegration.ShouldRejectXt(xtID)
+	}
+	return false
+}
+
 // BlockLifecycleManager implementation
 
 // OnBlockBuildingStart is called when block building starts
