@@ -1768,8 +1768,6 @@ func (b *EthAPIBackend) waitForPutInboxTransactionsToBeProcessed() error {
 func (b *EthAPIBackend) poolPayloadTx(
 	ctx context.Context,
 	tx *types.Transaction) {
-	// Abort-aware guard: if this tx belongs to an XT that has been aborted,
-	// skip staging and avoid re-adding it to the txpool.
 	if xtKey := xtIDFromCtx(ctx); xtKey != "" {
 		if b.isXtAborted(xtKey) {
 			log.Info("[SSV] Skipping pool for aborted XT", "xtID", xtKey, "txHash", tx.Hash().Hex(), "nonce", tx.Nonce())
@@ -1781,20 +1779,12 @@ func (b *EthAPIBackend) poolPayloadTx(
 	b.addSequencerEntryLocked(tx, sequencerTxOriginal)
 	b.sequencerTxMutex.Unlock()
 
-	// Add to Ethereum txpool for native nonce management.
-	// Transactions are filtered from block building via skip logic until SCP coordination completes,
-	// ensuring proper nonce sequencing while preventing premature inclusion.
-	if err := b.sendTx(ctx, tx); err != nil {
-		log.Warn("[SSV] Failed to add original tx to txpool for nonce management",
-			"txHash", tx.Hash().Hex(), "err", err)
-	} else {
-		xtKey := xtIDFromCtx(ctx)
-		log.Info("[SSV] Pooled original tx to txpool",
-			"txHash", tx.Hash().Hex(),
-			"nonce", tx.Nonce(),
-			"xtID", xtKey,
-		)
-	}
+	xtKey := xtIDFromCtx(ctx)
+	log.Info("[SSV] Staged original tx",
+		"txHash", tx.Hash().Hex(),
+		"nonce", tx.Nonce(),
+		"xtID", xtKey,
+	)
 
 	if miner := b.eth.miner; miner != nil {
 		miner.InvalidatePendingCache()
