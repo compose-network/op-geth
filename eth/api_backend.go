@@ -1752,7 +1752,6 @@ func (b *EthAPIBackend) waitForPutInboxTransactionsToBeProcessed() error {
 							matchQueued++
 						}
 					}
-					log.Info("[SSV] putInbox pool scan", "nonce", tx.Nonce(), "matches_pending", matchPending, "matches_queued", matchQueued)
 
 					if poolTx := b.GetPoolTransaction(tx.Hash()); poolTx != nil {
 						log.Info("[SSV] found putInbox transaction in pool", "hash", tx.Hash().Hex())
