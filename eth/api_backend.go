@@ -144,6 +144,9 @@ type EthAPIBackend struct {
 	pendingBlockMutex sync.RWMutex
 	pendingBlocks     []*types.Block
 	pendingBlockSlot  uint64
+
+	burnedNoncesMutex sync.Mutex
+	burnedNonces      []uint64
 }
 
 // isXtAborted queries the sequencer coordinator (protocol layer) to determine
@@ -1932,6 +1935,7 @@ func (b *EthAPIBackend) dropTransactionsForXtKey(key string, reject bool) (int, 
 
 	removedCommitted := 0
 	txHashesToRemove := make([]common.Hash, 0, len(removedRecords))
+	
 	for _, record := range removedRecords {
 		if record == nil || record.tx == nil {
 			continue
@@ -1939,6 +1943,16 @@ func (b *EthAPIBackend) dropTransactionsForXtKey(key string, reject bool) (int, 
 		if record.status == sequencerTxStatusCommitted {
 			removedCommitted++
 		}
+		
+		if record.kind == sequencerTxPutInbox {
+			from, err := types.Sender(types.LatestSignerForChainID(b.ChainConfig().ChainID), record.tx)
+			if err == nil && from == b.coordinatorAddr {
+				b.burnedNoncesMutex.Lock()
+				b.burnedNonces = append(b.burnedNonces, record.tx.Nonce())
+				b.burnedNoncesMutex.Unlock()
+			}
+		}
+		
 		b.logSequencerRemoval(record, "drop_xt")
 		txHashesToRemove = append(txHashesToRemove, record.tx.Hash())
 	}
@@ -1951,18 +1965,10 @@ func (b *EthAPIBackend) dropTransactionsForXtKey(key string, reject bool) (int, 
 
 	rejectedCount := 0
 	if reject {
-		// Remove from Ethereum txpool to prevent nonce gaps and maintain sequence integrity.
-		// Marking as rejected triggers automatic removal of dependent transactions with higher nonces,
-		// preventing invalid transaction chains from persisting in the pool.
 		for _, hash := range txHashesToRemove {
 			if tx := b.eth.txPool.Get(hash); tx != nil {
-				// Mark as rejected so txpool removes it and any dependent transactions
 				tx.SetRejected()
 				rejectedCount++
-				log.Info("[SSV] Marked aborted tx as rejected in txpool",
-					"txHash", hash.Hex(),
-					"xtID", key,
-					"nonce", tx.Nonce())
 			}
 		}
 	}
@@ -1971,11 +1977,6 @@ func (b *EthAPIBackend) dropTransactionsForXtKey(key string, reject bool) (int, 
 		if miner := b.eth.miner; miner != nil {
 			miner.InvalidatePendingCache()
 		}
-		log.Info("[SSV] Dropped staged sequencer transactions",
-			"xtID", key,
-			"putInboxRemoved", removedPutInbox,
-			"originalRemoved", removedOriginal,
-			"rejectedInPool", rejectedCount)
 	}
 
 	return removedPutInbox, removedOriginal
@@ -2501,24 +2502,30 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 	if len(allFulfilledDeps) > 0 {
 		log.Info("[SSV] Creating putInbox transactions for fulfilled dependencies", "count", len(allFulfilledDeps))
 
-		nonce, err := b.GetPoolNonce(ctx, b.coordinatorAddr)
+		b.burnedNoncesMutex.Lock()
+		sort.Slice(b.burnedNonces, func(i, j int) bool { return b.burnedNonces[i] < b.burnedNonces[j] })
+		b.burnedNoncesMutex.Unlock()
+
+		poolNonce, err := b.GetPoolNonce(ctx, b.coordinatorAddr)
 		if err != nil {
 			return false, fmt.Errorf("failed to get nonce: %w", err)
 		}
-		log.Info(
-			"[SSV] Using coordinator address for putInbox nonce",
-			"coordinatorAddr",
-			b.coordinatorAddr.Hex(),
-			"nonce",
-			nonce,
-			"xtID",
-			xtID.Hex(),
-		)
 
-		// Create putInbox transactions
-		nextNonce := nonce
 		for _, dep := range allFulfilledDeps {
-			putInboxTx, err := mailboxProcessor.createPutInboxTx(dep, nextNonce)
+			var nonce uint64
+			
+			b.burnedNoncesMutex.Lock()
+			if len(b.burnedNonces) > 0 {
+				nonce = b.burnedNonces[0]
+				b.burnedNonces = b.burnedNonces[1:]
+				b.burnedNoncesMutex.Unlock()
+			} else {
+				b.burnedNoncesMutex.Unlock()
+				nonce = poolNonce
+				poolNonce++
+			}
+
+			putInboxTx, err := mailboxProcessor.createPutInboxTx(dep, nonce)
 			if err != nil {
 				return false, fmt.Errorf("failed to create putInbox transaction: %w", err)
 			}
@@ -2527,8 +2534,6 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 				return false, fmt.Errorf("failed to submit putInbox transaction: %w", err)
 			}
 			b.assignXtKeyToHash(putInboxTx, xtID)
-
-			nextNonce++
 		}
 
 		// Wait for putInbox transactions to be processed
