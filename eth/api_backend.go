@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"encoding/hex"
 	"errors"
 	"fmt"
 
@@ -2099,7 +2100,7 @@ func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *roll
 	// This ensures transactions rejected by SCP cannot be included in blocks built during Submission state
 	included := make(map[string]struct{}, len(requestSeal.IncludedXts))
 	for _, xt := range requestSeal.IncludedXts {
-		included[hexutil.Encode(xt)] = struct{}{}
+		included[hex.EncodeToString(xt)] = struct{}{}
 	}
 
 	// Collect ALL pending transaction keys
