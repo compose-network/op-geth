@@ -973,35 +973,22 @@ func (b *EthAPIBackend) SubmitSequencerTransaction(ctx context.Context, tx *type
 		return fmt.Errorf("sequencer transaction validation failed: %w", err)
 	}
 
+	// Stage the transaction but defer txpool injection until block building.
 	if isPutInbox {
 		b.AddPendingPutInboxTx(tx)
+	} else {
+		b.sequencerTxMutex.Lock()
+		b.addSequencerEntryLocked(tx, sequencerTxOriginal)
+		b.sequencerTxMutex.Unlock()
 	}
 
-	// Always inject sequencer transactions into txpool since SubmitSequencerTransaction
-	// is only called for real sequencer transactions that should be included in blocks
-	if err := b.sendTx(ctx, tx); err != nil {
-		reason := reasonForGrep(err)
-		msg := "[SSV] Failed to inject sequencer tx into txpool (continuing with staged include)"
-		if isPutInbox {
-			msg = "[SSV] Failed to inject putInbox tx into txpool"
-		}
-		log.Warn(msg,
-			"err", err,
-			"txHash", tx.Hash().Hex(),
-			"nonce", tx.Nonce(),
-			"from", sender.Hex(),
-			"xtID", xtKey,
-			"reason", reason,
-		)
-	} else {
-		log.Info("[SSV] Injected sequencer tx into txpool",
-			"txHash", tx.Hash().Hex(),
-			"nonce", tx.Nonce(),
-			"isPutInbox", isPutInbox,
-			"from", sender.Hex(),
-			"xtID", xtKey,
-		)
-	}
+	log.Info("[SSV] Staged sequencer transaction (deferred pool injection)",
+		"txHash", tx.Hash().Hex(),
+		"nonce", tx.Nonce(),
+		"isPutInbox", isPutInbox,
+		"from", sender.Hex(),
+		"xtID", xtKey,
+	)
 	return nil
 }
 
@@ -1190,6 +1177,115 @@ func (b *EthAPIBackend) PrepareSequencerTransactionsForBlock(ctx context.Context
 	return nil
 }
 
+// prepareAndInjectSequencerTransactions re-signs putInbox transactions with fresh nonces
+// from the txpool and injects all sequencer transactions.
+// SSV
+func (b *EthAPIBackend) prepareAndInjectSequencerTransactions(ctx context.Context) error {
+	b.sequencerTxMutex.Lock()
+	defer b.sequencerTxMutex.Unlock()
+
+	if b.txTracker == nil {
+		return nil
+	}
+
+	// Re-sign and inject putInbox transactions with sequential nonces
+	putInboxTxs := b.txTracker.transactionsByKind(sequencerTxPutInbox)
+	if len(putInboxTxs) > 0 {
+		currentNonce := b.eth.txPool.PoolNonce(b.coordinatorAddr)
+		log.Info("[SSV] Preparing putInbox transactions with fresh nonces",
+			"count", len(putInboxTxs),
+			"startNonce", currentNonce,
+			"coordinatorAddr", b.coordinatorAddr.Hex())
+
+		signer := types.NewLondonSigner(b.ChainConfig().ChainID)
+
+		for i, oldTx := range putInboxTxs {
+			nonce := currentNonce + uint64(i)
+
+			var newTx *types.Transaction
+			if oldTx.Type() == types.DynamicFeeTxType {
+				newInner := &types.DynamicFeeTx{
+					ChainID:    oldTx.ChainId(),
+					Nonce:      nonce,
+					GasTipCap:  oldTx.GasTipCap(),
+					GasFeeCap:  oldTx.GasFeeCap(),
+					Gas:        oldTx.Gas(),
+					To:         oldTx.To(),
+					Value:      oldTx.Value(),
+					Data:       oldTx.Data(),
+					AccessList: oldTx.AccessList(),
+				}
+				newTx = types.NewTx(newInner)
+			} else {
+				log.Error("[SSV] Unexpected tx type for putInbox", "type", oldTx.Type(), "txHash", oldTx.Hash().Hex())
+				continue
+			}
+
+			signedTx, err := types.SignTx(newTx, signer, b.coordinatorKey)
+			if err != nil {
+				log.Error("[SSV] Failed to re-sign putInbox tx", "err", err, "nonce", nonce)
+				continue
+			}
+
+			oldHash := oldTx.Hash()
+			newHash := signedTx.Hash()
+
+			if record := b.txTracker.record(oldHash); record != nil {
+				delete(b.txTracker.records, oldHash)
+				record.tx = signedTx
+				b.txTracker.records[newHash] = record
+
+				for idx, hash := range b.txTracker.staged {
+					if hash == oldHash {
+						b.txTracker.staged[idx] = newHash
+						break
+					}
+				}
+			}
+
+			if err := b.sendTx(ctx, signedTx); err != nil {
+				reason := reasonForGrep(err)
+				log.Warn("[SSV] Failed to inject re-signed putInbox tx",
+					"err", err,
+					"oldHash", oldHash.Hex(),
+					"newHash", newHash.Hex(),
+					"oldNonce", oldTx.Nonce(),
+					"newNonce", nonce,
+					"reason", reason)
+			} else {
+				log.Info("[SSV] Re-signed and injected putInbox tx",
+					"oldHash", oldHash.Hex(),
+					"newHash", newHash.Hex(),
+					"oldNonce", oldTx.Nonce(),
+					"newNonce", nonce)
+			}
+		}
+	}
+
+	// Inject original transactions (user transactions) into pool
+	originalTxs := b.txTracker.transactionsByKind(sequencerTxOriginal)
+	if len(originalTxs) > 0 {
+		log.Info("[SSV] Injecting original transactions into pool", "count", len(originalTxs))
+
+		for _, tx := range originalTxs {
+			if err := b.sendTx(ctx, tx); err != nil {
+				reason := reasonForGrep(err)
+				log.Warn("[SSV] Failed to inject original tx",
+					"err", err,
+					"txHash", tx.Hash().Hex(),
+					"nonce", tx.Nonce(),
+					"reason", reason)
+			} else {
+				log.Info("[SSV] Injected original tx",
+					"txHash", tx.Hash().Hex(),
+					"nonce", tx.Nonce())
+			}
+		}
+	}
+
+	return nil
+}
+
 // GetOrderedTransactionsForBlock returns only sequencer-managed transactions in
 // the correct order for block inclusion. Normal mempool transactions are
 // included by the miner after this list, and must not be returned here.
@@ -1207,6 +1303,11 @@ func (b *EthAPIBackend) GetOrderedTransactionsForBlock(ctx context.Context) (typ
 		// During coordination, exclude cross-chain txs - they'll be included after decision
 		return types.Transactions{}, nil
 	case sequencer.StateBuildingFree, sequencer.StateSubmission:
+		// Re-sign putInbox transactions with fresh nonces and inject into pool.
+		if err := b.prepareAndInjectSequencerTransactions(ctx); err != nil {
+			log.Error("[SSV] Failed to prepare sequencer transactions", "err", err)
+		}
+
 		// After SCP completes (BuildingFree) or during final submission, include ready transactions
 		// This ensures transactions are committed in the first possible block after simulation/decision
 		txs, orderedRecords, pendingBundles := b.assembleSequencerBundle()
@@ -1276,91 +1377,24 @@ func (b *EthAPIBackend) assembleSequencerBundle() (types.Transactions, []sequenc
 		return types.Transactions{}, ready, pending
 	}
 
-	// Filter transactions to ensure continuous nonce sequences per account
-	// Stop at the first gap to avoid "nonce too high" errors
-	filteredReady := make([]sequencerBundleEntry, 0, len(ready))
-	accountNonces := make(map[common.Address]uint64) // Track expected next nonce per account
-	blockedAccounts := make(map[common.Address]struct{})
-	signer := types.LatestSignerForChainID(b.ChainConfig().ChainID)
-
-	// Get current state to initialize account nonces
-	stateDB, err := b.eth.blockchain.State()
-	if err != nil {
-		log.Warn("[SSV] Failed to get state for nonce validation", "error", err)
-		// Fallback: return all transactions without filtering
-		txs := make(types.Transactions, 0, len(ready))
-		for _, entry := range ready {
-			if entry.tx != nil {
-				txs = append(txs, entry.tx)
-			}
-		}
-		return txs, ready, pending
-	}
-
-		for _, entry := range ready {
-			if entry.tx == nil {
-				continue
-			}
-
-		if entry.xtID != "" && b.isXtAborted(entry.xtID) {
-			log.Info("[SSV] Skipping aborted XT in bundle assembly", "xtID", entry.xtID, "txHash", entry.tx.Hash().Hex(), "nonce", entry.tx.Nonce())
+	txs := make(types.Transactions, 0, len(ready))
+	for _, entry := range ready {
+		if entry.tx == nil {
 			continue
 		}
 
-			from, err := types.Sender(signer, entry.tx)
-			if err != nil {
-				log.Warn("[SSV] Failed to extract sender", "txHash", entry.tx.Hash().Hex(), "error", err)
-				continue
-			}
-
-			if _, blocked := blockedAccounts[from]; blocked {
-				log.Debug("[SSV] Deferring sequencer transactions due to prior nonce gap",
-					"from", from.Hex(),
-					"txHash", entry.tx.Hash().Hex(),
-					"txNonce", entry.tx.Nonce(),
-					"xtID", entry.xtID)
-				continue
-			}
-
-			if _, exists := accountNonces[from]; !exists {
-				accountNonces[from] = stateDB.GetNonce(from)
-			}
-
-			expectedNonce := accountNonces[from]
-			txNonce := entry.tx.Nonce()
-
-			if txNonce == expectedNonce {
-				filteredReady = append(filteredReady, entry)
-				accountNonces[from] = expectedNonce + 1
-			} else if txNonce < expectedNonce {
-				log.Info("[SSV] Skipping transaction with old nonce",
-					"txHash", entry.tx.Hash().Hex(),
-					"from", from.Hex(),
-					"txNonce", txNonce,
-					"expectedNonce", expectedNonce,
-					"xtID", entry.xtID,
-					"kind", entry.kind.String())
-			} else {
-				log.Warn("[SSV] Nonce gap detected, stopping account transactions",
-					"from", from.Hex(),
-					"txNonce", txNonce,
-					"expectedNonce", expectedNonce,
-					"gap", txNonce-expectedNonce,
-					"txHash", entry.tx.Hash().Hex(),
-					"xtID", entry.xtID,
-					"kind", entry.kind.String())
-				blockedAccounts[from] = struct{}{}
-			}
-	}
-
-	txs := make(types.Transactions, 0, len(filteredReady))
-	for _, entry := range filteredReady {
-		if entry.tx != nil {
-			txs = append(txs, entry.tx)
+		if entry.xtID != "" && b.isXtAborted(entry.xtID) {
+			log.Info("[SSV] Skipping aborted XT in bundle assembly",
+				"xtID", entry.xtID,
+				"txHash", entry.tx.Hash().Hex(),
+				"nonce", entry.tx.Nonce())
+			continue
 		}
+
+		txs = append(txs, entry.tx)
 	}
 
-	return txs, filteredReady, pending
+	return txs, ready, pending
 }
 
 // buildSequencerOnlyList assembles only the sequencer-managed transactions preserving
