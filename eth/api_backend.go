@@ -144,9 +144,6 @@ type EthAPIBackend struct {
 	pendingBlockMutex sync.RWMutex
 	pendingBlocks     []*types.Block
 	pendingBlockSlot  uint64
-
-	burnedNoncesMutex sync.Mutex
-	burnedNonces      []uint64
 }
 
 // isXtAborted queries the sequencer coordinator (protocol layer) to determine
@@ -978,6 +975,32 @@ func (b *EthAPIBackend) SubmitSequencerTransaction(ctx context.Context, tx *type
 
 	if isPutInbox {
 		b.AddPendingPutInboxTx(tx)
+	}
+
+	// Always inject sequencer transactions into txpool since SubmitSequencerTransaction
+	// is only called for real sequencer transactions that should be included in blocks
+	if err := b.sendTx(ctx, tx); err != nil {
+		reason := reasonForGrep(err)
+		msg := "[SSV] Failed to inject sequencer tx into txpool (continuing with staged include)"
+		if isPutInbox {
+			msg = "[SSV] Failed to inject putInbox tx into txpool"
+		}
+		log.Warn(msg,
+			"err", err,
+			"txHash", tx.Hash().Hex(),
+			"nonce", tx.Nonce(),
+			"from", sender.Hex(),
+			"xtID", xtKey,
+			"reason", reason,
+		)
+	} else {
+		log.Info("[SSV] Injected sequencer tx into txpool",
+			"txHash", tx.Hash().Hex(),
+			"nonce", tx.Nonce(),
+			"isPutInbox", isPutInbox,
+			"from", sender.Hex(),
+			"xtID", xtKey,
+		)
 	}
 	return nil
 }
@@ -1912,16 +1935,6 @@ func (b *EthAPIBackend) dropTransactionsForXtKey(key string, reject bool) (int, 
 		}
 		if record.status == sequencerTxStatusCommitted {
 			removedCommitted++
-			continue
-		}
-
-		if record.kind == sequencerTxPutInbox {
-			from, err := types.Sender(types.LatestSignerForChainID(b.ChainConfig().ChainID), record.tx)
-			if err == nil && from == b.coordinatorAddr {
-				b.burnedNoncesMutex.Lock()
-				b.burnedNonces = append(b.burnedNonces, record.tx.Nonce())
-				b.burnedNoncesMutex.Unlock()
-			}
 		}
 
 		b.logSequencerRemoval(record, "drop_xt")
@@ -2473,33 +2486,13 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 	if len(allFulfilledDeps) > 0 {
 		log.Info("[SSV] Creating putInbox transactions for fulfilled dependencies", "count", len(allFulfilledDeps))
 
-		b.burnedNoncesMutex.Lock()
-		sort.Slice(b.burnedNonces, func(i, j int) bool { return b.burnedNonces[i] < b.burnedNonces[j] })
-		b.burnedNoncesMutex.Unlock()
-
 		poolNonce, err := b.GetPoolNonce(ctx, b.coordinatorAddr)
 		if err != nil {
 			return false, fmt.Errorf("failed to get nonce: %w", err)
 		}
 
 		for _, dep := range allFulfilledDeps {
-			var nonce uint64
-			var isBurnedNonce bool
-
-			b.burnedNoncesMutex.Lock()
-			if len(b.burnedNonces) > 0 {
-				nonce = b.burnedNonces[0]
-				b.burnedNonces = b.burnedNonces[1:]
-				isBurnedNonce = true
-				b.burnedNoncesMutex.Unlock()
-			} else {
-				b.burnedNoncesMutex.Unlock()
-				nonce = poolNonce
-				poolNonce++
-				isBurnedNonce = false
-			}
-
-			putInboxTx, err := mailboxProcessor.createPutInboxTx(dep, nonce, isBurnedNonce)
+			putInboxTx, err := mailboxProcessor.createPutInboxTx(dep, poolNonce)
 			if err != nil {
 				return false, fmt.Errorf("failed to create putInbox transaction: %w", err)
 			}
@@ -2508,6 +2501,12 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 				return false, fmt.Errorf("failed to submit putInbox transaction: %w", err)
 			}
 			b.assignXtKeyToHash(putInboxTx, xtID)
+			poolNonce++
+		}
+
+		// Wait for putInbox transactions to be processed
+		if err := b.waitForPutInboxTransactionsToBeProcessed(); err != nil {
+			return false, fmt.Errorf("failed to wait for putInbox transactions: %w", err)
 		}
 
 		// Re-simulate after putInbox to detect ACK messages that need to be sent
