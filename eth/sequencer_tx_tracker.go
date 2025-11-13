@@ -162,13 +162,8 @@ func (t *sequencerTxTracker) transactionsByKind(kind sequencerTxKind) []*types.T
 		return []*types.Transaction{}
 	}
 	result := make([]*types.Transaction, 0, total)
-	for _, hash := range t.committed {
-		if record := t.records[hash]; record != nil && record.kind == kind {
-			result = append(result, record.tx)
-		}
-	}
 	for _, hash := range t.staged {
-		if record := t.records[hash]; record != nil && record.kind == kind {
+		if record := t.records[hash]; record != nil && record.kind == kind && record.status == sequencerTxStatusStaged {
 			result = append(result, record.tx)
 		}
 	}
