@@ -2,7 +2,7 @@
 # with Go source code. If you know what GOPATH is then you probably
 # don't need to bother with make.
 
-.PHONY: geth evm all test lint fmt clean devtools help proto
+.PHONY: geth evm all test lint fmt clean devtools help
 
 GOBIN = ./build/bin
 GO ?= latest
@@ -40,12 +40,6 @@ fmt:
 clean:
 	go clean -cache
 	rm -fr build/_workspace/pkg/ $(GOBIN)/*
-
-# Add this target to regenerate protobuf files
-.PHONY: proto
-proto:
-	cd internal/sp/proto && protoc --go_out=. --go_opt=paths=source_relative \
-		messages-sp.proto
 
 # The devtools target installs tools required for 'go generate'.
 # You need to put $GOBIN (or $GOPATH/bin) in your PATH to use 'go generate'.

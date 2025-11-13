@@ -412,11 +412,7 @@ func (b *EthAPIBackend) GetReceipts(ctx context.Context, hash common.Hash) (type
 	return b.eth.blockchain.GetReceiptsByHash(hash), nil
 }
 
-func (b *EthAPIBackend) GetCanonicalReceipt(
-	tx *types.Transaction,
-	blockHash common.Hash,
-	blockNumber, blockIndex uint64,
-) (*types.Receipt, error) {
+func (b *EthAPIBackend) GetCanonicalReceipt(tx *types.Transaction, blockHash common.Hash, blockNumber, blockIndex uint64) (*types.Receipt, error) {
 	return b.eth.blockchain.GetCanonicalReceipt(tx, blockHash, blockNumber, blockIndex)
 }
 
@@ -1909,7 +1905,7 @@ func (b *EthAPIBackend) dropTransactionsForXtKey(key string, reject bool) (int, 
 
 	removedCommitted := 0
 	txHashesToRemove := make([]common.Hash, 0, len(removedRecords))
-	
+
 	for _, record := range removedRecords {
 		if record == nil || record.tx == nil {
 			continue
@@ -1918,7 +1914,7 @@ func (b *EthAPIBackend) dropTransactionsForXtKey(key string, reject bool) (int, 
 			removedCommitted++
 			continue
 		}
-		
+
 		if record.kind == sequencerTxPutInbox {
 			from, err := types.Sender(types.LatestSignerForChainID(b.ChainConfig().ChainID), record.tx)
 			if err == nil && from == b.coordinatorAddr {
@@ -1927,7 +1923,7 @@ func (b *EthAPIBackend) dropTransactionsForXtKey(key string, reject bool) (int, 
 				b.burnedNoncesMutex.Unlock()
 			}
 		}
-		
+
 		b.logSequencerRemoval(record, "drop_xt")
 		txHashesToRemove = append(txHashesToRemove, record.tx.Hash())
 	}
@@ -2489,7 +2485,7 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 		for _, dep := range allFulfilledDeps {
 			var nonce uint64
 			var isBurnedNonce bool
-			
+
 			b.burnedNoncesMutex.Lock()
 			if len(b.burnedNonces) > 0 {
 				nonce = b.burnedNonces[0]
