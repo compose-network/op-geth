@@ -1747,55 +1747,6 @@ func (b *EthAPIBackend) reSimulateTransaction(
 	return true, nil
 }
 
-// waitForPutInboxTransactionsToBeProcessed waits for putInbox transactions to be included
-// SSV
-func (b *EthAPIBackend) waitForPutInboxTransactionsToBeProcessed() error {
-	putInboxTxs := b.GetPendingPutInboxTxs()
-	if len(putInboxTxs) == 0 {
-		return nil
-	}
-
-	// Wait for transactions to be in txpool
-	for _, tx := range putInboxTxs {
-		log.Info("[SSV] Waiting for putInbox tx to appear in pool", "txHash", tx.Hash().Hex(), "nonce", tx.Nonce())
-		timeout := time.After(5 * time.Second)
-		ticker := time.NewTicker(10 * time.Millisecond)
-
-		func() {
-			defer ticker.Stop()
-			for {
-				select {
-				case <-timeout:
-					log.Error("timed out waiting for putInbox transaction appearance in pool", "txHash", tx.Hash().Hex(), "nonce", tx.Nonce())
-					return
-				case <-ticker.C:
-					// Scan txpool for same-nonce entries from coordinator to spot gaps/duplicates
-					pend, queued := b.eth.txPool.ContentFrom(b.coordinatorAddr)
-					matchPending := 0
-					matchQueued := 0
-					for _, t := range pend {
-						if t.Nonce() == tx.Nonce() && t.Hash() != tx.Hash() {
-							matchPending++
-						}
-					}
-					for _, t := range queued {
-						if t.Nonce() == tx.Nonce() && t.Hash() != tx.Hash() {
-							matchQueued++
-						}
-					}
-
-					if poolTx := b.GetPoolTransaction(tx.Hash()); poolTx != nil {
-						log.Info("[SSV] found putInbox transaction in pool", "hash", tx.Hash().Hex())
-						return
-					}
-				}
-			}
-		}()
-	}
-
-	return nil
-}
-
 func (b *EthAPIBackend) poolPayloadTx(
 	ctx context.Context,
 	tx *types.Transaction) {
@@ -2535,11 +2486,6 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 			}
 			b.assignXtKeyToHash(putInboxTx, xtID)
 			poolNonce++
-		}
-
-		// Wait for putInbox transactions to be processed
-		if err := b.waitForPutInboxTransactionsToBeProcessed(); err != nil {
-			return false, fmt.Errorf("failed to wait for putInbox transactions: %w", err)
 		}
 
 		// Re-simulate after putInbox to detect ACK messages that need to be sent
