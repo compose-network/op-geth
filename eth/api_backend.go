@@ -2474,21 +2474,7 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 		log.Info("[SSV] Creating putInbox transactions for fulfilled dependencies", "count", len(allFulfilledDeps))
 
 		b.burnedNoncesMutex.Lock()
-		beforeDedup := len(b.burnedNonces)
 		sort.Slice(b.burnedNonces, func(i, j int) bool { return b.burnedNonces[i] < b.burnedNonces[j] })
-		if len(b.burnedNonces) > 0 {
-			deduped := make([]uint64, 0, len(b.burnedNonces))
-			deduped = append(deduped, b.burnedNonces[0])
-			for i := 1; i < len(b.burnedNonces); i++ {
-				if b.burnedNonces[i] != b.burnedNonces[i-1] {
-					deduped = append(deduped, b.burnedNonces[i])
-				}
-			}
-			b.burnedNonces = deduped
-			if beforeDedup > len(deduped) {
-				log.Info("[SSV] De-duplicated burned nonces", "before", beforeDedup, "after", len(deduped))
-			}
-		}
 		b.burnedNoncesMutex.Unlock()
 
 		poolNonce, err := b.GetPoolNonce(ctx, b.coordinatorAddr)
