@@ -1181,14 +1181,20 @@ func (b *EthAPIBackend) PrepareSequencerTransactionsForBlock(ctx context.Context
 // from the txpool and injects all sequencer transactions.
 // SSV
 func (b *EthAPIBackend) prepareAndInjectSequencerTransactions(ctx context.Context) error {
-	b.sequencerTxMutex.Lock()
-	defer b.sequencerTxMutex.Unlock()
-
 	if b.txTracker == nil {
 		return nil
 	}
 
-	// Re-sign and inject putInbox transactions with sequential nonces
+	type preparedTx struct {
+		signedTx *types.Transaction
+		oldHash  common.Hash
+		newHash  common.Hash
+		oldNonce uint64
+		newNonce uint64
+	}
+	var preparedPutInbox []preparedTx
+
+	b.sequencerTxMutex.Lock()
 	putInboxTxs := b.txTracker.transactionsByKind(sequencerTxPutInbox)
 	if len(putInboxTxs) > 0 {
 		currentNonce := b.eth.txPool.PoolNonce(b.coordinatorAddr)
@@ -1243,27 +1249,38 @@ func (b *EthAPIBackend) prepareAndInjectSequencerTransactions(ctx context.Contex
 				}
 			}
 
-			if err := b.sendTx(ctx, signedTx); err != nil {
-				reason := reasonForGrep(err)
-				log.Warn("[SSV] Failed to inject re-signed putInbox tx",
-					"err", err,
-					"oldHash", oldHash.Hex(),
-					"newHash", newHash.Hex(),
-					"oldNonce", oldTx.Nonce(),
-					"newNonce", nonce,
-					"reason", reason)
-			} else {
-				log.Info("[SSV] Re-signed and injected putInbox tx",
-					"oldHash", oldHash.Hex(),
-					"newHash", newHash.Hex(),
-					"oldNonce", oldTx.Nonce(),
-					"newNonce", nonce)
-			}
+			preparedPutInbox = append(preparedPutInbox, preparedTx{
+				signedTx: signedTx,
+				oldHash:  oldHash,
+				newHash:  newHash,
+				oldNonce: oldTx.Nonce(),
+				newNonce: nonce,
+			})
 		}
 	}
 
-	// Inject original transactions (user transactions) into pool
 	originalTxs := b.txTracker.transactionsByKind(sequencerTxOriginal)
+	b.sequencerTxMutex.Unlock()
+
+	for _, prep := range preparedPutInbox {
+		if err := b.sendTx(ctx, prep.signedTx); err != nil {
+			reason := reasonForGrep(err)
+			log.Warn("[SSV] Failed to inject re-signed putInbox tx",
+				"err", err,
+				"oldHash", prep.oldHash.Hex(),
+				"newHash", prep.newHash.Hex(),
+				"oldNonce", prep.oldNonce,
+				"newNonce", prep.newNonce,
+				"reason", reason)
+		} else {
+			log.Info("[SSV] Re-signed and injected putInbox tx",
+				"oldHash", prep.oldHash.Hex(),
+				"newHash", prep.newHash.Hex(),
+				"oldNonce", prep.oldNonce,
+				"newNonce", prep.newNonce)
+		}
+	}
+
 	if len(originalTxs) > 0 {
 		log.Info("[SSV] Injecting original transactions into pool", "count", len(originalTxs))
 
