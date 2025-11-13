@@ -1297,65 +1297,60 @@ func (b *EthAPIBackend) assembleSequencerBundle() (types.Transactions, []sequenc
 		return txs, ready, pending
 	}
 
-	for _, entry := range ready {
-		if entry.tx == nil {
-			continue
-		}
+		for _, entry := range ready {
+			if entry.tx == nil {
+				continue
+			}
 
 		if entry.xtID != "" && b.isXtAborted(entry.xtID) {
 			log.Info("[SSV] Skipping aborted XT in bundle assembly", "xtID", entry.xtID, "txHash", entry.tx.Hash().Hex(), "nonce", entry.tx.Nonce())
 			continue
 		}
 
-		from, err := types.Sender(signer, entry.tx)
-		if err != nil {
-			log.Warn("[SSV] Failed to extract sender", "txHash", entry.tx.Hash().Hex(), "error", err)
-			continue
-		}
+			from, err := types.Sender(signer, entry.tx)
+			if err != nil {
+				log.Warn("[SSV] Failed to extract sender", "txHash", entry.tx.Hash().Hex(), "error", err)
+				continue
+			}
 
-		// Both original and putInbox transactions are coordinated via SBCP RequestSeal.
-		// Original transactions are pre-signed with specific nonces.
-		// PutInbox transactions are sequencer-signed but created dynamically during xT processing.
-		// Both types skip nonce gap validation as the SP has already determined inclusion order
-		// via RequestSeal, and nonce validation will occur during EVM execution.
-		if entry.kind == sequencerTxOriginal || entry.kind == sequencerTxPutInbox {
-			filteredReady = append(filteredReady, entry)
-			continue
-		}
+			if _, blocked := blockedAccounts[from]; blocked {
+				log.Debug("[SSV] Deferring sequencer transactions due to prior nonce gap",
+					"from", from.Hex(),
+					"txHash", entry.tx.Hash().Hex(),
+					"txNonce", entry.tx.Nonce(),
+					"xtID", entry.xtID)
+				continue
+			}
 
-		if _, blocked := blockedAccounts[from]; blocked {
-			log.Debug("[SSV] Deferring sequencer transactions due to prior nonce gap",
-				"from", from.Hex(),
-				"txHash", entry.tx.Hash().Hex(),
-				"txNonce", entry.tx.Nonce())
-			continue
-		}
+			if _, exists := accountNonces[from]; !exists {
+				accountNonces[from] = stateDB.GetNonce(from)
+			}
 
-		if _, exists := accountNonces[from]; !exists {
-			accountNonces[from] = stateDB.GetNonce(from)
-		}
+			expectedNonce := accountNonces[from]
+			txNonce := entry.tx.Nonce()
 
-		expectedNonce := accountNonces[from]
-		txNonce := entry.tx.Nonce()
-
-		if txNonce == expectedNonce {
-			filteredReady = append(filteredReady, entry)
-			accountNonces[from] = expectedNonce + 1
-		} else if txNonce < expectedNonce {
-			log.Info("[SSV] Skipping transaction with old nonce",
-				"txHash", entry.tx.Hash().Hex(),
-				"from", from.Hex(),
-				"txNonce", txNonce,
-				"expectedNonce", expectedNonce)
-		} else {
-			log.Warn("[SSV] Nonce gap detected, stopping account transactions",
-				"from", from.Hex(),
-				"txNonce", txNonce,
-				"expectedNonce", expectedNonce,
-				"gap", txNonce-expectedNonce,
-				"txHash", entry.tx.Hash().Hex())
-			blockedAccounts[from] = struct{}{}
-		}
+			if txNonce == expectedNonce {
+				filteredReady = append(filteredReady, entry)
+				accountNonces[from] = expectedNonce + 1
+			} else if txNonce < expectedNonce {
+				log.Info("[SSV] Skipping transaction with old nonce",
+					"txHash", entry.tx.Hash().Hex(),
+					"from", from.Hex(),
+					"txNonce", txNonce,
+					"expectedNonce", expectedNonce,
+					"xtID", entry.xtID,
+					"kind", entry.kind.String())
+			} else {
+				log.Warn("[SSV] Nonce gap detected, stopping account transactions",
+					"from", from.Hex(),
+					"txNonce", txNonce,
+					"expectedNonce", expectedNonce,
+					"gap", txNonce-expectedNonce,
+					"txHash", entry.tx.Hash().Hex(),
+					"xtID", entry.xtID,
+					"kind", entry.kind.String())
+				blockedAccounts[from] = struct{}{}
+			}
 	}
 
 	txs := make(types.Transactions, 0, len(filteredReady))
