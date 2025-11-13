@@ -74,6 +74,9 @@ type environment struct {
 	coinbase common.Address
 	evm      *vm.EVM
 
+	// OP-Stack addition: DA footprint block limit
+	daFootprintGasScalar uint16
+
 	header   *types.Header
 	txs      []*types.Transaction
 	receipts []*types.Receipt
@@ -346,9 +349,12 @@ func (miner *Miner) prepareWork(genParams *generateParams, witness bool) (*envir
 	}
 	if genParams.gasLimit != nil { // override gas limit if specified
 		header.GasLimit = *genParams.gasLimit
-	} else if miner.chain.Config().Optimism != nil && miner.config.GasCeil != 0 {
+	} else if miner.chain.Config().IsOptimism() && miner.config.GasCeil != 0 {
 		// configure the gas limit of pending blocks with the miner gas limit config when using optimism
 		header.GasLimit = miner.config.GasCeil
+	}
+	if cfg := miner.chainConfig; cfg.IsMinBaseFee(header.Time) && genParams.minBaseFee == nil {
+		return nil, errors.New("missing minBaseFee")
 	}
 	if cfg := miner.chainConfig; cfg.IsHolocene(header.Time) {
 		if err := eip1559.ValidateHolocene1559Params(genParams.eip1559Params); err != nil {
@@ -390,6 +396,15 @@ func (miner *Miner) prepareWork(genParams *generateParams, witness bool) (*envir
 		return nil, err
 	}
 	env.noTxs = genParams.noTxs
+	if miner.chainConfig.IsDAFootprintBlockLimit(parent.Time) {
+		if len(genParams.txs) == 0 || !genParams.txs[0].IsDepositTx() {
+			return nil, errors.New("missing L1 attributes deposit transaction")
+		}
+		env.daFootprintGasScalar, err = types.ExtractDAFootprintGasScalar(genParams.txs[0].Data())
+		if err != nil {
+			return nil, err
+		}
+	}
 	if header.ParentBeaconRoot != nil {
 		core.ProcessBeaconBlockRoot(*header.ParentBeaconRoot, env.evm)
 	}
@@ -437,7 +452,7 @@ func (miner *Miner) makeEnv(
 		if err != nil {
 			return nil, err
 		}
-		state.StartPrefetcher("miner", bundle)
+		state.StartPrefetcher("miner", bundle, nil)
 	}
 	// Note the passed coinbase may be different with header.Coinbase.
 	return &environment{
@@ -555,14 +570,18 @@ func (miner *Miner) commitTransactions(
 	interrupt *atomic.Int32,
 ) error {
 	var (
-		isOsaka  = miner.chainConfig.IsOsaka(env.header.Number, env.header.Time)
 		isCancun = miner.chainConfig.IsCancun(env.header.Number, env.header.Time)
 		gasLimit = env.header.GasLimit
 	)
 	if env.gasPool == nil {
 		env.gasPool = new(core.GasPool).AddGas(gasLimit)
 	}
+
+	// OP-Stack additions: throttling and DA footprint limit
 	blockDABytes := new(big.Int)
+	isJovian := miner.chainConfig.IsDAFootprintBlockLimit(env.header.Time)
+	minTransactionDAFootprint := types.MinTransactionSize.Uint64() * uint64(env.daFootprintGasScalar)
+
 	for {
 		// Check interruption signal and abort building if it's fired.
 		if interrupt != nil {
@@ -575,6 +594,17 @@ func (miner *Miner) commitTransactions(
 			log.Trace("Not enough gas for further transactions", "have", env.gasPool, "want", params.TxGas)
 			break
 		}
+
+		var daFootprintLeft uint64
+		if isJovian {
+			daFootprintLeft = gasLimit - *env.header.BlobGasUsed
+			// If we don't have enough DA space for any further transactions then we're done.
+			if daFootprintLeft < minTransactionDAFootprint {
+				log.Debug("Not enough DA space for further transactions", "have", daFootprintLeft, "want", minTransactionDAFootprint)
+				break
+			}
+		}
+
 		// If we don't have enough blob space for any further blob transactions,
 		// skip that list altogether
 		if !blobTxs.Empty() && env.blobs >= eip4844.MaxBlobsPerBlock(miner.chainConfig, env.header.Time) {
@@ -640,6 +670,19 @@ func (miner *Miner) commitTransactions(
 			}
 		}
 
+		// OP-Stack addition: Jovian DA footprint limit
+		var txDAFootprint uint64
+		// Note that commitTransaction is only called after deposit transactions have already been committed,
+		// so we don't need to resolve the transaction here and exclude deposits.
+		if isJovian {
+			txDAFootprint = ltx.DABytes.Uint64() * uint64(env.daFootprintGasScalar)
+			if daFootprintLeft < txDAFootprint {
+				log.Debug("Not enough DA space left for transaction", "hash", ltx.Hash, "left", daFootprintLeft, "needed", txDAFootprint)
+				txs.Pop()
+				continue
+			}
+		}
+
 		// OP-Stack addition: sequencer throttling
 		daBytesAfter := new(big.Int)
 		if ltx.DABytes != nil && miner.config.MaxDABlockSize != nil {
@@ -680,21 +723,6 @@ func (miner *Miner) commitTransactions(
 		if !env.txFitsSize(tx) {
 			break
 		}
-
-		// Make sure all transactions after osaka have cell proofs
-		if isOsaka {
-			if sidecar := tx.BlobTxSidecar(); sidecar != nil {
-				if sidecar.Version == types.BlobSidecarVersion0 {
-					log.Info("Including blob tx with v0 sidecar, recomputing proofs", "hash", ltx.Hash)
-					if err := sidecar.ToV1(); err != nil {
-						txs.Pop()
-						log.Warn("Failed to recompute cell proofs", "hash", ltx.Hash, "err", err)
-						continue
-					}
-				}
-			}
-		}
-
 		// Error may be ignored here. The error has already been checked
 		// during transaction acceptance in the transaction pool.
 		from, _ := types.Sender(env.signer, tx)
@@ -750,6 +778,9 @@ func (miner *Miner) commitTransactions(
 		case errors.Is(err, nil):
 			// Everything ok, collect the logs and shift in the next transaction from the same account
 			blockDABytes = daBytesAfter
+			if isJovian {
+				*env.header.BlobGasUsed += txDAFootprint
+			}
 			txs.Shift()
 
 		default:
@@ -1026,7 +1057,6 @@ func totalFees(block *types.Block, receipts []*types.Receipt) *big.Int {
 	for i, tx := range block.Transactions() {
 		minerFee, _ := tx.EffectiveGasTip(block.BaseFee())
 		feesWei.Add(feesWei, new(big.Int).Mul(new(big.Int).SetUint64(receipts[i].GasUsed), minerFee))
-		// TODO (MariusVanDerWijden) add blob fees
 	}
 	return feesWei
 }

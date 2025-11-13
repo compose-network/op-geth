@@ -19,7 +19,6 @@ package miner
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"math/big"
 	"sync"
@@ -217,7 +216,6 @@ func (miner *Miner) Pending(ctx context.Context) (*types.Block, types.Receipts, 
 	if pending == nil {
 		return nil, nil, nil
 	}
-
 	return pending.block, pending.receipts, pending.stateDB.Copy()
 }
 
@@ -308,22 +306,16 @@ func (miner *Miner) getPending(ctx context.Context) *newPayloadResult {
 	if miner.chainConfig.IsShanghai(new(big.Int).Add(header.Number, big.NewInt(1)), timestamp) {
 		withdrawal = []*types.Withdrawal{}
 	}
-	var eip1559Params []byte
-	if miner.chainConfig.IsHolocene(timestamp) {
-		eip1559Params = miner.createHoloceneEIP1559Params(header, timestamp)
-	}
-
 	ret := miner.generateWork(&generateParams{
-		timestamp:     timestamp,
-		forceTime:     false,
-		parentHash:    header.Hash(),
-		coinbase:      miner.config.PendingFeeRecipient,
-		random:        common.Hash{},
-		withdrawals:   withdrawal,
-		beaconRoot:    nil,
-		noTxs:         false,
-		eip1559Params: eip1559Params,
-		simulation:    simulation,
+		timestamp:   timestamp,
+		forceTime:   false,
+		parentHash:  header.Hash(),
+		coinbase:    miner.config.PendingFeeRecipient,
+		random:      common.Hash{},
+		withdrawals: withdrawal,
+		beaconRoot:  nil,
+		noTxs:       false,
+		simulation:  simulation,
 	}, false) // we will never make a witness for a pending block
 	if ret.err != nil {
 		return nil
@@ -336,32 +328,13 @@ func (miner *Miner) getPending(ctx context.Context) *newPayloadResult {
 	return ret
 }
 
-func (miner *Miner) createHoloceneEIP1559Params(parent *types.Header, timestamp uint64) []byte {
-	params := make([]byte, 8)
-
-	// Get the chain config values
-	baseFeeChangeDenominator := miner.chainConfig.BaseFeeChangeDenominator(timestamp)
-	elasticityMultiplier := miner.chainConfig.ElasticityMultiplier()
-
-	binary.BigEndian.PutUint32(params[0:4], 8)
-	// Last 4 bytes: ElasticityMultiplier
-	binary.BigEndian.PutUint32(params[4:8], 2)
-
-	log.Debug("Created Holocene EIP-1559 params",
-		"baseFeeChangeDenominator", baseFeeChangeDenominator,
-		"elasticityMultiplier", elasticityMultiplier,
-		"paramsHex", common.Bytes2Hex(params),
-	)
-
-	return params
-}
-
 func (miner *Miner) Close() {
 	miner.lifeCtxCancel()
 }
 
 // InvalidatePendingCache invalidates the pending block cache
 // This should be called when transaction state changes that affect pending blocks
+// SSV
 func (miner *Miner) InvalidatePendingCache() {
 	miner.pendingMu.Lock()
 	defer miner.pendingMu.Unlock()
