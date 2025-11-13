@@ -2056,6 +2056,10 @@ func (b *EthAPIBackend) NotifySlotStart(startSlot *rollupv1.StartSlot) error {
 			"original", originalCount)
 	}
 
+	if miner := b.eth.miner; miner != nil {
+		miner.InvalidatePendingCache()
+	}
+
 	return nil
 }
 
