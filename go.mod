@@ -14,7 +14,7 @@ require (
 	github.com/cespare/cp v0.1.0
 	github.com/cloudflare/cloudflare-go v0.114.0
 	github.com/cockroachdb/pebble v1.1.5
-	github.com/compose-network/publisher v0.0.0-20251112102401-381dfed0375d
+	github.com/compose-network/publisher v0.0.0-20251114110338-ed649ed66f30
 	github.com/compose-network/registry v0.1.0
 	github.com/consensys/gnark-crypto v0.18.0
 	github.com/crate-crypto/go-eth-kzg v1.4.0
