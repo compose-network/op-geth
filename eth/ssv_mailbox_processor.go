@@ -7,6 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 
+	rollupv1 "github.com/compose-network/publisher/proto/rollup/v1"
+	spconsensus "github.com/compose-network/publisher/x/consensus"
+	"github.com/compose-network/publisher/x/superblock/sequencer"
+	"github.com/compose-network/publisher/x/transport"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -15,10 +19,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
-	rollupv1 "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/proto/rollup/v1"
-	spconsensus "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/consensus"
-	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/superblock/sequencer"
-	"github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/x/transport"
 	"github.com/ethereum/go-ethereum/log"
 
 	"math/big"
@@ -190,7 +190,7 @@ func (mp *MailboxProcessor) analyzeTransaction(
 			continue
 		}
 
-		log.Debug("[SSV] Found mailbox operation",
+		log.Info("[SSV] Found mailbox operation",
 			"index", i,
 			"type", op.Type.String(),
 			"address", op.Address.Hex(),
@@ -201,7 +201,7 @@ func (mp *MailboxProcessor) analyzeTransaction(
 		if (op.Type == vm.CALL || op.Type == vm.STATICCALL) && len(op.CallData) >= 4 {
 			call, err := mp.parseMailboxCall(op.CallData)
 			if err != nil {
-				log.Debug("[SSV] Failed to parse mailbox call", "error", err)
+				log.Info("[SSV] Failed to parse mailbox call", "error", err)
 				continue
 			}
 
@@ -298,7 +298,7 @@ func (mp *MailboxProcessor) analyzeTransaction(
 				}
 			}
 		} else if op.Type != vm.CALL && op.Type != vm.STATICCALL {
-			log.Debug("[SSV] Ignoring non-CALL/STATICCALL operation to mailbox", "type", op.Type.String(), "address", op.Address.Hex())
+			log.Info("[SSV] Ignoring non-CALL/STATICCALL operation to mailbox", "type", op.Type.String(), "address", op.Address.Hex())
 		}
 	}
 
@@ -307,6 +307,28 @@ func (mp *MailboxProcessor) analyzeTransaction(
 		"requiresCoordination", simState.RequiresCoordination(),
 		"dependencies", len(simState.Dependencies),
 		"outboundMessages", len(simState.OutboundMessages))
+
+	if simState.RequiresCoordination() {
+		depCount := len(simState.Dependencies)
+		outCount := len(simState.OutboundMessages)
+		depPreview := make([]string, 0, 2)
+		for i := 0; i < depCount && i < 2; i++ {
+			d := simState.Dependencies[i]
+			depPreview = append(depPreview, fmt.Sprintf("%d:%s->%s", d.SourceChainID, d.Sender.Hex(), d.Receiver.Hex()))
+		}
+		outPreview := make([]string, 0, 2)
+		for i := 0; i < outCount && i < 2; i++ {
+			o := simState.OutboundMessages[i]
+			outPreview = append(outPreview, fmt.Sprintf("%d:%s->%s:%s", o.DestChainID, o.Sender.Hex(), o.Receiver.Hex(), string(o.Label)))
+		}
+		log.Info("[SSV] Coordination classification",
+			"txHash", txHashHex,
+			"deps", depCount,
+			"deps_preview", depPreview,
+			"outbound", outCount,
+			"out_preview", outPreview,
+		)
+	}
 
 	return simState, nil
 }
@@ -457,7 +479,7 @@ func (mp *MailboxProcessor) handleCrossRollupCoordination(
 	for _, dep := range simState.Dependencies {
 		sourceBytes := new(big.Int).SetUint64(dep.SourceChainID).Bytes()
 		sourceKey := spconsensus.ChainKeyBytes(sourceBytes)
-		circMsg, err := mp.waitForCIRCMessage(ctx, xtID, sourceKey)
+		circMsg, err := mp.waitForCIRCMessage(ctx, xtID, sourceKey, dep)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to wait for CIRC message: %w", err)
 		}
@@ -473,6 +495,7 @@ func (mp *MailboxProcessor) handleCrossRollupCoordination(
 			dep.Receiver = common.BytesToAddress(circMsg.Receiver[0])
 		}
 		dep.Data = circMsg.Data[0]
+		dep.SessionID = new(big.Int).SetBytes(circMsg.SessionId)
 		circDeps = append(circDeps, dep)
 	}
 
@@ -489,6 +512,11 @@ func (mp *MailboxProcessor) handleCrossRollupCoordination(
 }
 
 func (mp *MailboxProcessor) sendCIRCMessage(ctx context.Context, msg *CrossRollupMessage, xtID *rollupv1.XtID) error {
+	var sessionID []byte
+	if msg.SessionID != nil {
+		sessionID = common.LeftPadBytes(msg.SessionID.Bytes(), 32)
+	}
+
 	// Build CIRC payload
 	circMsg := &rollupv1.CIRCMessage{
 		SourceChain:      new(big.Int).SetUint64(msg.SourceChainID).Bytes(),
@@ -498,6 +526,7 @@ func (mp *MailboxProcessor) sendCIRCMessage(ctx context.Context, msg *CrossRollu
 		XtId:             xtID,
 		Label:            string(msg.Label),
 		Data:             [][]byte{msg.Data},
+		SessionId:        sessionID,
 	}
 
 	spMsg := &rollupv1.Message{
@@ -527,15 +556,54 @@ func (mp *MailboxProcessor) sendCIRCMessage(ctx context.Context, msg *CrossRollu
 		return fmt.Errorf("no client for destination chain %s", destChainID)
 	}
 	if err := sequencerClient.Send(ctx, spMsg); err != nil {
+		log.Error("[SSV] Failed to send CIRC message",
+			"xtID", xtID.Hex(),
+			"destChain", spconsensus.ChainKeyUint64(msg.DestChainID),
+			"err", err,
+		)
 		return err
 	}
 	return nil
+}
+
+// matchCIRCToDependency returns true if the circ message can satisfy the given
+// mailbox dependency. We require label equality and (when present) receiver
+// address equality to avoid accidentally fulfilling a SEND read with an ACK
+// (or any other) payload.
+func matchCIRCToDependency(dep CrossRollupDependency, circ *rollupv1.CIRCMessage) bool {
+	if circ == nil {
+		return false
+	}
+	// Label must match exactly
+	if circ.GetLabel() != string(dep.Label) {
+		return false
+	}
+	// Receiver (destination contract) should match too when provided
+	if recs := circ.GetReceiver(); len(recs) > 0 {
+		if len(recs[0]) != common.AddressLength {
+			return false
+		}
+		if common.BytesToAddress(recs[0]) != dep.Receiver {
+			return false
+		}
+	}
+	// Session ID must match when present in the CIRC message
+	if sid := circ.GetSessionId(); len(sid) > 0 {
+		if dep.SessionID == nil {
+			return false
+		}
+		if !bytes.Equal(sid, common.LeftPadBytes(dep.SessionID.Bytes(), 32)) {
+			return false
+		}
+	}
+	return true
 }
 
 func (mp *MailboxProcessor) waitForCIRCMessage(
 	ctx context.Context,
 	xtID *rollupv1.XtID,
 	sourceChainID string,
+	expectedDep CrossRollupDependency,
 ) (*rollupv1.CIRCMessage, error) {
 	// Wait for CIRC message with a bounded timeout to respect SBCP slot cutover.
 	// Hardcoded for 20s slot with 0.90 seal cutover: use ~12s window.
@@ -586,12 +654,31 @@ func (mp *MailboxProcessor) waitForCIRCMessage(
 				continue // Keep waiting
 			}
 
-			log.Info("[SSV] Consumed CIRC message",
-				"from", sourceChainID,
-				"dataLen", len(circMsg.Data[0]),
-			)
+			// Check whether this CIRC matches the dependency we are fulfilling.
+			if matchCIRCToDependency(expectedDep, circMsg) {
+				log.Info("[SSV] Consumed matching CIRC message",
+					"from", sourceChainID,
+					"label", circMsg.GetLabel(),
+					"dataLen", func() int {
+						if len(circMsg.Data) == 0 {
+							return 0
+						}
+						return len(circMsg.Data[0])
+					}(),
+				)
+				return circMsg, nil
+			}
 
-			return circMsg, nil
+			// Not a match: re-queue the message and continue waiting within the timeout window.
+			// This prevents ACK (or other) messages from fulfilling a SEND read.
+			if err := backend.coordinator.Consensus().RecordCIRCMessage(circMsg); err != nil {
+				log.Warn("[SSV] Failed to re-queue non-matching CIRC message", "err", err)
+			} else {
+				log.Info("[SSV] Deferred non-matching CIRC message",
+					"from", sourceChainID,
+					"label", circMsg.GetLabel(),
+				)
+			}
 		}
 	}
 }
@@ -686,7 +773,16 @@ func (mp *MailboxProcessor) createPutInboxTx(dep CrossRollupDependency, nonce ui
 	log.Info("[SSV] Created putInbox transaction",
 		"txHash", signedTx.Hash().Hex(),
 		"nonce", nonce,
-		"sessionId", dep.SessionID)
+		"sessionId", dep.SessionID,
+		"mailbox", mailboxAddr.Hex(),
+		"sourceChain", dep.SourceChainID,
+		"sender", dep.Sender.Hex(),
+		"receiver", dep.Receiver.Hex(),
+		"label_len", len(dep.Label),
+		"data_len", len(dep.Data),
+		"gasTipCap", txData.GasTipCap,
+		"gasFeeCap", txData.GasFeeCap,
+	)
 
 	return signedTx, nil
 }
@@ -741,7 +837,7 @@ func (mp *MailboxProcessor) reSimulateForACKMessages(
 		return nil, fmt.Errorf("backend not available for re-simulation")
 	}
 
-	log.Debug("[SSV] Re-simulating transaction for ACK detection", "txHash", tx.Hash().Hex(), "xtID", xtID.Hex())
+	log.Info("[SSV] Re-simulating transaction to detect new outbound mailbox writes", "txHash", tx.Hash().Hex(), "xtID", xtID.Hex())
 
 	// Re-simulate the transaction against pending state (which should include putInbox transactions)
 	blockNrOrHash := rpc.BlockNumberOrHashWithNumber(rpc.PendingBlockNumber)
@@ -761,7 +857,7 @@ func (mp *MailboxProcessor) reSimulateForACKMessages(
 
 	// Send any new outbound messages detected in re-simulation
 	for _, outMsg := range simState.OutboundMessages {
-		log.Info("[SSV] Detected new ACK message in re-simulation",
+		log.Info("[SSV] Detected new outbound message in re-simulation",
 			"xtID", xtID.Hex(),
 			"srcChain", outMsg.SourceChainID,
 			"destChain", outMsg.DestChainID,
@@ -777,7 +873,7 @@ func (mp *MailboxProcessor) reSimulateForACKMessages(
 	}
 
 	if len(newOutboundMsgs) > 0 {
-		log.Info("[SSV] Successfully sent ACK CIRC messages", "xtID", xtID.Hex(), "count", len(newOutboundMsgs))
+		log.Info("[SSV] Successfully sent CIRC messages in re-simulation", "xtID", xtID.Hex(), "count", len(newOutboundMsgs))
 	}
 	return newOutboundMsgs, nil
 }

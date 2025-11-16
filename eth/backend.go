@@ -406,8 +406,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		allowUnprotectedTxs: stack.Config().AllowUnprotectedTxs,
 		disableTxPool:       config.RollupDisableTxPoolAdmission,
 		eth:                 eth,
-		committedTxHashes:   make(map[common.Hash]bool), // SSV: Initialize committed tx tracking
-		pendingByHash:       make(map[common.Hash]int),
+		txTracker:           newSequencerTxTracker(),
 	}
 	if eth.APIBackend.allowUnprotectedTxs {
 		log.Info("Unprotected transactions allowed")

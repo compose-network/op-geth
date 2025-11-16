@@ -6,9 +6,9 @@ import (
 	"crypto/rand"
 	"fmt"
 
+	rollupv1 "github.com/compose-network/publisher/proto/rollup/v1"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/ethclient"
-	rollupv1 "github.com/ethereum/go-ethereum/internal/rollup-shared-publisher/proto/rollup/v1"
 
 	"log"
 	"math/big"
@@ -236,8 +236,10 @@ func getNonceFor(networkRPCAddr string, address common.Address) (uint64, error) 
 }
 
 // generateRandomSessionID returns a random big.Int in the range [0, 2^63-1]
+// TODO: use [0, 2^256)
 func generateRandomSessionID() *big.Int {
 	max := new(big.Int).Lsh(big.NewInt(1), 63) // 2^63
+	// 	max := new(big.Int).Lsh(big.NewInt(1), 256)
 	n, err := rand.Int(rand.Reader, max)
 	if err != nil {
 		log.Fatalf("failed to generate random session ID: %v", err)

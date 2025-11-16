@@ -60,12 +60,13 @@ Send multiple transactions with incremental nonces:
 
 ## Command-Line Flags
 
-| Flag      | Type  | Default | Description                                  |
-|-----------|-------|---------|----------------------------------------------|
-| `-batch`  | bool  | false   | Enable batch mode for multiple transactions  |
-| `-num`    | int   | 1       | Number of transactions to send in batch mode |
-| `-delay`  | int   | 500     | Delay in milliseconds between transactions   |
-| `-amount` | int64 | 100000  | Token amount to send per transaction         |
+| Flag          | Type   | Default | Description                                           |
+|---------------|--------|---------|-------------------------------------------------------|
+| `-batch`      | bool   | false   | Enable batch mode for multiple transactions           |
+| `-num`        | int    | 1       | Number of transactions to send in batch mode          |
+| `-delay`      | int    | 500     | Delay in milliseconds between transactions            |
+| `-amount`     | int64  | 100000  | Token amount to send per transaction                  |
+| `-fail-rollup`| string | ""      | Simulate rollup failure (A, B, or empty for normal)   |
 
 ## Examples
 
@@ -102,6 +103,40 @@ Failed: 0
 Success rate: 100.0%
 ```
 
+### Example 3: Testing Execution Failures
+
+Test cross-chain transaction behavior when one rollup fails during execution:
+
+```bash
+# Simulate rollup A failing during execution
+$ ./xbridge -fail-rollup A
+2024/10/16 12:00:00 ⚠️  FAILURE MODE: Rollup A transactions will be sent but designed to fail during execution
+2024/10/16 12:00:00 Running in SINGLE mode
+2024/10/16 12:00:00 Address A: 0x31c57E2910496e46Bb883EDeb1eB2bee8E3Ee82C (nonce: 46)
+2024/10/16 12:00:00 Address B: 0x803682E13c47dA42ffb04037588f24b0bc0950F2 (nonce: 22)
+2024/10/16 12:00:00 Creating single bridge transaction with session ID: 4915138964436146229
+2024/10/16 12:00:00   Corrupting rollup A transaction with mismatched session ID (will fail during execution)
+⚠️  Cross-chain transaction submitted with Rollup A designed to fail during execution
+
+# Simulate rollup B failing in batch mode
+$ ./xbridge -batch -num 2 -fail-rollup B
+2024/10/16 12:00:00 ⚠️  FAILURE MODE: Rollup B transactions will be sent but designed to fail during execution
+2024/10/16 12:00:00 Running in BATCH mode: 2 transactions with 500ms delay
+2024/10/16 12:00:00 Starting batch execution...
+2024/10/16 12:00:00 [1/2] Creating transaction pair with nonces A=46, B=22, session=4915138964436146229
+2024/10/16 12:00:00   Corrupting rollup B transaction with mismatched session ID (will fail during execution)
+2024/10/16 12:00:01 ✓ [1/2] Successfully submitted
+2024/10/16 12:00:01 [2/2] Creating transaction pair with nonces A=47, B=23, session=5386905574332575365
+2024/10/16 12:00:01   Corrupting rollup B transaction with mismatched session ID (will fail during execution)
+2024/10/16 12:00:02 ✓ [2/2] Successfully submitted
+
+=== Batch Execution Summary ===
+Total transactions: 2
+Successful: 2
+Failed: 0
+Success rate: 100.0%
+```
+
 ## Building
 
 ```bash
@@ -120,6 +155,15 @@ The tool operates in **fire-and-forget** mode, matching the behavior of integrat
 5. **Success = RPC accepted** the request (not that transactions executed)
 
 Each transaction pair gets a unique random session ID for mailbox coordination.
+
+### Failure Simulation
+
+The `-fail-rollup` flag allows testing execution failure scenarios where one rollup's transaction fails:
+
+- When set to `A`: Both transactions are sent, but rollup A's transaction uses a corrupted session ID
+- When set to `B`: Both transactions are sent, but rollup B's transaction uses a corrupted session ID
+- The mismatched session ID causes the failing transaction to revert during execution
+- This simulates execution failures, state conflicts, or validation errors
 
 ### Note on "Successfully Submitted"
 

@@ -74,6 +74,9 @@ type environment struct {
 	coinbase common.Address
 	evm      *vm.EVM
 
+	// OP-Stack addition: DA footprint block limit
+	daFootprintGasScalar uint16
+
 	header   *types.Header
 	txs      []*types.Transaction
 	receipts []*types.Receipt
@@ -346,9 +349,12 @@ func (miner *Miner) prepareWork(genParams *generateParams, witness bool) (*envir
 	}
 	if genParams.gasLimit != nil { // override gas limit if specified
 		header.GasLimit = *genParams.gasLimit
-	} else if miner.chain.Config().Optimism != nil && miner.config.GasCeil != 0 {
+	} else if miner.chain.Config().IsOptimism() && miner.config.GasCeil != 0 {
 		// configure the gas limit of pending blocks with the miner gas limit config when using optimism
 		header.GasLimit = miner.config.GasCeil
+	}
+	if cfg := miner.chainConfig; cfg.IsMinBaseFee(header.Time) && genParams.minBaseFee == nil {
+		return nil, errors.New("missing minBaseFee")
 	}
 	if cfg := miner.chainConfig; cfg.IsHolocene(header.Time) {
 		if err := eip1559.ValidateHolocene1559Params(genParams.eip1559Params); err != nil {
@@ -390,6 +396,15 @@ func (miner *Miner) prepareWork(genParams *generateParams, witness bool) (*envir
 		return nil, err
 	}
 	env.noTxs = genParams.noTxs
+	if miner.chainConfig.IsDAFootprintBlockLimit(parent.Time) {
+		if len(genParams.txs) == 0 || !genParams.txs[0].IsDepositTx() {
+			return nil, errors.New("missing L1 attributes deposit transaction")
+		}
+		env.daFootprintGasScalar, err = types.ExtractDAFootprintGasScalar(genParams.txs[0].Data())
+		if err != nil {
+			return nil, err
+		}
+	}
 	if header.ParentBeaconRoot != nil {
 		core.ProcessBeaconBlockRoot(*header.ParentBeaconRoot, env.evm)
 	}
@@ -437,7 +452,7 @@ func (miner *Miner) makeEnv(
 		if err != nil {
 			return nil, err
 		}
-		state.StartPrefetcher("miner", bundle)
+		state.StartPrefetcher("miner", bundle, nil)
 	}
 	// Note the passed coinbase may be different with header.Coinbase.
 	return &environment{
@@ -555,14 +570,18 @@ func (miner *Miner) commitTransactions(
 	interrupt *atomic.Int32,
 ) error {
 	var (
-		isOsaka  = miner.chainConfig.IsOsaka(env.header.Number, env.header.Time)
 		isCancun = miner.chainConfig.IsCancun(env.header.Number, env.header.Time)
 		gasLimit = env.header.GasLimit
 	)
 	if env.gasPool == nil {
 		env.gasPool = new(core.GasPool).AddGas(gasLimit)
 	}
+
+	// OP-Stack additions: throttling and DA footprint limit
 	blockDABytes := new(big.Int)
+	isJovian := miner.chainConfig.IsDAFootprintBlockLimit(env.header.Time)
+	minTransactionDAFootprint := types.MinTransactionSize.Uint64() * uint64(env.daFootprintGasScalar)
+
 	for {
 		// Check interruption signal and abort building if it's fired.
 		if interrupt != nil {
@@ -575,6 +594,17 @@ func (miner *Miner) commitTransactions(
 			log.Trace("Not enough gas for further transactions", "have", env.gasPool, "want", params.TxGas)
 			break
 		}
+
+		var daFootprintLeft uint64
+		if isJovian {
+			daFootprintLeft = gasLimit - *env.header.BlobGasUsed
+			// If we don't have enough DA space for any further transactions then we're done.
+			if daFootprintLeft < minTransactionDAFootprint {
+				log.Debug("Not enough DA space for further transactions", "have", daFootprintLeft, "want", minTransactionDAFootprint)
+				break
+			}
+		}
+
 		// If we don't have enough blob space for any further blob transactions,
 		// skip that list altogether
 		if !blobTxs.Empty() && env.blobs >= eip4844.MaxBlobsPerBlock(miner.chainConfig, env.header.Time) {
@@ -640,6 +670,19 @@ func (miner *Miner) commitTransactions(
 			}
 		}
 
+		// OP-Stack addition: Jovian DA footprint limit
+		var txDAFootprint uint64
+		// Note that commitTransaction is only called after deposit transactions have already been committed,
+		// so we don't need to resolve the transaction here and exclude deposits.
+		if isJovian {
+			txDAFootprint = ltx.DABytes.Uint64() * uint64(env.daFootprintGasScalar)
+			if daFootprintLeft < txDAFootprint {
+				log.Debug("Not enough DA space left for transaction", "hash", ltx.Hash, "left", daFootprintLeft, "needed", txDAFootprint)
+				txs.Pop()
+				continue
+			}
+		}
+
 		// OP-Stack addition: sequencer throttling
 		daBytesAfter := new(big.Int)
 		if ltx.DABytes != nil && miner.config.MaxDABlockSize != nil {
@@ -680,21 +723,6 @@ func (miner *Miner) commitTransactions(
 		if !env.txFitsSize(tx) {
 			break
 		}
-
-		// Make sure all transactions after osaka have cell proofs
-		if isOsaka {
-			if sidecar := tx.BlobTxSidecar(); sidecar != nil {
-				if sidecar.Version == types.BlobSidecarVersion0 {
-					log.Info("Including blob tx with v0 sidecar, recomputing proofs", "hash", ltx.Hash)
-					if err := sidecar.ToV1(); err != nil {
-						txs.Pop()
-						log.Warn("Failed to recompute cell proofs", "hash", ltx.Hash, "err", err)
-						continue
-					}
-				}
-			}
-		}
-
 		// Error may be ignored here. The error has already been checked
 		// during transaction acceptance in the transaction pool.
 		from, _ := types.Sender(env.signer, tx)
@@ -750,6 +778,9 @@ func (miner *Miner) commitTransactions(
 		case errors.Is(err, nil):
 			// Everything ok, collect the logs and shift in the next transaction from the same account
 			blockDABytes = daBytesAfter
+			if isJovian {
+				*env.header.BlobGasUsed += txDAFootprint
+			}
 			txs.Shift()
 
 		default:
@@ -878,44 +909,43 @@ func (miner *Miner) fillTransactionsWithSequencerOrdering(interrupt *atomic.Int3
 			log.Warn("[SSV] Failed to get backend-ordered sequencer txs", "err", err)
 		}
 
-		// Build a skip set to exclude sequencer txs from the normal tx pools
-		skip := make(map[common.Hash]struct{}, 0)
-		if len(orderedSequencerTxs) > 0 {
-			// BuildingFree or Submission state: skip txs that backend is managing via sequencer path
-			for _, tx := range orderedSequencerTxs {
-				skip[tx.Hash()] = struct{}{}
-			}
-		} else {
-			// BuildingLocked state: skip ALL pending sequencer-managed txs (not yet ready for inclusion)
-			for _, tx := range backend.GetPendingPutInboxTxs() {
-				skip[tx.Hash()] = struct{}{}
-			}
-			for _, tx := range backend.GetPendingOriginalTxs() {
+		// sequencer-managed transactions out of the normal txpool
+		skip := make(map[common.Hash]struct{})
+		addToSkip := func(txs []*types.Transaction) {
+			for _, tx := range txs {
+				if tx == nil {
+					continue
+				}
 				skip[tx.Hash()] = struct{}{}
 			}
 		}
+		addToSkip(backend.GetPendingPutInboxTxs())
+		addToSkip(backend.GetPendingOriginalTxs())
 
-		// Commit backend-ordered sequencer txs atomically
-		// This happens in BuildingFree (after SCP) or Submission (final block)
 		sequencerTxCount := 0
 		if len(orderedSequencerTxs) > 0 {
-			simEnv, err := miner.buildSequencerSimulationEnv(env)
-			if err != nil {
-				log.Error("[SSV] Failed to initialise sequencer simulation environment", "err", err)
-			} else if err := miner.applySequencerBundle(simEnv, orderedSequencerTxs); err != nil {
-				log.Error("[SSV] Sequencer transaction bundle rejected during simulation",
-					"err", err, "attempted", len(orderedSequencerTxs))
-				if notifyErr := backend.OnBlockBuildingComplete(env.rpcCtx, nil, false, false); notifyErr != nil {
-					log.Warn("[SSV] Failed to notify backend about bundle failure", "err", notifyErr)
+			for _, tx := range orderedSequencerTxs {
+				if env.gasPool != nil && env.gasPool.Gas() < params.TxGas {
+					log.Warn("[SSV] Insufficient gas for sequencer transaction, stopping bundle",
+						"txHash", tx.Hash().Hex(), "remaining", env.gasPool.Gas())
+					break
 				}
-			} else {
-				miner.applySequencerSimulationResults(env, simEnv)
-				sequencerTxCount = len(simEnv.txs)
-				log.Info("[SSV] Committed sequencer transactions atomically",
-					"putInbox", len(backend.GetPendingPutInboxTxs()),
-					"original", len(backend.GetPendingOriginalTxs()),
-					"total", sequencerTxCount)
+
+				env.state.SetTxContext(tx.Hash(), env.tcount)
+				if err := miner.commitTransaction(env, tx); err != nil {
+					log.Error("[SSV] Failed to commit sequencer transaction",
+						"txHash", tx.Hash().Hex(), "err", err)
+					tx.SetRejected()
+					break
+				}
+				sequencerTxCount++
 			}
+
+			log.Info("[SSV] Committed sequencer transactions",
+				"putInbox", len(backend.GetPendingPutInboxTxs()),
+				"original", len(backend.GetPendingOriginalTxs()),
+				"committed", sequencerTxCount,
+				"attempted", len(orderedSequencerTxs))
 		}
 
 		// Filter sequencer-managed txs out of account-based pools to avoid premature or double inclusion
@@ -969,89 +999,6 @@ func (miner *Miner) fillTransactionsWithSequencerOrdering(interrupt *atomic.Int3
 	return nil
 }
 
-// buildSequencerSimulationEnv returns an isolated environment that can be used to
-// simulate sequencer-managed bundles without mutating the live block state.
-// SSV
-func (miner *Miner) buildSequencerSimulationEnv(env *environment) (*environment, error) {
-	stateCopy := env.state.Copy()
-	headerCopy := types.CopyHeader(env.header)
-
-	var gasPoolCopy *core.GasPool
-	if env.gasPool != nil {
-		gasPoolCopy = new(core.GasPool).AddGas(env.gasPool.Gas())
-	} else {
-		gasPoolCopy = new(core.GasPool).AddGas(headerCopy.GasLimit)
-	}
-
-	blockCtx := core.NewEVMBlockContext(headerCopy, miner.chain, &env.coinbase, miner.chainConfig, stateCopy)
-	simEVM := vm.NewEVM(blockCtx, stateCopy, miner.chainConfig, env.evm.Config)
-
-	simEnv := &environment{
-		signer:   env.signer,
-		state:    stateCopy,
-		gasPool:  gasPoolCopy,
-		coinbase: env.coinbase,
-		header:   headerCopy,
-		evm:      simEVM,
-		noTxs:    env.noTxs,
-		rpcCtx:   env.rpcCtx,
-	}
-
-	simEnv.tcount = env.tcount
-	simEnv.size = env.size
-	simEnv.blobs = env.blobs
-
-	return simEnv, nil
-}
-
-// applySequencerBundle executes the ordered sequencer transactions against a simulation
-// environment, guaranteeing that either all transactions succeed or the bundle is rejected.
-// SSV
-func (miner *Miner) applySequencerBundle(simEnv *environment, txs types.Transactions) error {
-	for i, tx := range txs {
-		if simEnv.gasPool != nil && simEnv.gasPool.Gas() < params.TxGas {
-			return fmt.Errorf("insufficient gas before sequencer tx %d (%s)", i, tx.Hash())
-		}
-
-		simEnv.state.SetTxContext(tx.Hash(), simEnv.tcount)
-		if err := miner.commitTransaction(simEnv, tx); err != nil {
-			tx.SetRejected()
-			return fmt.Errorf("sequencer tx %d (%s) failed: %w", i, tx.Hash(), err)
-		}
-	}
-	return nil
-}
-
-// applySequencerSimulationResults syncs the successful simulation results back into the live
-// environment so that subsequent block assembly continues from the committed bundle state.
-// SSV
-func (miner *Miner) applySequencerSimulationResults(target, simulated *environment) {
-	target.state = simulated.state
-	target.evm = simulated.evm
-	target.gasPool = simulated.gasPool
-	target.tcount = simulated.tcount
-	target.size = simulated.size
-	target.blobs = simulated.blobs
-
-	if len(simulated.txs) > 0 {
-		target.txs = append(target.txs, simulated.txs...)
-	}
-	if len(simulated.receipts) > 0 {
-		target.receipts = append(target.receipts, simulated.receipts...)
-	}
-	if len(simulated.sidecars) > 0 {
-		target.sidecars = append(target.sidecars, simulated.sidecars...)
-	}
-
-	target.header.GasUsed = simulated.header.GasUsed
-	if simulated.header.BlobGasUsed != nil {
-		if target.header.BlobGasUsed == nil {
-			target.header.BlobGasUsed = new(uint64)
-		}
-		*target.header.BlobGasUsed = *simulated.header.BlobGasUsed
-	}
-}
-
 // commitAccountBasedTransactions commits transactions while maintaining per-account nonce ordering
 // SSV
 func (miner *Miner) commitAccountBasedTransactions(
@@ -1062,7 +1009,7 @@ func (miner *Miner) commitAccountBasedTransactions(
 	committed := 0
 
 	for account, txs := range accountTxs {
-		log.Debug("[SSV] Processing account transactions", "account", account.Hex(), "count", len(txs))
+		log.Info("[SSV] Processing account transactions", "account", account.Hex(), "count", len(txs))
 
 		for _, lazy := range txs {
 			if interrupt != nil {
@@ -1093,7 +1040,7 @@ func (miner *Miner) commitAccountBasedTransactions(
 
 			env.state.SetTxContext(tx.Hash(), env.tcount)
 			if err := miner.commitTransaction(env, tx); err != nil {
-				log.Debug("[SSV] Transaction failed, skipping", "hash", tx.Hash(), "account", account.Hex(), "err", err)
+				log.Info("[SSV] Transaction failed, skipping", "hash", tx.Hash(), "account", account.Hex(), "err", err)
 				continue
 			}
 
@@ -1110,7 +1057,6 @@ func totalFees(block *types.Block, receipts []*types.Receipt) *big.Int {
 	for i, tx := range block.Transactions() {
 		minerFee, _ := tx.EffectiveGasTip(block.BaseFee())
 		feesWei.Add(feesWei, new(big.Int).Mul(new(big.Int).SetUint64(receipts[i].GasUsed), minerFee))
-		// TODO (MariusVanDerWijden) add blob fees
 	}
 	return feesWei
 }
