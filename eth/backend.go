@@ -458,6 +458,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	eth.APIBackend.sequencerAddress = crypto.PubkeyToAddress(stack.SequencerKey().PublicKey)
 	eth.APIBackend.coordinatorKey = stack.CoordinatorKey()
 	eth.APIBackend.coordinatorAddr = crypto.PubkeyToAddress(stack.CoordinatorKey().PublicKey)
+	eth.APIBackend.nonceManager = newNonceManager(eth.txPool, eth.APIBackend.coordinatorAddr)
 
 	if eth.APIBackend.coordinator != nil && eth.APIBackend.spClient != nil {
 		eth.APIBackend.SetSequencerCoordinator(eth.APIBackend.coordinator, eth.APIBackend.spClient)

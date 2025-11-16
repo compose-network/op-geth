@@ -134,6 +134,7 @@ type EthAPIBackend struct {
 	// SSV: Sequencer transaction management
 	sequencerTxMutex sync.RWMutex
 	txTracker        *sequencerTxTracker
+	nonceManager     *nonceManager
 
 	// SSV: Track last RequestSeal inclusion list for SBCP
 	rsMutex                 sync.RWMutex
@@ -1152,6 +1153,12 @@ func (b *EthAPIBackend) clearAllSequencerTransactions() {
 		"original", removedOriginal,
 		"rejectedInPool", len(txHashesToReject))
 
+	if b.nonceManager != nil && (removedPutInbox > 0 || removedOriginal > 0) {
+		b.nonceManager.reset()
+		log.Info("[SSV] Reset nonce manager after clearing transactions",
+			"newPoolNonce", b.nonceManager.currentPoolNonce())
+	}
+
 	if miner := b.eth.miner; miner != nil && (removedPutInbox > 0 || removedOriginal > 0) {
 		miner.InvalidatePendingCache()
 	}
@@ -1197,16 +1204,21 @@ func (b *EthAPIBackend) prepareAndInjectSequencerTransactions(ctx context.Contex
 	b.sequencerTxMutex.Lock()
 	putInboxTxs := b.txTracker.transactionsByKind(sequencerTxPutInbox)
 	if len(putInboxTxs) > 0 {
-		currentNonce := b.eth.txPool.PoolNonce(b.coordinatorAddr)
-		log.Info("[SSV] Preparing putInbox transactions with fresh nonces",
+		startNonce := b.nonceManager.reserveNonces(len(putInboxTxs))
+		poolNonce := b.nonceManager.currentPoolNonce()
+		pendingNonce := b.nonceManager.pendingNonce()
+
+		log.Info("[SSV] Preparing putInbox transactions with atomically reserved nonces",
 			"count", len(putInboxTxs),
-			"startNonce", currentNonce,
+			"startNonce", startNonce,
+			"poolNonce", poolNonce,
+			"pendingNonce", pendingNonce,
 			"coordinatorAddr", b.coordinatorAddr.Hex())
 
 		signer := types.NewLondonSigner(b.ChainConfig().ChainID)
 
 		for i, oldTx := range putInboxTxs {
-			nonce := currentNonce + uint64(i)
+			nonce := startNonce + uint64(i)
 
 			var newTx *types.Transaction
 			if oldTx.Type() == types.DynamicFeeTxType {
@@ -1697,6 +1709,12 @@ func (b *EthAPIBackend) clearCommittedSequencerTransactions(committed map[common
 			"putInboxRemoved", removedPutInbox,
 			"originalRemoved", removedOriginal,
 			"rejectedInPool", len(hashes))
+
+		if b.nonceManager != nil && removedPutInbox > 0 {
+			b.nonceManager.reset()
+			log.Info("[SSV] Reset nonce manager after delivering putInbox transactions",
+				"newPoolNonce", b.nonceManager.currentPoolNonce())
+		}
 	}
 }
 
@@ -1955,6 +1973,13 @@ func (b *EthAPIBackend) dropTransactionsForXtKey(key string, reject bool) (int, 
 	}
 
 	if removedPutInbox+removedOriginal > 0 {
+		if b.nonceManager != nil && removedPutInbox > 0 {
+			b.nonceManager.reset()
+			log.Info("[SSV] Reset nonce manager after dropping XT transactions",
+				"xtID", key,
+				"newPoolNonce", b.nonceManager.currentPoolNonce())
+		}
+
 		if miner := b.eth.miner; miner != nil {
 			miner.InvalidatePendingCache()
 		}
