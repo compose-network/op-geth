@@ -494,6 +494,28 @@ func (b *EthAPIBackend) SendTx(ctx context.Context, signedTx *types.Transaction)
 }
 
 func (b *EthAPIBackend) sendTx(ctx context.Context, signedTx *types.Transaction) error {
+	// Before handing the transaction to the txpool, enforce replacement semantics
+	// relative to sequencer-managed transactions staged in the dedicated mempool.
+	// Without this guard, a user transaction can re-use a nonce already claimed by
+	// a sequencer-managed transaction for the same sender. In the legacy design
+	// (where sequencer txs lived in the txpool), this produced a clear
+	// "replacement transaction underpriced" error from txpool. After moving
+	// sequencer txs into a dedicated tracker, the same pattern would otherwise
+	// result in a silently stuck user transaction with no receipt.
+	var from common.Address
+	if signer := types.LatestSignerForChainID(b.ChainConfig().ChainID); signer != nil {
+		if s, err := types.Sender(signer, signedTx); err == nil {
+			from = s
+		}
+	}
+	if from != (common.Address{}) && b.hasSequencerNonceConflict(from, signedTx.Nonce()) {
+		// Mirror go-ethereum behaviour when attempting to replace an existing
+		// transaction at the same nonce with a lower-priced one: surface
+		// ErrReplaceUnderpriced so callers see an immediate, explicit error
+		// instead of a transaction that never receives a receipt.
+		return txpool.ErrReplaceUnderpriced
+	}
+
 	err := b.eth.txPool.Add([]*types.Transaction{signedTx}, false)[0]
 
 	// If the local transaction tracker is not configured, returns whatever
@@ -513,12 +535,6 @@ func (b *EthAPIBackend) sendTx(ctx context.Context, signedTx *types.Transaction)
 	// Locally submitted transactions will be resubmitted later via the local tracker.
 	b.eth.localTxTracker.Track(signedTx)
 
-	var from common.Address
-	if signer := types.LatestSignerForChainID(b.ChainConfig().ChainID); signer != nil {
-		if s, err := types.Sender(signer, signedTx); err == nil {
-			from = s
-		}
-	}
 	kindStr := "unknown"
 	xt := ""
 	b.sequencerTxMutex.RLock()
@@ -609,6 +625,38 @@ func (b *EthAPIBackend) TxPoolContentFrom(addr common.Address) ([]*types.Transac
 
 func (b *EthAPIBackend) TxPool() *txpool.TxPool {
 	return b.eth.txPool
+}
+
+// hasSequencerNonceConflict reports whether there is already a sequencer-managed
+// transaction staged for the given sender and nonce. This is used to restore
+// "replacement transaction underpriced" semantics for local transactions that
+// would otherwise overlap with dedicated-mempool entries.
+func (b *EthAPIBackend) hasSequencerNonceConflict(sender common.Address, nonce uint64) bool {
+	b.sequencerTxMutex.RLock()
+	defer b.sequencerTxMutex.RUnlock()
+
+	if b.txTracker == nil {
+		return false
+	}
+
+	signer := types.LatestSignerForChainID(b.ChainConfig().ChainID)
+	if signer == nil {
+		return false
+	}
+
+	for _, rec := range b.txTracker.records {
+		if rec == nil || rec.tx == nil {
+			continue
+		}
+		// Only original (user-facing) sequencer transactions are relevant here.
+		if rec.kind != sequencerTxOriginal {
+			continue
+		}
+		if s, err := types.Sender(signer, rec.tx); err == nil && s == sender && rec.tx.Nonce() == nonce {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *EthAPIBackend) SubscribeNewTxsEvent(ch chan<- core.NewTxsEvent) event.Subscription {
