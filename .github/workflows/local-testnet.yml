@@ -25,7 +25,7 @@ jobs:
     steps:
       # Step 1: Add reaction to comment (uses our action)
       - name: Add reaction to comment
-        uses: compose-network/github-actions/actions/add-reaction@v0.3.0
+        uses: compose-network/github-actions/actions/add-reaction@v0.4.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           comment-id: ${{ github.event.comment.id }}
@@ -34,14 +34,14 @@ jobs:
       # Step 2: Get PR information (uses our action)
       - name: Get PR info
         id: pr-info
-        uses: compose-network/github-actions/actions/get-pr-info@v0.3.0
+        uses: compose-network/github-actions/actions/get-pr-info@v0.4.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           pr-number: ${{ github.event.issue.number }}
 
       # Step 4: Run local testnet (uses our action)
       - name: Run local testnet
-        uses: compose-network/github-actions/actions/local-testnet@v0.3.0
+        uses: compose-network/github-actions/actions/local-testnet@v0.4.0
         with:
           # Required: Repository branches
           op-geth-branch: ${{ steps.pr-info.outputs.branch }}
