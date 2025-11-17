@@ -1062,8 +1062,7 @@ func (b *EthAPIBackend) GetMailboxAddressFromChainID(chainID uint64) common.Addr
 	return b.mailboxByChainID[chainID]
 }
 
-// AddPendingPutInboxTx adds a putInbox transaction to the pool with atomic nonce assignment
-// and registers the signed transaction in the tracker for routing and cleanup.
+// AddPendingPutInboxTx adds a putInbox transaction to the pool with atomic nonce assignment.
 // SSV
 func (b *EthAPIBackend) AddPendingPutInboxTx(ctx context.Context, tx *types.Transaction) (*types.Transaction, error) {
 	xtID := xtIDFromCtx(ctx)
@@ -1072,10 +1071,10 @@ func (b *EthAPIBackend) AddPendingPutInboxTx(ctx context.Context, tx *types.Tran
 	tracker := b.ensureTrackerLocked()
 	sequence := tracker.nextSeq
 	tracker.nextSeq++
+	b.sequencerTxMutex.Unlock()
 
 	signedTx, err := b.putInboxPool.add(tx, xtID, sequence)
 	if err != nil {
-		b.sequencerTxMutex.Unlock()
 		log.Error("[SSV] Failed to add putInbox tx to pool",
 			"err", err,
 			"xtID", xtID,
@@ -1083,18 +1082,8 @@ func (b *EthAPIBackend) AddPendingPutInboxTx(ctx context.Context, tx *types.Tran
 		return nil, err
 	}
 
-	slot := uint64(0)
-	if b.coordinator != nil {
-		slot = b.coordinator.GetCurrentSlot()
-	}
-	tracker.add(signedTx, sequencerTxPutInbox, slot)
-	if xtID != "" {
-		tracker.assignXtID(signedTx.Hash(), xtID)
-	}
-	b.sequencerTxMutex.Unlock()
-
 	pending, committed, nextNonce := b.putInboxPool.stats()
-	log.Info("[SSV] Added putInbox transaction to pool and tracker",
+	log.Info("[SSV] Added putInbox transaction to pool",
 		"xtID", xtID,
 		"signedHash", signedTx.Hash().Hex(),
 		"nonce", signedTx.Nonce(),
@@ -1267,22 +1256,57 @@ func (b *EthAPIBackend) GetOrderedTransactionsForBlock(ctx context.Context) (typ
 		// During coordination, exclude cross-chain txs - they'll be included after decision
 		return types.Transactions{}, nil
 	case sequencer.StateBuildingFree, sequencer.StateSubmission:
-		// Re-sign putInbox transactions with fresh nonces and inject into pool.
+		// Ensure pool + tracker transactions are injected before ordering for block inclusion.
 		if err := b.prepareAndInjectSequencerTransactions(ctx); err != nil {
 			log.Error("[SSV] Failed to prepare sequencer transactions", "err", err)
 		}
 
-		// After SCP completes (BuildingFree) or during final submission, include ready transactions
-		// This ensures transactions are committed in the first possible block after simulation/decision
-		txs, orderedRecords, pendingBundles := b.assembleSequencerBundle()
-		if len(txs) > 0 {
-			// Lightweight debug: emit counts by kind
+		var poolEntries []putInboxTxEntry
+		if b.putInboxPool != nil {
+			poolEntries = b.putInboxPool.pendingEntries()
+		}
+		poolTxs := make(types.Transactions, 0, len(poolEntries))
+		poolRecords := make([]sequencerBundleEntry, 0, len(poolEntries))
+		for _, entry := range poolEntries {
+			if entry.xtID != "" && b.isXtAborted(entry.xtID) {
+				log.Info("[SSV] Skipping aborted putInbox tx in pool",
+					"xtID", entry.xtID,
+					"hash", entry.tx.Hash().Hex(),
+					"nonce", entry.tx.Nonce())
+				continue
+			}
+			poolTxs = append(poolTxs, entry.tx)
+			status := sequencerTxStatusStaged
+			if entry.committed {
+				status = sequencerTxStatusCommitted
+			}
+			poolRecords = append(poolRecords, sequencerBundleEntry{
+				tx:     entry.tx,
+				xtID:   entry.xtID,
+				kind:   sequencerTxPutInbox,
+				status: status,
+			})
+		}
+
+		// After SCP completes (BuildingFree) or during submission, include ready transactions.
+		originalTxs, orderedRecords, pendingBundles := b.assembleSequencerBundle()
+		combinedTxs := make(types.Transactions, 0, len(poolTxs)+len(originalTxs))
+		combinedTxs = append(combinedTxs, poolTxs...)
+		combinedTxs = append(combinedTxs, originalTxs...)
+		combinedRecords := append(poolRecords, orderedRecords...)
+
+		if len(combinedTxs) > 0 {
+			var putCount int
+			if b.putInboxPool != nil {
+				pending, _, _ := b.putInboxPool.stats()
+				putCount = pending
+			}
 			b.sequencerTxMutex.RLock()
-			putCount := b.countEntriesByKindLocked(sequencerTxPutInbox)
 			origCount := b.countEntriesByKindLocked(sequencerTxOriginal)
-			// Per-tx order with minimal fields for nonce gap tracing
+			b.sequencerTxMutex.RUnlock()
+
 			signer := types.LatestSignerForChainID(b.ChainConfig().ChainID)
-			for i, info := range orderedRecords {
+			for i, info := range combinedRecords {
 				tx := info.tx
 				if tx == nil {
 					continue
@@ -1304,11 +1328,10 @@ func (b *EthAPIBackend) GetOrderedTransactionsForBlock(ctx context.Context) (typ
 					"hash", tx.Hash().Hex(),
 				)
 			}
-			b.sequencerTxMutex.RUnlock()
 			log.Info("[SSV] GetOrderedTransactionsForBlock",
-				"total", len(txs),
-				"putInbox", putCount,
-				"original", origCount,
+				"total", len(combinedTxs),
+				"putInbox_pending", putCount,
+				"original_pending", origCount,
 			)
 		}
 		if len(pendingBundles) > 0 {
@@ -1322,7 +1345,7 @@ func (b *EthAPIBackend) GetOrderedTransactionsForBlock(ctx context.Context) (typ
 					"details", details)
 			}
 		}
-		return txs, nil
+		return combinedTxs, nil
 	default:
 		return types.Transactions{}, nil
 	}
@@ -1366,8 +1389,13 @@ func (b *EthAPIBackend) assembleSequencerBundle() (types.Transactions, []sequenc
 // 1. For each XT, putInbox transactions are created before original transactions
 // 2. XTs are processed sequentially, maintaining their relative order
 func (b *EthAPIBackend) buildSequencerOnlyList() types.Transactions {
-	txs, _, _ := b.assembleSequencerBundle()
-	return txs
+	var combined types.Transactions
+	if b.putInboxPool != nil {
+		combined = append(combined, b.putInboxPool.getPending()...)
+	}
+	originals, _, _ := b.assembleSequencerBundle()
+	combined = append(combined, originals...)
+	return combined
 }
 
 // validateSequencerTransaction validates that a sequencer transaction is properly formed
@@ -1422,19 +1450,23 @@ func (b *EthAPIBackend) OnBlockBuildingStart(ctx context.Context) error {
 	if b.coordinator != nil {
 		slot := b.coordinator.GetCurrentSlot()
 		coordState := b.coordinator.GetState().String()
+		pendingPut := 0
+		if b.putInboxPool != nil {
+			pendingPut, _, _ = b.putInboxPool.stats()
+		}
 		b.sequencerTxMutex.RLock()
-		putCount := b.countEntriesByKindLocked(sequencerTxPutInbox)
 		origCount := b.countEntriesByKindLocked(sequencerTxOriginal)
 		total := 0
 		if b.txTracker != nil {
 			total = b.txTracker.pendingTotal()
 		}
+		total += pendingPut
 		b.sequencerTxMutex.RUnlock()
 		log.Info("[SSV] OnBlockBuildingStart",
 			"slot", slot,
 			"state", coordState,
 			"staged_total", total,
-			"staged_putInbox", putCount,
+			"staged_putInbox", pendingPut,
 			"staged_original", origCount,
 		)
 		_ = b.coordinator.OnBlockBuildingStart(ctx, slot)
@@ -1479,19 +1511,34 @@ func (b *EthAPIBackend) OnBlockBuildingComplete(
 	inBlockHashes := make([]common.Hash, 0)
 	pairStatus := make(map[string]*pairCheck)
 	for idx, tx := range block.Transactions() {
-		if record := tracker.record(tx.Hash()); record != nil {
-			inBlockHashes = append(inBlockHashes, tx.Hash())
-			if record.xtID != "" {
-				check, ok := pairStatus[record.xtID]
+		hash := tx.Hash()
+		var (
+			record = tracker.record(hash)
+			isPut  bool
+			xtID   string
+		)
+		if record != nil {
+			xtID = record.xtID
+			isPut = record.kind == sequencerTxPutInbox
+		} else if b.putInboxPool != nil {
+			if entry := b.putInboxPool.entryByHash(hash); entry != nil {
+				xtID = entry.xtID
+				isPut = true
+			}
+		}
+		if record != nil || isPut {
+			inBlockHashes = append(inBlockHashes, hash)
+			if xtID != "" {
+				check, ok := pairStatus[xtID]
 				if !ok {
 					check = &pairCheck{putIndex: -1, originalIndex: -1}
 				}
-				if record.kind == sequencerTxPutInbox && check.putIndex == -1 {
+				if isPut && check.putIndex == -1 {
 					check.putIndex = idx
-				} else if record.kind == sequencerTxOriginal && check.originalIndex == -1 {
+				} else if !isPut && check.originalIndex == -1 {
 					check.originalIndex = idx
 				}
-				pairStatus[record.xtID] = check
+				pairStatus[xtID] = check
 			}
 		}
 	}
@@ -1791,6 +1838,14 @@ func (b *EthAPIBackend) countEntriesByKindLocked(kind sequencerTxKind) int {
 	return b.txTracker.countByKind(kind)
 }
 
+func (b *EthAPIBackend) pendingPutInboxCount() int {
+	if b.putInboxPool == nil {
+		return 0
+	}
+	pending, _, _ := b.putInboxPool.stats()
+	return pending
+}
+
 func (b *EthAPIBackend) listTransactionsByKind(kind sequencerTxKind) []*types.Transaction {
 	b.sequencerTxMutex.RLock()
 	defer b.sequencerTxMutex.RUnlock()
@@ -1822,7 +1877,7 @@ func (b *EthAPIBackend) addSequencerEntryLocked(tx *types.Transaction, kind sequ
 	if kind == sequencerTxPutInbox {
 		kindStr = "putInbox"
 	}
-	putCount := tracker.countByKind(sequencerTxPutInbox)
+	putCount := b.pendingPutInboxCount()
 	origCount := tracker.countByKind(sequencerTxOriginal)
 
 	log.Info("[SSV] Staged add",
@@ -1978,7 +2033,7 @@ func (b *EthAPIBackend) SetSequencerCoordinator(coord sequencer.Coordinator, sp 
 func (b *EthAPIBackend) NotifySlotStart(startSlot *rollupv1.StartSlot) error {
 	// Per-slot snapshot before any cleanup
 	b.sequencerTxMutex.RLock()
-	putInboxCount := b.countEntriesByKindLocked(sequencerTxPutInbox)
+	putInboxCount := b.pendingPutInboxCount()
 	originalCount := b.countEntriesByKindLocked(sequencerTxOriginal)
 	b.sequencerTxMutex.RUnlock()
 	mailboxCount := len(b.mailboxAddresses)
@@ -2007,14 +2062,15 @@ func (b *EthAPIBackend) NotifySlotStart(startSlot *rollupv1.StartSlot) error {
 	b.sequencerTxMutex.Lock()
 	tracker := b.ensureTrackerLocked()
 	prevTxCount := tracker.pendingTotal()
-	putInboxCount = tracker.countByKind(sequencerTxPutInbox)
+	putInboxCount = b.pendingPutInboxCount()
 	originalCount = tracker.countByKind(sequencerTxOriginal)
 	b.sequencerTxMutex.Unlock()
 
-	if prevTxCount > 0 {
+	totalCarry := prevTxCount + putInboxCount
+	if prevTxCount > 0 || putInboxCount > 0 {
 		log.Info("[SSV] Carrying sequencer transactions into new slot",
 			"slot", startSlot.Slot,
-			"totalTxs", prevTxCount,
+			"totalTxs", totalCarry,
 			"putInbox", putInboxCount,
 			"original", originalCount)
 	}
@@ -2030,8 +2086,8 @@ func (b *EthAPIBackend) NotifySlotStart(startSlot *rollupv1.StartSlot) error {
 // SSV
 func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *rollupv1.RequestSeal) error {
 	// Per-slot snapshot at RequestSeal
+	putInboxCount := b.pendingPutInboxCount()
 	b.sequencerTxMutex.RLock()
-	putInboxCount := b.countEntriesByKindLocked(sequencerTxPutInbox)
 	originalCount := b.countEntriesByKindLocked(sequencerTxOriginal)
 	b.sequencerTxMutex.RUnlock()
 	mailboxCount := len(b.mailboxAddresses)
@@ -2059,6 +2115,15 @@ func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *roll
 		for xtID := range b.txTracker.allXTIDsLocked() {
 			if xtID != "" {
 				pendingKeys[xtID] = struct{}{}
+			}
+		}
+	}
+	if b.putInboxPool != nil {
+		poolEntries := b.putInboxPool.pendingEntries()
+		totalPending += len(poolEntries)
+		for _, entry := range poolEntries {
+			if entry.xtID != "" {
+				pendingKeys[entry.xtID] = struct{}{}
 			}
 		}
 	}
@@ -2467,7 +2532,7 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 			if err := b.SubmitSequencerTransaction(ctxWithXtID(ctx, xtID), putInboxTx, true); err != nil {
 				return false, fmt.Errorf("failed to submit putInbox transaction: %w", err)
 			}
-			// xtID is already assigned inside AddPendingPutInboxTx with the signed hash
+			// xtID is tracked inside the putInbox pool entry mapped by the signed hash
 			poolNonce++
 		}
 

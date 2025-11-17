@@ -188,6 +188,30 @@ func (p *putInboxTxPool) getPending() []*types.Transaction {
 	return txs
 }
 
+func (p *putInboxTxPool) pendingEntries() []putInboxTxEntry {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	if len(p.pending) == 0 {
+		return nil
+	}
+
+	entries := make([]putInboxTxEntry, len(p.pending))
+	copy(entries, p.pending)
+	return entries
+}
+
+func (p *putInboxTxPool) entryByHash(hash common.Hash) *putInboxTxEntry {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	if entry, ok := p.byHash[hash]; ok && entry != nil {
+		cpy := *entry
+		return &cpy
+	}
+	return nil
+}
+
 func (p *putInboxTxPool) markCommitted(slot, blockNumber uint64, hashes []common.Hash) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
