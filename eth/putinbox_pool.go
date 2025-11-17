@@ -53,17 +53,45 @@ func newPutInboxTxPool(
 		chainID:         chainID,
 		byHash:          make(map[common.Hash]*putInboxTxEntry),
 	}
-	pool.refreshNonce()
+	pool.mu.Lock()
+	pool.refreshNonceLocked("init")
+	pool.mu.Unlock()
 	return pool
 }
 
-func (p *putInboxTxPool) refreshNonce() {
+func (p *putInboxTxPool) refreshNonceLocked(reason string) {
+	pendingCount := len(p.pending)
+	committedCount := len(p.committed)
 	poolNonce := p.mainPool.PoolNonce(p.coordinatorAddr)
+	oldNext := p.nextNonce
 	p.baseNonce = poolNonce
-	p.nextNonce = poolNonce
-	log.Info("[SSV] PutInbox pool refreshed nonce",
-		"addr", p.coordinatorAddr.Hex(),
-		"nonce", poolNonce)
+
+	if pendingCount == 0 && committedCount == 0 {
+		// No outstanding txs, safe to snap nextNonce directly to pool nonce.
+		p.nextNonce = poolNonce
+	} else if poolNonce > p.nextNonce {
+		// Only move forward; never shrink when outstanding txs exist.
+		p.nextNonce = poolNonce
+	}
+
+	if oldNext != p.nextNonce {
+		log.Info("[SSV] PutInbox pool refreshed nonce",
+			"addr", p.coordinatorAddr.Hex(),
+			"reason", reason,
+			"poolNonce", poolNonce,
+			"previousNextNonce", oldNext,
+			"nextNonce", p.nextNonce,
+			"pending", pendingCount,
+			"committed", committedCount)
+	} else {
+		log.Debug("[SSV] PutInbox pool refresh unchanged",
+			"addr", p.coordinatorAddr.Hex(),
+			"reason", reason,
+			"poolNonce", poolNonce,
+			"nextNonce", p.nextNonce,
+			"pending", pendingCount,
+			"committed", committedCount)
+	}
 }
 
 func (p *putInboxTxPool) add(unsignedTx *types.Transaction, xtID string, sequence uint64) (*types.Transaction, error) {
@@ -274,7 +302,7 @@ func (p *putInboxTxPool) clearCommitted(hashes map[common.Hash]bool) int {
 	p.committed = newCommitted
 
 	if removed > 0 {
-		p.refreshNonce()
+		p.refreshNonceLocked("clearCommitted")
 	}
 
 	return removed
@@ -296,7 +324,7 @@ func (p *putInboxTxPool) clearAll() int {
 	p.pending = nil
 	p.committed = nil
 	p.byHash = make(map[common.Hash]*putInboxTxEntry)
-	p.refreshNonce()
+	p.refreshNonceLocked("clearAll")
 
 	return total
 }
@@ -344,7 +372,7 @@ func (p *putInboxTxPool) dropByXtID(xtID string) int {
 	p.committed = newCommitted
 
 	if dropped > 0 {
-		p.refreshNonce()
+		p.refreshNonceLocked("dropByXtID")
 	}
 
 	return dropped
@@ -377,5 +405,5 @@ func (p *putInboxTxPool) reset() {
 	p.pending = nil
 	p.committed = nil
 	p.byHash = make(map[common.Hash]*putInboxTxEntry)
-	p.refreshNonce()
+	p.refreshNonceLocked("reset")
 }
