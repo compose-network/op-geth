@@ -1128,6 +1128,7 @@ func (b *EthAPIBackend) clearAllSequencerTransactions() {
 	b.sequencerTxMutex.Lock()
 	tracker := b.ensureTrackerLocked()
 	removedPutInbox, removedOriginal, removedRecords := tracker.clearAll()
+	tracker.cleanupPlaceholders()
 	b.sequencerTxMutex.Unlock()
 
 	if len(removedRecords) > 0 {
@@ -1596,6 +1597,7 @@ func (b *EthAPIBackend) clearCommittedSequencerTransactions(committed map[common
 	b.sequencerTxMutex.Lock()
 	tracker := b.ensureTrackerLocked()
 	removedPutInbox, removedOriginal, removedRecords := tracker.markDelivered(committed)
+	tracker.cleanupPlaceholders()
 	b.sequencerTxMutex.Unlock()
 
 	hashes := make([]common.Hash, 0, len(removedRecords))
@@ -2413,27 +2415,11 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 	if len(allFulfilledDeps) > 0 {
 		log.Info("[SSV] Creating putInbox transactions for fulfilled dependencies", "count", len(allFulfilledDeps))
 
-		// Dedicated mempool: derive nonce from state + locally staged coordinator putInbox count
-		stateDB, err := b.eth.blockchain.State()
+		startNonce, err := b.reserveCoordinatorNonces(len(allFulfilledDeps))
 		if err != nil {
-			return false, fmt.Errorf("failed to get state for nonce: %w", err)
+			return false, fmt.Errorf("failed to reserve nonces: %w", err)
 		}
-		baseNonce := stateDB.GetNonce(b.coordinatorAddr)
-		signer := types.LatestSignerForChainID(b.ChainConfig().ChainID)
-		staged := 0
-		b.sequencerTxMutex.RLock()
-		if b.txTracker != nil {
-			for _, rec := range b.txTracker.records {
-				if rec == nil || rec.tx == nil || rec.kind != sequencerTxPutInbox {
-					continue
-				}
-				if s, err := types.Sender(signer, rec.tx); err == nil && s == b.coordinatorAddr {
-					staged++
-				}
-			}
-		}
-		b.sequencerTxMutex.RUnlock()
-		poolNonce := baseNonce + uint64(staged)
+		poolNonce := startNonce
 
 		for _, dep := range allFulfilledDeps {
 			putInboxTx, err := mailboxProcessor.createPutInboxTx(dep, poolNonce)
@@ -2602,4 +2588,53 @@ func (b *EthAPIBackend) reconcileSequencerNonce(ctx context.Context, addr common
 			miner.InvalidatePendingCache()
 		}
 	}
+}
+
+// reserveCoordinatorNonces atomically reserves sequential nonces for parallel XT processing.
+func (b *EthAPIBackend) reserveCoordinatorNonces(count int) (uint64, error) {
+	if count <= 0 {
+		return 0, fmt.Errorf("invalid count: %d", count)
+	}
+
+	stateDB, err := b.eth.blockchain.State()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get state: %w", err)
+	}
+	baseNonce := stateDB.GetNonce(b.coordinatorAddr)
+
+	b.sequencerTxMutex.Lock()
+	defer b.sequencerTxMutex.Unlock()
+
+	signer := types.LatestSignerForChainID(b.ChainConfig().ChainID)
+	staged := 0
+	if b.txTracker != nil {
+		for _, rec := range b.txTracker.records {
+			if rec == nil || rec.kind != sequencerTxPutInbox {
+				continue
+			}
+			if rec.tx == nil {
+				staged++
+			} else if s, err := types.Sender(signer, rec.tx); err == nil && s == b.coordinatorAddr {
+				staged++
+			}
+		}
+	}
+
+	startNonce := baseNonce + uint64(staged)
+
+	if b.txTracker != nil {
+		for i := 0; i < count; i++ {
+			nonce := startNonce + uint64(i)
+			b.txTracker.reserveNonce(b.coordinatorAddr, nonce)
+		}
+	}
+
+	log.Info("[SSV] Reserved coordinator nonces",
+		"count", count,
+		"startNonce", startNonce,
+		"baseNonce", baseNonce,
+		"staged", staged,
+		"coordinatorAddr", b.coordinatorAddr.Hex())
+
+	return startNonce, nil
 }

@@ -1,10 +1,12 @@
 package eth
 
 import (
+	"math/big"
 	"sort"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 // sequencerTxStatus represents the lifecycle stage of a sequencer-managed transaction.
@@ -119,12 +121,61 @@ func (t *sequencerTxTracker) add(tx *types.Transaction, kind sequencerTxKind, cu
 	t.staged = append(t.staged, hash)
 }
 
+// reserveNonce reserves a nonce slot using a placeholder record.
+func (t *sequencerTxTracker) reserveNonce(sender common.Address, nonce uint64) {
+	if t.records == nil {
+		t.records = make(map[common.Hash]*sequencerTxRecord)
+	}
+
+	placeholderData := append(sender.Bytes(), common.BigToHash(new(big.Int).SetUint64(nonce)).Bytes()...)
+	placeholderHash := crypto.Keccak256Hash(placeholderData)
+
+	if _, exists := t.records[placeholderHash]; exists {
+		return
+	}
+
+	t.records[placeholderHash] = &sequencerTxRecord{
+		tx:       nil,
+		kind:     sequencerTxPutInbox,
+		status:   sequencerTxStatusStaged,
+		sequence: t.nextSeq,
+	}
+	t.nextSeq++
+	t.staged = append(t.staged, placeholderHash)
+}
+
 func (t *sequencerTxTracker) assignXtID(hash common.Hash, xtID string) bool {
 	if record, ok := t.records[hash]; ok {
 		record.xtID = xtID
 		return true
 	}
 	return false
+}
+
+// cleanupPlaceholders removes placeholder nonce reservations.
+func (t *sequencerTxTracker) cleanupPlaceholders() int {
+	if t.records == nil {
+		return 0
+	}
+
+	var placeholderHashes []common.Hash
+	for hash, rec := range t.records {
+		if rec != nil && rec.tx == nil {
+			placeholderHashes = append(placeholderHashes, hash)
+		}
+	}
+
+	if len(placeholderHashes) == 0 {
+		return 0
+	}
+
+	// Remove placeholders from records and staged list
+	for _, hash := range placeholderHashes {
+		delete(t.records, hash)
+		t.staged = removeHash(t.staged, hash)
+	}
+
+	return len(placeholderHashes)
 }
 
 func (t *sequencerTxTracker) record(hash common.Hash) *sequencerTxRecord {
