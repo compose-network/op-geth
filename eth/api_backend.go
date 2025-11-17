@@ -134,6 +134,7 @@ type EthAPIBackend struct {
 	// SSV: Sequencer transaction management
 	sequencerTxMutex sync.RWMutex
 	txTracker        *sequencerTxTracker
+	putInboxPool     *putInboxTxPool
 
 	// SSV: Track last RequestSeal inclusion list for SBCP
 	rsMutex                 sync.RWMutex
@@ -974,17 +975,27 @@ func (b *EthAPIBackend) SubmitSequencerTransaction(ctx context.Context, tx *type
 	}
 
 	// Stage the transaction but defer txpool injection until block building.
+	var finalTx *types.Transaction
 	if isPutInbox {
-		b.AddPendingPutInboxTx(tx)
+		signedTx, err := b.AddPendingPutInboxTx(ctx, tx)
+		if err != nil {
+			log.Error("[SSV] Failed to add putInbox transaction to pool",
+				"err", err,
+				"originalHash", tx.Hash().Hex(),
+				"xtID", xtKey)
+			return fmt.Errorf("failed to add putInbox transaction: %w", err)
+		}
+		finalTx = signedTx
 	} else {
 		b.sequencerTxMutex.Lock()
 		b.addSequencerEntryLocked(tx, sequencerTxOriginal)
 		b.sequencerTxMutex.Unlock()
+		finalTx = tx
 	}
 
 	log.Info("[SSV] Staged sequencer transaction (deferred pool injection)",
-		"txHash", tx.Hash().Hex(),
-		"nonce", tx.Nonce(),
+		"txHash", finalTx.Hash().Hex(),
+		"nonce", finalTx.Nonce(),
 		"isPutInbox", isPutInbox,
 		"from", sender.Hex(),
 		"xtID", xtKey,
@@ -1051,37 +1062,57 @@ func (b *EthAPIBackend) GetMailboxAddressFromChainID(chainID uint64) common.Addr
 	return b.mailboxByChainID[chainID]
 }
 
-// AddPendingPutInboxTx adds a putInbox transaction to the pending list.
+// AddPendingPutInboxTx adds a putInbox transaction to the pool with atomic nonce assignment
+// and registers the signed transaction in the tracker for routing and cleanup.
 // SSV
-func (b *EthAPIBackend) AddPendingPutInboxTx(tx *types.Transaction) {
-	b.sequencerTxMutex.Lock()
-	b.addSequencerEntryLocked(tx, sequencerTxPutInbox)
-	putCount := b.countEntriesByKindLocked(sequencerTxPutInbox)
-	b.sequencerTxMutex.Unlock()
-	var from common.Address
-	if signer := types.LatestSignerForChainID(b.ChainConfig().ChainID); signer != nil {
-		if s, err := types.Sender(signer, tx); err == nil {
-			from = s
-		}
-	}
-	log.Info("[SSV] Added putInbox transaction to mempool",
-		"txHash", tx.Hash().Hex(),
-		"totalPending", putCount,
-		"nonce", tx.Nonce(),
-		"from", from.Hex(),
-	)
+func (b *EthAPIBackend) AddPendingPutInboxTx(ctx context.Context, tx *types.Transaction) (*types.Transaction, error) {
+	xtID := xtIDFromCtx(ctx)
 
-	// Invalidate pending block cache since transaction state changed
-	// This ensures fresh pending blocks reflect new sequencer transactions
+	b.sequencerTxMutex.Lock()
+	tracker := b.ensureTrackerLocked()
+	sequence := tracker.nextSeq
+	tracker.nextSeq++
+
+	signedTx, err := b.putInboxPool.add(tx, xtID, sequence)
+	if err != nil {
+		b.sequencerTxMutex.Unlock()
+		log.Error("[SSV] Failed to add putInbox tx to pool",
+			"err", err,
+			"xtID", xtID,
+			"originalHash", tx.Hash().Hex())
+		return nil, err
+	}
+
+	slot := uint64(0)
+	if b.coordinator != nil {
+		slot = b.coordinator.GetCurrentSlot()
+	}
+	tracker.add(signedTx, sequencerTxPutInbox, slot)
+	if xtID != "" {
+		tracker.assignXtID(signedTx.Hash(), xtID)
+	}
+	b.sequencerTxMutex.Unlock()
+
+	pending, committed, nextNonce := b.putInboxPool.stats()
+	log.Info("[SSV] Added putInbox transaction to pool and tracker",
+		"xtID", xtID,
+		"signedHash", signedTx.Hash().Hex(),
+		"nonce", signedTx.Nonce(),
+		"pending", pending,
+		"committed", committed,
+		"nextNonce", nextNonce)
+
 	if miner := b.eth.miner; miner != nil {
 		miner.InvalidatePendingCache()
 	}
+	return signedTx, nil
 }
 
-// GetPendingPutInboxTxs returns all pending putInbox transactions.
-// SSV
 func (b *EthAPIBackend) GetPendingPutInboxTxs() []*types.Transaction {
-	return b.listTransactionsByKind(sequencerTxPutInbox)
+	if b.putInboxPool == nil {
+		return nil
+	}
+	return b.putInboxPool.getPending()
 }
 
 // ClearSequencerTransactionsAfterBlock clears all pending sequencer transactions after block creation
@@ -1123,6 +1154,11 @@ func (b *EthAPIBackend) clearAllSequencerTransactions() {
 	removedPutInbox, removedOriginal, removedRecords := tracker.clearAll()
 	b.sequencerTxMutex.Unlock()
 
+	poolCleared := 0
+	if b.putInboxPool != nil {
+		poolCleared = b.putInboxPool.clearAll()
+	}
+
 	if len(removedRecords) > 0 {
 		for _, record := range removedRecords {
 			b.logSequencerRemoval(record, "clear_all")
@@ -1136,9 +1172,6 @@ func (b *EthAPIBackend) clearAllSequencerTransactions() {
 		}
 	}
 
-	// Remove from Ethereum txpool to prevent inclusion in future blocks.
-	// Critical for transaction rejection scenarios: supervisor failsafe mode, conditional validation
-	// failures, or bundle simulation errors during block construction.
 	for _, hash := range txHashesToReject {
 		if tx := b.eth.txPool.Get(hash); tx != nil {
 			tx.SetRejected()
@@ -1150,6 +1183,7 @@ func (b *EthAPIBackend) clearAllSequencerTransactions() {
 	log.Info("[SSV] Cleared sequencer transactions",
 		"putInbox", removedPutInbox,
 		"original", removedOriginal,
+		"poolCleared", poolCleared,
 		"rejectedInPool", len(txHashesToReject))
 
 	if miner := b.eth.miner; miner != nil && (removedPutInbox > 0 || removedOriginal > 0) {
@@ -1177,109 +1211,22 @@ func (b *EthAPIBackend) PrepareSequencerTransactionsForBlock(ctx context.Context
 	return nil
 }
 
-// prepareAndInjectSequencerTransactions re-signs putInbox transactions with fresh nonces
-// from the txpool and injects all sequencer transactions.
-// SSV
 func (b *EthAPIBackend) prepareAndInjectSequencerTransactions(ctx context.Context) error {
-	if b.txTracker == nil {
+	if b.putInboxPool == nil {
 		return nil
 	}
 
-	type preparedTx struct {
-		signedTx *types.Transaction
-		oldHash  common.Hash
-		newHash  common.Hash
-		oldNonce uint64
-		newNonce uint64
-	}
-	var preparedPutInbox []preparedTx
-
-	b.sequencerTxMutex.Lock()
-	putInboxTxs := b.txTracker.transactionsByKind(sequencerTxPutInbox)
-	if len(putInboxTxs) > 0 {
-		currentNonce := b.eth.txPool.PoolNonce(b.coordinatorAddr)
-		log.Info("[SSV] Preparing putInbox transactions with fresh nonces",
-			"count", len(putInboxTxs),
-			"startNonce", currentNonce,
-			"coordinatorAddr", b.coordinatorAddr.Hex())
-
-		signer := types.NewLondonSigner(b.ChainConfig().ChainID)
-
-		for i, oldTx := range putInboxTxs {
-			nonce := currentNonce + uint64(i)
-
-			var newTx *types.Transaction
-			if oldTx.Type() == types.DynamicFeeTxType {
-				newInner := &types.DynamicFeeTx{
-					ChainID:    oldTx.ChainId(),
-					Nonce:      nonce,
-					GasTipCap:  oldTx.GasTipCap(),
-					GasFeeCap:  oldTx.GasFeeCap(),
-					Gas:        oldTx.Gas(),
-					To:         oldTx.To(),
-					Value:      oldTx.Value(),
-					Data:       oldTx.Data(),
-					AccessList: oldTx.AccessList(),
-				}
-				newTx = types.NewTx(newInner)
-			} else {
-				log.Error("[SSV] Unexpected tx type for putInbox", "type", oldTx.Type(), "txHash", oldTx.Hash().Hex())
-				continue
-			}
-
-			signedTx, err := types.SignTx(newTx, signer, b.coordinatorKey)
-			if err != nil {
-				log.Error("[SSV] Failed to re-sign putInbox tx", "err", err, "nonce", nonce)
-				continue
-			}
-
-			oldHash := oldTx.Hash()
-			newHash := signedTx.Hash()
-
-			if record := b.txTracker.record(oldHash); record != nil {
-				delete(b.txTracker.records, oldHash)
-				record.tx = signedTx
-				b.txTracker.records[newHash] = record
-
-				for idx, hash := range b.txTracker.staged {
-					if hash == oldHash {
-						b.txTracker.staged[idx] = newHash
-						break
-					}
-				}
-			}
-
-			preparedPutInbox = append(preparedPutInbox, preparedTx{
-				signedTx: signedTx,
-				oldHash:  oldHash,
-				newHash:  newHash,
-				oldNonce: oldTx.Nonce(),
-				newNonce: nonce,
-			})
-		}
+	if err := b.putInboxPool.inject(); err != nil {
+		log.Error("[SSV] Failed to inject putInbox transactions from pool", "err", err)
+		return err
 	}
 
-	originalTxs := b.txTracker.transactionsByKind(sequencerTxOriginal)
-	b.sequencerTxMutex.Unlock()
-
-	for _, prep := range preparedPutInbox {
-		if err := b.sendTx(ctx, prep.signedTx); err != nil {
-			reason := reasonForGrep(err)
-			log.Warn("[SSV] Failed to inject re-signed putInbox tx",
-				"err", err,
-				"oldHash", prep.oldHash.Hex(),
-				"newHash", prep.newHash.Hex(),
-				"oldNonce", prep.oldNonce,
-				"newNonce", prep.newNonce,
-				"reason", reason)
-		} else {
-			log.Info("[SSV] Re-signed and injected putInbox tx",
-				"oldHash", prep.oldHash.Hex(),
-				"newHash", prep.newHash.Hex(),
-				"oldNonce", prep.oldNonce,
-				"newNonce", prep.newNonce)
-		}
+	b.sequencerTxMutex.RLock()
+	var originalTxs []*types.Transaction
+	if b.txTracker != nil {
+		originalTxs = b.txTracker.transactionsByKind(sequencerTxOriginal)
 	}
+	b.sequencerTxMutex.RUnlock()
 
 	if len(originalTxs) > 0 {
 		log.Info("[SSV] Injecting original transactions into pool", "count", len(originalTxs))
@@ -1474,7 +1421,7 @@ func (b *EthAPIBackend) validateSequencerTransaction(tx *types.Transaction) erro
 func (b *EthAPIBackend) OnBlockBuildingStart(ctx context.Context) error {
 	if b.coordinator != nil {
 		slot := b.coordinator.GetCurrentSlot()
-		state := b.coordinator.GetState().String()
+		coordState := b.coordinator.GetState().String()
 		b.sequencerTxMutex.RLock()
 		putCount := b.countEntriesByKindLocked(sequencerTxPutInbox)
 		origCount := b.countEntriesByKindLocked(sequencerTxOriginal)
@@ -1485,7 +1432,7 @@ func (b *EthAPIBackend) OnBlockBuildingStart(ctx context.Context) error {
 		b.sequencerTxMutex.RUnlock()
 		log.Info("[SSV] OnBlockBuildingStart",
 			"slot", slot,
-			"state", state,
+			"state", coordState,
 			"staged_total", total,
 			"staged_putInbox", putCount,
 			"staged_original", origCount,
@@ -1550,6 +1497,9 @@ func (b *EthAPIBackend) OnBlockBuildingComplete(
 	}
 	if len(inBlockHashes) > 0 {
 		tracker.markCommitted(slot, block.NumberU64(), inBlockHashes)
+		if b.putInboxPool != nil {
+			b.putInboxPool.markCommitted(slot, block.NumberU64(), inBlockHashes)
+		}
 	}
 	b.sequencerTxMutex.Unlock()
 
@@ -1672,6 +1622,11 @@ func (b *EthAPIBackend) clearCommittedSequencerTransactions(committed map[common
 	removedPutInbox, removedOriginal, removedRecords := tracker.markDelivered(committed)
 	b.sequencerTxMutex.Unlock()
 
+	poolCleared := 0
+	if b.putInboxPool != nil {
+		poolCleared = b.putInboxPool.clearCommitted(committed)
+	}
+
 	hashes := make([]common.Hash, 0, len(removedRecords))
 	for _, record := range removedRecords {
 		if record == nil || record.tx == nil {
@@ -1682,8 +1637,6 @@ func (b *EthAPIBackend) clearCommittedSequencerTransactions(committed map[common
 		b.logSequencerRemoval(record, "delivered")
 	}
 
-	// Mark committed transactions as rejected in txpool to prevent re-inclusion.
-	// Without this, transactions stay in txpool after being cleared from staging.
 	for _, hash := range hashes {
 		if tx := b.eth.txPool.Get(hash); tx != nil {
 			tx.SetRejected()
@@ -1692,10 +1645,11 @@ func (b *EthAPIBackend) clearCommittedSequencerTransactions(committed map[common
 		}
 	}
 
-	if removedPutInbox > 0 || removedOriginal > 0 {
+	if removedPutInbox > 0 || removedOriginal > 0 || poolCleared > 0 {
 		log.Info("[SSV] Cleared committed cross-chain txs after delivery",
 			"putInboxRemoved", removedPutInbox,
 			"originalRemoved", removedOriginal,
+			"poolCleared", poolCleared,
 			"rejectedInPool", len(hashes))
 	}
 }
@@ -1923,6 +1877,11 @@ func (b *EthAPIBackend) dropTransactionsForXtKey(key string, reject bool) (int, 
 	removedPutInbox, removedOriginal, removedRecords := tracker.dropByXtID(key)
 	b.sequencerTxMutex.Unlock()
 
+	poolDropped := 0
+	if b.putInboxPool != nil {
+		poolDropped = b.putInboxPool.dropByXtID(key)
+	}
+
 	removedCommitted := 0
 	txHashesToRemove := make([]common.Hash, 0, len(removedRecords))
 
@@ -1954,7 +1913,14 @@ func (b *EthAPIBackend) dropTransactionsForXtKey(key string, reject bool) (int, 
 		}
 	}
 
-	if removedPutInbox+removedOriginal > 0 {
+	if removedPutInbox+removedOriginal+poolDropped > 0 {
+		log.Info("[SSV] Dropped transactions for XT",
+			"xtID", key,
+			"putInbox", removedPutInbox,
+			"original", removedOriginal,
+			"poolDropped", poolDropped,
+			"rejected", rejectedCount)
+
 		if miner := b.eth.miner; miner != nil {
 			miner.InvalidatePendingCache()
 		}
@@ -2205,7 +2171,7 @@ func (b *EthAPIBackend) NotifyStateChange(from, to sequencer.State, slot uint64)
 // This callback is invoked by the sequencer coordinator and complements the RequestSeal cleanup,
 // providing early removal to handle the case where blocks are built before the seal message arrives.
 // SSV
-func (b *EthAPIBackend) cleanupAbortedTransactionCallback(ctx context.Context, xtID *rollupv1.XtID) error {
+func (b *EthAPIBackend) cleanupAbortedTransactionCallback(_ context.Context, xtID *rollupv1.XtID) error {
 	if xtID == nil {
 		return nil
 	}
@@ -2501,7 +2467,7 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 			if err := b.SubmitSequencerTransaction(ctxWithXtID(ctx, xtID), putInboxTx, true); err != nil {
 				return false, fmt.Errorf("failed to submit putInbox transaction: %w", err)
 			}
-			b.assignXtKeyToHash(putInboxTx, xtID)
+			// xtID is already assigned inside AddPendingPutInboxTx with the signed hash
 			poolNonce++
 		}
 

@@ -458,6 +458,12 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	eth.APIBackend.sequencerAddress = crypto.PubkeyToAddress(stack.SequencerKey().PublicKey)
 	eth.APIBackend.coordinatorKey = stack.CoordinatorKey()
 	eth.APIBackend.coordinatorAddr = crypto.PubkeyToAddress(stack.CoordinatorKey().PublicKey)
+	eth.APIBackend.putInboxPool = newPutInboxTxPool(
+		eth.APIBackend.coordinatorAddr,
+		eth.APIBackend.coordinatorKey,
+		eth.txPool,
+		eth.blockchain.Config().ChainID.Uint64(),
+	)
 
 	if eth.APIBackend.coordinator != nil && eth.APIBackend.spClient != nil {
 		eth.APIBackend.SetSequencerCoordinator(eth.APIBackend.coordinator, eth.APIBackend.spClient)
