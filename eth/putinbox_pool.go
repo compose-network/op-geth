@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
+	"math/big"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -156,6 +157,10 @@ func (p *putInboxTxPool) inject() error {
 		return nil
 	}
 
+	if err := p.realignPendingNoncesLocked(); err != nil {
+		return err
+	}
+
 	txs := make([]*types.Transaction, len(p.pending))
 	for i, entry := range p.pending {
 		txs[i] = entry.tx
@@ -198,6 +203,75 @@ func (p *putInboxTxPool) inject() error {
 		"alreadyKnown", alreadyKnownCount,
 		"failed", failedCount)
 
+	return nil
+}
+
+func (p *putInboxTxPool) realignPendingNoncesLocked() error {
+	poolNonce := p.mainPool.PoolNonce(p.coordinatorAddr)
+	pendingCount := uint64(len(p.pending))
+	if pendingCount > poolNonce {
+		pendingCount = poolNonce
+	}
+	targetNonce := poolNonce - pendingCount
+	signer := types.NewLondonSigner(new(big.Int).SetUint64(p.chainID))
+
+	realigned := 0
+	for i := range p.pending {
+		entry := &p.pending[i]
+		if entry.nonce == targetNonce {
+			targetNonce++
+			continue
+		}
+		if err := p.resignEntryWithNonce(entry, targetNonce, signer); err != nil {
+			return err
+		}
+		targetNonce++
+		realigned++
+	}
+
+	if realigned > 0 {
+		log.Info("[SSV] PutInbox pool realigned nonces",
+			"updatedCount", realigned,
+			"nextNonce", targetNonce)
+	}
+
+	p.nextNonce = targetNonce
+	return nil
+}
+
+func (p *putInboxTxPool) resignEntryWithNonce(entry *putInboxTxEntry, nonce uint64, signer types.Signer) error {
+	accessList := entry.tx.AccessList()
+	clonedList := make(types.AccessList, len(accessList))
+	for i, tuple := range accessList {
+		clonedList[i] = types.AccessTuple{
+			Address:     tuple.Address,
+			StorageKeys: append([]common.Hash(nil), tuple.StorageKeys...),
+		}
+	}
+
+	inner := &types.DynamicFeeTx{
+		ChainID:    new(big.Int).Set(entry.tx.ChainId()),
+		Nonce:      nonce,
+		GasTipCap:  new(big.Int).Set(entry.tx.GasTipCap()),
+		GasFeeCap:  new(big.Int).Set(entry.tx.GasFeeCap()),
+		Gas:        entry.tx.Gas(),
+		To:         entry.tx.To(),
+		Value:      new(big.Int).Set(entry.tx.Value()),
+		Data:       append([]byte(nil), entry.tx.Data()...),
+		AccessList: clonedList,
+	}
+	oldHash := entry.tx.Hash()
+
+	newTx := types.NewTx(inner)
+	signedTx, err := types.SignTx(newTx, signer, p.coordinatorKey)
+	if err != nil {
+		return fmt.Errorf("failed to re-sign putInbox tx: %w", err)
+	}
+
+	delete(p.byHash, oldHash)
+	entry.tx = signedTx
+	entry.nonce = nonce
+	p.byHash[signedTx.Hash()] = entry
 	return nil
 }
 
@@ -372,6 +446,9 @@ func (p *putInboxTxPool) dropByXtID(xtID string) int {
 	p.committed = newCommitted
 
 	if dropped > 0 {
+		if err := p.realignPendingNoncesLocked(); err != nil {
+			log.Warn("[SSV] PutInbox pool failed to realign after drop", "err", err)
+		}
 		p.refreshNonceLocked("dropByXtID")
 	}
 
