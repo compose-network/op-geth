@@ -1180,133 +1180,13 @@ func (b *EthAPIBackend) PrepareSequencerTransactionsForBlock(ctx context.Context
 // prepareAndInjectSequencerTransactions re-signs putInbox transactions with fresh nonces
 // from the txpool and injects all sequencer transactions.
 // SSV
-func (b *EthAPIBackend) prepareAndInjectSequencerTransactions(ctx context.Context) error {
-	if b.txTracker == nil {
-		return nil
-	}
+// (Removed) prepareAndInjectSequencerTransactions previously re-signed and injected
+// sequencer-managed transactions via the node txpool. This code path is intentionally
+// removed to avoid PoolNonce-derived drift and pre-inclusion txpool dependency.
+// Keeping a stub to minimize churn; returns nil.
+func (b *EthAPIBackend) prepareAndInjectSequencerTransactions(ctx context.Context) error { return nil }
 
-	type preparedTx struct {
-		signedTx *types.Transaction
-		oldHash  common.Hash
-		newHash  common.Hash
-		oldNonce uint64
-		newNonce uint64
-	}
-	var preparedPutInbox []preparedTx
 
-	b.sequencerTxMutex.Lock()
-	putInboxTxs := b.txTracker.transactionsByKind(sequencerTxPutInbox)
-	if len(putInboxTxs) > 0 {
-		currentNonce := b.eth.txPool.PoolNonce(b.coordinatorAddr)
-		log.Info("[SSV] Preparing putInbox transactions with fresh nonces",
-			"count", len(putInboxTxs),
-			"startNonce", currentNonce,
-			"coordinatorAddr", b.coordinatorAddr.Hex())
-
-		signer := types.NewLondonSigner(b.ChainConfig().ChainID)
-
-		for i, oldTx := range putInboxTxs {
-			nonce := currentNonce + uint64(i)
-
-			var newTx *types.Transaction
-			if oldTx.Type() == types.DynamicFeeTxType {
-				newInner := &types.DynamicFeeTx{
-					ChainID:    oldTx.ChainId(),
-					Nonce:      nonce,
-					GasTipCap:  oldTx.GasTipCap(),
-					GasFeeCap:  oldTx.GasFeeCap(),
-					Gas:        oldTx.Gas(),
-					To:         oldTx.To(),
-					Value:      oldTx.Value(),
-					Data:       oldTx.Data(),
-					AccessList: oldTx.AccessList(),
-				}
-				newTx = types.NewTx(newInner)
-			} else {
-				log.Error("[SSV] Unexpected tx type for putInbox", "type", oldTx.Type(), "txHash", oldTx.Hash().Hex())
-				continue
-			}
-
-			signedTx, err := types.SignTx(newTx, signer, b.coordinatorKey)
-			if err != nil {
-				log.Error("[SSV] Failed to re-sign putInbox tx", "err", err, "nonce", nonce)
-				continue
-			}
-
-			oldHash := oldTx.Hash()
-			newHash := signedTx.Hash()
-
-			if record := b.txTracker.record(oldHash); record != nil {
-				delete(b.txTracker.records, oldHash)
-				record.tx = signedTx
-				b.txTracker.records[newHash] = record
-
-				for idx, hash := range b.txTracker.staged {
-					if hash == oldHash {
-						b.txTracker.staged[idx] = newHash
-						break
-					}
-				}
-			}
-
-			preparedPutInbox = append(preparedPutInbox, preparedTx{
-				signedTx: signedTx,
-				oldHash:  oldHash,
-				newHash:  newHash,
-				oldNonce: oldTx.Nonce(),
-				newNonce: nonce,
-			})
-		}
-	}
-
-	originalTxs := b.txTracker.transactionsByKind(sequencerTxOriginal)
-	b.sequencerTxMutex.Unlock()
-
-	for _, prep := range preparedPutInbox {
-		if err := b.sendTx(ctx, prep.signedTx); err != nil {
-			reason := reasonForGrep(err)
-			log.Warn("[SSV] Failed to inject re-signed putInbox tx",
-				"err", err,
-				"oldHash", prep.oldHash.Hex(),
-				"newHash", prep.newHash.Hex(),
-				"oldNonce", prep.oldNonce,
-				"newNonce", prep.newNonce,
-				"reason", reason)
-		} else {
-			log.Info("[SSV] Re-signed and injected putInbox tx",
-				"oldHash", prep.oldHash.Hex(),
-				"newHash", prep.newHash.Hex(),
-				"oldNonce", prep.oldNonce,
-				"newNonce", prep.newNonce)
-		}
-	}
-
-	if len(originalTxs) > 0 {
-		log.Info("[SSV] Injecting original transactions into pool", "count", len(originalTxs))
-
-		for _, tx := range originalTxs {
-			if err := b.sendTx(ctx, tx); err != nil {
-				reason := reasonForGrep(err)
-				log.Warn("[SSV] Failed to inject original tx",
-					"err", err,
-					"txHash", tx.Hash().Hex(),
-					"nonce", tx.Nonce(),
-					"reason", reason)
-			} else {
-				log.Info("[SSV] Injected original tx",
-					"txHash", tx.Hash().Hex(),
-					"nonce", tx.Nonce())
-			}
-		}
-	}
-
-	return nil
-}
-
-// GetOrderedTransactionsForBlock returns only sequencer-managed transactions in
-// the correct order for block inclusion. Normal mempool transactions are
-// included by the miner after this list, and must not be returned here.
-// SSV
 func (b *EthAPIBackend) GetOrderedTransactionsForBlock(ctx context.Context) (types.Transactions, error) {
 	if b.coordinator == nil {
 		txs, _, _ := b.assembleSequencerBundle()
@@ -1315,19 +1195,14 @@ func (b *EthAPIBackend) GetOrderedTransactionsForBlock(ctx context.Context) (typ
 
 	currentState := b.coordinator.GetState()
 
-	switch currentState {
-	case sequencer.StateBuildingLocked:
-		// During coordination, exclude cross-chain txs - they'll be included after decision
-		return types.Transactions{}, nil
-	case sequencer.StateBuildingFree, sequencer.StateSubmission:
-		// Re-sign putInbox transactions with fresh nonces and inject into pool.
-		if err := b.prepareAndInjectSequencerTransactions(ctx); err != nil {
-			log.Error("[SSV] Failed to prepare sequencer transactions", "err", err)
-		}
-
-		// After SCP completes (BuildingFree) or during final submission, include ready transactions
-		// This ensures transactions are committed in the first possible block after simulation/decision
-		txs, orderedRecords, pendingBundles := b.assembleSequencerBundle()
+    switch currentState {
+    case sequencer.StateBuildingLocked:
+        // During coordination, exclude cross-chain txs - they'll be included after decision
+        return types.Transactions{}, nil
+    case sequencer.StateBuildingFree, sequencer.StateSubmission:
+        // After SCP completes (BuildingFree) or during final submission, include ready transactions
+        // This ensures transactions are committed in the first possible block after simulation/decision
+        txs, orderedRecords, pendingBundles := b.assembleSequencerBundle()
 		if len(txs) > 0 {
 			// Lightweight debug: emit counts by kind
 			b.sequencerTxMutex.RLock()
@@ -1377,8 +1252,8 @@ func (b *EthAPIBackend) GetOrderedTransactionsForBlock(ctx context.Context) (typ
 		}
 		return txs, nil
 	default:
-		return types.Transactions{}, nil
-	}
+        return types.Transactions{}, nil
+    }
 }
 
 func (b *EthAPIBackend) assembleSequencerBundle() (types.Transactions, []sequencerBundleEntry, []sequencerPendingBundle) {
@@ -1394,24 +1269,72 @@ func (b *EthAPIBackend) assembleSequencerBundle() (types.Transactions, []sequenc
 		return types.Transactions{}, ready, pending
 	}
 
-	txs := make(types.Transactions, 0, len(ready))
-	for _, entry := range ready {
-		if entry.tx == nil {
-			continue
-		}
+    // State-based continuity guard: ensure contiguous nonces per account in this block
+    filteredReady := make([]sequencerBundleEntry, 0, len(ready))
+    accountNonces := make(map[common.Address]uint64)
+    blocked := make(map[common.Address]struct{})
+    signer := types.LatestSignerForChainID(b.ChainConfig().ChainID)
 
-		if entry.xtID != "" && b.isXtAborted(entry.xtID) {
-			log.Info("[SSV] Skipping aborted XT in bundle assembly",
-				"xtID", entry.xtID,
-				"txHash", entry.tx.Hash().Hex(),
-				"nonce", entry.tx.Nonce())
-			continue
-		}
+    stateDB, err := b.eth.blockchain.State()
+    if err != nil {
+        // Fallback pass-through if state not available
+        txs := make(types.Transactions, 0, len(ready))
+        for _, entry := range ready {
+            if entry.tx != nil {
+                txs = append(txs, entry.tx)
+            }
+        }
+        return txs, ready, pending
+    }
 
-		txs = append(txs, entry.tx)
-	}
+    for _, entry := range ready {
+        if entry.tx == nil {
+            continue
+        }
+        if entry.xtID != "" && b.isXtAborted(entry.xtID) {
+            log.Info("[SSV] Skipping aborted XT in bundle assembly",
+                "xtID", entry.xtID, "txHash", entry.tx.Hash().Hex(), "nonce", entry.tx.Nonce())
+            continue
+        }
+        from, err := types.Sender(signer, entry.tx)
+        if err != nil {
+            log.Warn("[SSV] Failed to extract sender", "txHash", entry.tx.Hash().Hex(), "error", err)
+            continue
+        }
+        if _, stop := blocked[from]; stop {
+            continue
+        }
+        if _, ok := accountNonces[from]; !ok {
+            accountNonces[from] = stateDB.GetNonce(from)
+        }
+        expected := accountNonces[from]
+        txNonce := entry.tx.Nonce()
+        if txNonce == expected {
+            filteredReady = append(filteredReady, entry)
+            accountNonces[from] = expected + 1
+            continue
+        }
+        if txNonce < expected {
+            log.Info("[SSV] Skipping transaction with old nonce",
+                "txHash", entry.tx.Hash().Hex(), "from", from.Hex(),
+                "txNonce", txNonce, "expectedNonce", expected,
+                "xtID", entry.xtID, "kind", entry.kind.String())
+            continue
+        }
+        log.Warn("[SSV] Nonce gap detected, stopping account transactions",
+            "from", from.Hex(), "txNonce", txNonce, "expectedNonce", expected,
+            "gap", txNonce-expected, "txHash", entry.tx.Hash().Hex(),
+            "xtID", entry.xtID, "kind", entry.kind.String())
+        blocked[from] = struct{}{}
+    }
 
-	return txs, ready, pending
+    txs := make(types.Transactions, 0, len(filteredReady))
+    for _, entry := range filteredReady {
+        if entry.tx != nil {
+            txs = append(txs, entry.tx)
+        }
+    }
+    return txs, filteredReady, pending
 }
 
 // buildSequencerOnlyList assembles only the sequencer-managed transactions preserving
