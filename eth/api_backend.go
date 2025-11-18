@@ -2214,7 +2214,7 @@ func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *roll
 		"pendingWithXtID", len(pendingKeys),
 		"includedXts", len(included))
 
-	keptForRequeue := 0
+	droppedNonIncluded := 0
 	droppedAborted := 0
 
 	for key := range pendingKeys {
@@ -2234,32 +2234,33 @@ func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *roll
 			continue
 		}
 
-		// XT is not in the current IncludedXts. If consensus decided abort,
-		// drop it; otherwise keep it staged for potential re-queue in a
-		// subsequent slot.
-		if isAborted {
-			removedPut, removedOriginal := b.dropTransactionsForXtKey(key, true)
-			if removedPut+removedOriginal > 0 {
+		// XT not included in RequestSeal - drop it.
+		// If SP wants to retry, it will send a fresh StartSC in a future slot.
+		removedPut, removedOriginal := b.dropTransactionsForXtKey(key, true)
+		if removedPut+removedOriginal > 0 {
+			if isAborted {
 				droppedAborted += removedPut + removedOriginal
 				log.Info("[SSV] Dropped aborted XT after RequestSeal",
 					"xtID", key,
 					"putInboxRemoved", removedPut,
 					"originalRemoved", removedOriginal)
 			} else {
-				log.Warn("[SSV] RequestSeal abort cleanup: no transactions found for xtID", "xtID", key)
+				droppedNonIncluded += removedPut + removedOriginal
+				log.Info("[SSV] Dropped non-included XT after RequestSeal",
+					"xtID", key,
+					"putInboxRemoved", removedPut,
+					"originalRemoved", removedOriginal,
+					"reason", "scp_incomplete_before_seal")
 			}
 		} else {
-			keptForRequeue++
-			log.Info("[SSV] Keeping non-included XT staged for re-queue in next slot",
-				"xtID", key,
-				"reason", "scp_incomplete_before_seal")
+			log.Warn("[SSV] RequestSeal cleanup: no transactions found for xtID", "xtID", key)
 		}
 	}
 
-	if keptForRequeue > 0 {
-		log.Info("[SSV] RequestSeal: kept non-included XTs for re-queue",
+	if droppedNonIncluded > 0 || droppedAborted > 0 {
+		log.Info("[SSV] RequestSeal cleanup complete",
 			"slot", requestSeal.Slot,
-			"keptForRequeue", keptForRequeue,
+			"droppedNonIncluded", droppedNonIncluded,
 			"droppedAborted", droppedAborted)
 	}
 
