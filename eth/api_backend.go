@@ -1372,6 +1372,18 @@ func (b *EthAPIBackend) GetOrderedTransactionsForBlock(ctx context.Context) (typ
 				"putInbox_pending", putCount,
 				"original_pending", origCount,
 			)
+		} else {
+			// No sequencer-managed transactions returned for block inclusion. If there
+			// are still staged records, log a warning so we can correlate with any
+			// missing-commit issues during analysis.
+			b.sequencerTxMutex.RLock()
+			if b.txTracker != nil {
+				if pendingTotal := b.txTracker.pendingTotal(); pendingTotal > 0 {
+					log.Warn("[SSV] No sequencer transactions ordered for block despite pending records",
+						"pendingTotal", pendingTotal)
+				}
+			}
+			b.sequencerTxMutex.RUnlock()
 		}
 		if len(pendingBundles) > 0 {
 			for _, bundle := range pendingBundles {
@@ -2206,19 +2218,35 @@ func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *roll
 	droppedAborted := 0
 
 	for key := range pendingKeys {
-		if _, ok := included[key]; ok {
+		isAborted := b.isXtAborted(key)
+		_, isIncluded := included[key]
+
+		// If consensus marks this XT as aborted but it is also present in the
+		// current RequestSeal.IncludedXts set, log an inconsistency. We still
+		// prefer the inclusion signal here and keep the transaction.
+		if isIncluded {
+			if isAborted {
+				log.Error("[SSV] Inconsistent XT state: aborted in consensus but present in RequestSeal.IncludedXts",
+					"xtID", key,
+					"slot", requestSeal.Slot)
+			}
 			log.Info("[SSV] Keeping transaction (included in RequestSeal)", "xtID", key)
 			continue
 		}
 
-		if b.isXtAborted(key) {
+		// XT is not in the current IncludedXts. If consensus decided abort,
+		// drop it; otherwise keep it staged for potential re-queue in a
+		// subsequent slot.
+		if isAborted {
 			removedPut, removedOriginal := b.dropTransactionsForXtKey(key, true)
-			droppedAborted += removedPut + removedOriginal
 			if removedPut+removedOriginal > 0 {
+				droppedAborted += removedPut + removedOriginal
 				log.Info("[SSV] Dropped aborted XT after RequestSeal",
 					"xtID", key,
 					"putInboxRemoved", removedPut,
 					"originalRemoved", removedOriginal)
+			} else {
+				log.Warn("[SSV] RequestSeal abort cleanup: no transactions found for xtID", "xtID", key)
 			}
 		} else {
 			keptForRequeue++
@@ -2395,6 +2423,12 @@ func (b *EthAPIBackend) sendStoredL2Block(ctx context.Context) error {
 			crossChainTxHashes[hash] = true
 		}
 		b.sequencerTxMutex.RUnlock()
+	}
+
+	if len(requestSealIncluded) > 0 && len(crossChainTxHashes) == 0 {
+		log.Warn("[SSV] RequestSeal has included XTs but no committed cross-chain hashes recorded",
+			"slot", slot,
+			"includedXts", len(requestSealIncluded))
 	}
 
 	log.Info("[SSV] Submitting L2 blocks to shared publisher",
