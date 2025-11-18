@@ -1261,12 +1261,32 @@ func (b *EthAPIBackend) GetOrderedTransactionsForBlock(ctx context.Context) (typ
 			log.Error("[SSV] Failed to prepare sequencer transactions", "err", err)
 		}
 
+		// During Submission state, get the RequestSeal inclusion list to filter transactions
+		var requestSealIncluded map[string]bool
+		if currentState == sequencer.StateSubmission {
+			b.rsMutex.RLock()
+			if len(b.lastRequestSealIncluded) > 0 {
+				requestSealIncluded = make(map[string]bool, len(b.lastRequestSealIncluded))
+				for _, xt := range b.lastRequestSealIncluded {
+					requestSealIncluded[hex.EncodeToString(xt)] = true
+				}
+			}
+			b.rsMutex.RUnlock()
+
+			if len(requestSealIncluded) > 0 {
+				log.Info("[SSV] Filtering block transactions based on RequestSeal inclusion list",
+					"state", currentState.String(),
+					"includedCount", len(requestSealIncluded))
+			}
+		}
+
 		var poolEntries []putInboxTxEntry
 		if b.putInboxPool != nil {
 			poolEntries = b.putInboxPool.pendingEntries()
 		}
 		poolTxs := make(types.Transactions, 0, len(poolEntries))
 		poolRecords := make([]sequencerBundleEntry, 0, len(poolEntries))
+		skippedNonIncluded := 0
 		for _, entry := range poolEntries {
 			if entry.xtID != "" && b.isXtAborted(entry.xtID) {
 				log.Info("[SSV] Skipping aborted putInbox tx in pool",
@@ -1275,6 +1295,19 @@ func (b *EthAPIBackend) GetOrderedTransactionsForBlock(ctx context.Context) (typ
 					"nonce", entry.tx.Nonce())
 				continue
 			}
+
+			// During Submission, only include XTs that are in RequestSeal list
+			if requestSealIncluded != nil && entry.xtID != "" {
+				if !requestSealIncluded[entry.xtID] {
+					log.Debug("[SSV] Skipping non-included putInbox tx (not in RequestSeal)",
+						"xtID", entry.xtID,
+						"hash", entry.tx.Hash().Hex(),
+						"state", currentState.String())
+					skippedNonIncluded++
+					continue
+				}
+			}
+
 			poolTxs = append(poolTxs, entry.tx)
 			status := sequencerTxStatusStaged
 			if entry.committed {
@@ -1294,6 +1327,12 @@ func (b *EthAPIBackend) GetOrderedTransactionsForBlock(ctx context.Context) (typ
 		combinedTxs = append(combinedTxs, poolTxs...)
 		combinedTxs = append(combinedTxs, originalTxs...)
 		combinedRecords := append(poolRecords, orderedRecords...)
+
+		if skippedNonIncluded > 0 {
+			log.Info("[SSV] Filtered non-included XTs from block",
+				"state", currentState.String(),
+				"skippedCount", skippedNonIncluded)
+		}
 
 		if len(combinedTxs) > 0 {
 			var putCount int
@@ -1364,6 +1403,23 @@ func (b *EthAPIBackend) assembleSequencerBundle() (types.Transactions, []sequenc
 		return types.Transactions{}, ready, pending
 	}
 
+	// During Submission state, filter based on RequestSeal inclusion list
+	var requestSealIncluded map[string]bool
+	var currentState sequencer.State
+	if b.coordinator != nil {
+		currentState = b.coordinator.GetState()
+	}
+	if currentState == sequencer.StateSubmission {
+		b.rsMutex.RLock()
+		if len(b.lastRequestSealIncluded) > 0 {
+			requestSealIncluded = make(map[string]bool, len(b.lastRequestSealIncluded))
+			for _, xt := range b.lastRequestSealIncluded {
+				requestSealIncluded[hex.EncodeToString(xt)] = true
+			}
+		}
+		b.rsMutex.RUnlock()
+	}
+
 	txs := make(types.Transactions, 0, len(ready))
 	for _, entry := range ready {
 		if entry.tx == nil {
@@ -1376,6 +1432,17 @@ func (b *EthAPIBackend) assembleSequencerBundle() (types.Transactions, []sequenc
 				"txHash", entry.tx.Hash().Hex(),
 				"nonce", entry.tx.Nonce())
 			continue
+		}
+
+		// During Submission, only include XTs that are in RequestSeal list
+		if requestSealIncluded != nil && entry.xtID != "" {
+			if !requestSealIncluded[entry.xtID] {
+				log.Debug("[SSV] Skipping non-included original tx (not in RequestSeal)",
+					"xtID", entry.xtID,
+					"hash", entry.tx.Hash().Hex(),
+					"state", currentState.String())
+				continue
+			}
 		}
 
 		txs = append(txs, entry.tx)
@@ -2135,33 +2202,37 @@ func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *roll
 		"pendingWithXtID", len(pendingKeys),
 		"includedXts", len(included))
 
-	// Drop transactions NOT in the included list
-	totalDroppedPut := 0
-	totalDroppedOriginal := 0
+	keptForRequeue := 0
+	droppedAborted := 0
+
 	for key := range pendingKeys {
 		if _, ok := included[key]; ok {
 			log.Info("[SSV] Keeping transaction (included in RequestSeal)", "xtID", key)
 			continue
 		}
 
-		removedPut, removedOriginal := b.dropTransactionsForXtKey(key, true)
-		totalDroppedPut += removedPut
-		totalDroppedOriginal += removedOriginal
-		if removedPut+removedOriginal > 0 {
-			log.Info("[SSV] Dropped staged sequencer transactions after RequestSeal abort",
-				"xtID", key,
-				"putInboxRemoved", removedPut,
-				"originalRemoved", removedOriginal)
+		if b.isXtAborted(key) {
+			removedPut, removedOriginal := b.dropTransactionsForXtKey(key, true)
+			droppedAborted += removedPut + removedOriginal
+			if removedPut+removedOriginal > 0 {
+				log.Info("[SSV] Dropped aborted XT after RequestSeal",
+					"xtID", key,
+					"putInboxRemoved", removedPut,
+					"originalRemoved", removedOriginal)
+			}
 		} else {
-			log.Warn("[SSV] RequestSeal cleanup: no transactions found for xtID", "xtID", key)
+			keptForRequeue++
+			log.Info("[SSV] Keeping non-included XT staged for re-queue in next slot",
+				"xtID", key,
+				"reason", "scp_incomplete_before_seal")
 		}
 	}
 
-	if totalDroppedPut+totalDroppedOriginal > 0 {
-		log.Info("[SSV] RequestSeal cleanup completed",
+	if keptForRequeue > 0 {
+		log.Info("[SSV] RequestSeal: kept non-included XTs for re-queue",
 			"slot", requestSeal.Slot,
-			"totalDroppedPut", totalDroppedPut,
-			"totalDroppedOriginal", totalDroppedOriginal)
+			"keptForRequeue", keptForRequeue,
+			"droppedAborted", droppedAborted)
 	}
 
 	// Store RequestSeal info after cleanup

@@ -130,6 +130,18 @@ func (p *putInboxTxPool) add(unsignedTx *types.Transaction, xtID string, sequenc
 		return nil, fmt.Errorf("putInbox tx must be DynamicFeeTxType, got %d", unsignedTx.Type())
 	}
 
+	for i := range p.pending {
+		entry := &p.pending[i]
+		if entry.xtID == xtID && entry.sequence == sequence {
+			log.Info("[SSV] PutInbox pool found existing tx for re-queued XT",
+				"xtID", xtID,
+				"sequence", sequence,
+				"nonce", entry.nonce,
+				"hash", entry.tx.Hash().Hex())
+			return entry.tx, nil
+		}
+	}
+
 	nonce := p.nextNonce
 	p.nextNonce++
 
