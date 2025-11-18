@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -13,7 +14,6 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 )
 
-// putInboxTxPool manages the pool of putInbox transactions for the SSV coordinator.
 type putInboxTxPool struct {
 	mu sync.RWMutex
 
@@ -39,6 +39,29 @@ type putInboxTxEntry struct {
 	committed      bool
 	committedBlock uint64
 	committedSlot  uint64
+}
+
+func maxNonce(groups ...[]putInboxTxEntry) uint64 {
+	var highest uint64
+	for _, entries := range groups {
+		for _, entry := range entries {
+			if entry.nonce > highest {
+				highest = entry.nonce
+			}
+		}
+	}
+	return highest
+}
+
+func sequentialFrom(entries []putInboxTxEntry, start uint64) (bool, uint64) {
+	expected := start
+	for i := range entries {
+		if entries[i].nonce != expected {
+			return false, expected
+		}
+		expected++
+	}
+	return true, expected
 }
 
 func newPutInboxTxPool(
@@ -68,11 +91,15 @@ func (p *putInboxTxPool) refreshNonceLocked(reason string) {
 	p.baseNonce = poolNonce
 
 	if pendingCount == 0 && committedCount == 0 {
-		// No outstanding txs, safe to snap nextNonce directly to pool nonce.
 		p.nextNonce = poolNonce
-	} else if poolNonce > p.nextNonce {
-		// Only move forward; never shrink when outstanding txs exist.
-		p.nextNonce = poolNonce
+	} else {
+		expected := maxNonce(p.pending, p.committed) + 1
+		if poolNonce > expected {
+			expected = poolNonce
+		}
+		if expected > p.nextNonce {
+			p.nextNonce = expected
+		}
 	}
 
 	if oldNext != p.nextNonce {
@@ -174,65 +201,111 @@ func (p *putInboxTxPool) inject() error {
 	errs := p.mainPool.Add(txs, false)
 	injectedCount := 0
 	alreadyKnownCount := 0
-	failedCount := 0
+	nonceTooHighCount := 0
+	nonceTooLowCount := 0
+	otherFailCount := 0
 
 	for i, err := range errs {
 		entry := &p.pending[i]
 		if err != nil {
-			if errors.Is(err, txpool.ErrAlreadyKnown) {
+			errMsg := err.Error()
+			switch {
+			case errors.Is(err, txpool.ErrAlreadyKnown):
 				alreadyKnownCount++
-			} else {
-				log.Warn("[SSV] PutInbox pool failed to inject tx",
+				log.Debug("[SSV] PutInbox pool tx already known",
+					"hash", entry.tx.Hash().Hex(),
+					"nonce", entry.nonce)
+			case strings.Contains(errMsg, "nonce too high"):
+				nonceTooHighCount++
+				log.Warn("[SSV] PutInbox pool nonce too high",
+					"hash", entry.tx.Hash().Hex(),
+					"nonce", entry.nonce,
+					"xtID", entry.xtID)
+			case strings.Contains(errMsg, "nonce too low"):
+				nonceTooLowCount++
+				log.Warn("[SSV] PutInbox pool nonce too low",
+					"hash", entry.tx.Hash().Hex(),
+					"nonce", entry.nonce,
+					"xtID", entry.xtID)
+			default:
+				otherFailCount++
+				log.Error("[SSV] PutInbox pool failed to inject tx",
 					"hash", entry.tx.Hash().Hex(),
 					"nonce", entry.nonce,
 					"xtID", entry.xtID,
 					"err", err)
-				failedCount++
 			}
 		} else {
 			injectedCount++
 		}
 	}
 
-	if failedCount > 0 {
-		return fmt.Errorf("failed to inject %d/%d putInbox transactions", failedCount, len(txs))
+	totalFailed := nonceTooHighCount + nonceTooLowCount + otherFailCount
+	if totalFailed > 0 {
+		log.Error("[SSV] PutInbox pool injection had failures",
+			"injected", injectedCount,
+			"alreadyKnown", alreadyKnownCount,
+			"nonceTooHigh", nonceTooHighCount,
+			"nonceTooLow", nonceTooLowCount,
+			"otherFails", otherFailCount,
+			"total", len(txs))
+
+		if nonceTooHighCount > 0 || nonceTooLowCount > 0 {
+			return fmt.Errorf("nonce mismatch during injection: %d too high, %d too low",
+				nonceTooHighCount, nonceTooLowCount)
+		}
+		if otherFailCount > 0 {
+			return fmt.Errorf("failed to inject %d/%d putInbox transactions", otherFailCount, len(txs))
+		}
 	}
 
 	log.Info("[SSV] PutInbox pool injection complete",
 		"injected", injectedCount,
 		"alreadyKnown", alreadyKnownCount,
-		"failed", failedCount)
+		"nonceTooHigh", nonceTooHighCount,
+		"nonceTooLow", nonceTooLowCount,
+		"otherFails", otherFailCount)
 
 	return nil
 }
 
 func (p *putInboxTxPool) realignPendingNoncesLocked() error {
-	poolNonce := p.mainPool.PoolNonce(p.coordinatorAddr)
-	pendingCount := uint64(len(p.pending))
-	if pendingCount > poolNonce {
-		pendingCount = poolNonce
+	if len(p.pending) == 0 {
+		return nil
 	}
-	targetNonce := poolNonce - pendingCount
+
+	poolNonce := p.mainPool.PoolNonce(p.coordinatorAddr)
 	signer := types.NewLondonSigner(new(big.Int).SetUint64(p.chainID))
 
+	if ok, next := sequentialFrom(p.pending, poolNonce); ok {
+		p.nextNonce = next
+		return nil
+	}
+
+	log.Warn("[SSV] PutInbox pool realigning nonces",
+		"poolNonce", poolNonce,
+		"firstPendingNonce", p.pending[0].nonce,
+		"pendingCount", len(p.pending),
+		"reason", "gap_or_mismatch")
+
+	targetNonce := poolNonce
 	realigned := 0
 	for i := range p.pending {
 		entry := &p.pending[i]
-		if entry.nonce == targetNonce {
-			targetNonce++
-			continue
-		}
-		if err := p.resignEntryWithNonce(entry, targetNonce, signer); err != nil {
-			return err
+		if entry.nonce != targetNonce {
+			if err := p.resignEntryWithNonce(entry, targetNonce, signer); err != nil {
+				return err
+			}
+			realigned++
 		}
 		targetNonce++
-		realigned++
 	}
 
 	if realigned > 0 {
 		log.Info("[SSV] PutInbox pool realigned nonces",
 			"updatedCount", realigned,
-			"nextNonce", targetNonce)
+			"startNonce", poolNonce,
+			"endNonce", targetNonce-1)
 	}
 
 	p.nextNonce = targetNonce
