@@ -1333,6 +1333,18 @@ func (b *EthAPIBackend) GetOrderedTransactionsForBlock(ctx context.Context) (typ
 				"putInbox_pending", putCount,
 				"original_pending", origCount,
 			)
+		} else {
+			// No sequencer-managed transactions returned for block inclusion. If there
+			// are still staged records, log a warning so we can correlate with any
+			// missing-commit issues during analysis.
+			b.sequencerTxMutex.RLock()
+			if b.txTracker != nil {
+				if pendingTotal := b.txTracker.pendingTotal(); pendingTotal > 0 {
+					log.Warn("[SSV] No sequencer transactions ordered for block despite pending records",
+						"pendingTotal", pendingTotal)
+				}
+			}
+			b.sequencerTxMutex.RUnlock()
 		}
 		if len(pendingBundles) > 0 {
 			for _, bundle := range pendingBundles {
@@ -2099,8 +2111,11 @@ func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *roll
 		"mailboxes", mailboxCount,
 	)
 
-	// Clean up non-included transactions FIRST, before storing RequestSeal info
-	// This ensures transactions rejected by SCP cannot be included in blocks built during Submission state
+	// Clean up aborted transactions FIRST, before storing RequestSeal info.
+	// This ensures transactions rejected by SCP cannot be included in blocks built
+	// during Submission state. Transactions for XTs that are still live or have
+	// been committed must not be dropped here, even if they are not listed in
+	// the current RequestSeal.IncludedXts set.
 	included := make(map[string]struct{}, len(requestSeal.IncludedXts))
 	for _, xt := range requestSeal.IncludedXts {
 		included[hex.EncodeToString(xt)] = struct{}{}
@@ -2135,25 +2150,43 @@ func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *roll
 		"pendingWithXtID", len(pendingKeys),
 		"includedXts", len(included))
 
-	// Drop transactions NOT in the included list
+	// Drop transactions only for XTs that have been explicitly aborted by the
+	// consensus layer. XTs that are committed or still in-flight must be
+	// preserved, even if they are not listed in this slot's IncludedXts set.
 	totalDroppedPut := 0
 	totalDroppedOriginal := 0
 	for key := range pendingKeys {
-		if _, ok := included[key]; ok {
-			log.Info("[SSV] Keeping transaction (included in RequestSeal)", "xtID", key)
+		// Respect consensus decision: only drop XTs that were decided abort.
+		isAborted := b.isXtAborted(key)
+		_, isIncluded := included[key]
+
+		if isAborted {
+			if isIncluded {
+				log.Error("[SSV] Inconsistent XT state: aborted in consensus but present in RequestSeal.IncludedXts",
+					"xtID", key,
+					"slot", requestSeal.Slot)
+			}
+
+			removedPut, removedOriginal := b.dropTransactionsForXtKey(key, true)
+			totalDroppedPut += removedPut
+			totalDroppedOriginal += removedOriginal
+			if removedPut+removedOriginal > 0 {
+				log.Info("[SSV] Dropped staged sequencer transactions after RequestSeal abort",
+					"xtID", key,
+					"putInboxRemoved", removedPut,
+					"originalRemoved", removedOriginal)
+			} else {
+				log.Warn("[SSV] RequestSeal abort cleanup: no transactions found for xtID", "xtID", key)
+			}
 			continue
 		}
 
-		removedPut, removedOriginal := b.dropTransactionsForXtKey(key, true)
-		totalDroppedPut += removedPut
-		totalDroppedOriginal += removedOriginal
-		if removedPut+removedOriginal > 0 {
-			log.Info("[SSV] Dropped staged sequencer transactions after RequestSeal abort",
-				"xtID", key,
-				"putInboxRemoved", removedPut,
-				"originalRemoved", removedOriginal)
+		// XT is not aborted according to consensus; keep local records. If it
+		// also appears in the current IncludedXts set, log that for clarity.
+		if isIncluded {
+			log.Info("[SSV] Keeping transaction (included in RequestSeal)", "xtID", key)
 		} else {
-			log.Warn("[SSV] RequestSeal cleanup: no transactions found for xtID", "xtID", key)
+			log.Info("[SSV] Keeping transaction (XT not aborted in consensus)", "xtID", key)
 		}
 	}
 
@@ -2324,6 +2357,12 @@ func (b *EthAPIBackend) sendStoredL2Block(ctx context.Context) error {
 			crossChainTxHashes[hash] = true
 		}
 		b.sequencerTxMutex.RUnlock()
+	}
+
+	if len(requestSealIncluded) > 0 && len(crossChainTxHashes) == 0 {
+		log.Warn("[SSV] RequestSeal has included XTs but no committed cross-chain hashes recorded",
+			"slot", slot,
+			"includedXts", len(requestSealIncluded))
 	}
 
 	log.Info("[SSV] Submitting L2 blocks to shared publisher",
