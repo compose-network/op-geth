@@ -2039,10 +2039,18 @@ func (b *EthAPIBackend) dropTransactionsForXtKey(key string, reject bool) (int, 
 
 	rejectedCount := 0
 	if reject {
-		for _, hash := range txHashesToRemove {
-			if tx := b.eth.txPool.Get(hash); tx != nil {
-				tx.SetRejected()
-				rejectedCount++
+		for _, record := range removedRecords {
+			if record == nil || record.tx == nil {
+				continue
+			}
+
+			shouldReject := record.kind == sequencerTxPutInbox || record.status == sequencerTxStatusCommitted
+
+			if shouldReject {
+				if tx := b.eth.txPool.Get(record.tx.Hash()); tx != nil {
+					tx.SetRejected()
+					rejectedCount++
+				}
 			}
 		}
 	}
