@@ -1218,11 +1218,10 @@ func (b *EthAPIBackend) clearAllSequencerTransactions() {
 		}
 	}
 
+	rejectedInPool := 0
 	for _, hash := range txHashesToReject {
-		if tx := b.eth.txPool.Get(hash); tx != nil {
-			tx.SetRejected()
-			log.Info("[SSV] Marked cleared tx as rejected in txpool",
-				"txHash", hash.Hex())
+		if b.rejectTxInPool(hash, "clear_all") {
+			rejectedInPool++
 		}
 	}
 
@@ -1231,7 +1230,7 @@ func (b *EthAPIBackend) clearAllSequencerTransactions() {
 		"putInbox", totalPutRemoved+remainingPut,
 		"original", totalOrigRemoved+remainingOrig,
 		"poolCleared", poolCleared,
-		"rejectedInPool", len(txHashesToReject))
+		"rejectedInPool", rejectedInPool)
 
 	if miner := b.eth.miner; miner != nil && (totalPutRemoved+remainingPut > 0 || totalOrigRemoved+remainingOrig > 0) {
 		miner.InvalidatePendingCache()
@@ -2113,8 +2112,7 @@ func (b *EthAPIBackend) finalizeXt(key string, outcome xtOutcome) (int, int) {
 		}
 
 		if b.shouldRejectRecordForOutcome(outcome, record) {
-			if tx := b.eth.txPool.Get(record.tx.Hash()); tx != nil {
-				tx.SetRejected()
+			if b.rejectTxInPool(record.tx.Hash(), outcome.String()) {
 				rejectedCount++
 			}
 		}
@@ -2156,6 +2154,19 @@ func (b *EthAPIBackend) shouldRejectRecordForOutcome(outcome xtOutcome, record *
 	default:
 		return false
 	}
+}
+
+// rejectTxInPool looks up a transaction by hash in the underlying txpool and marks it as
+// rejected if present. It returns true if the transaction was found and updated.
+func (b *EthAPIBackend) rejectTxInPool(hash common.Hash, reason string) bool {
+	if tx := b.eth.txPool.Get(hash); tx != nil {
+		tx.SetRejected()
+		log.Info("[SSV] Marked tx as rejected in txpool",
+			"txHash", hash.Hex(),
+			"reason", reason)
+		return true
+	}
+	return false
 }
 
 // SetSequencerCoordinator wires an SBCP sequencer coordinator, consensus callbacks, and SP client routing.
