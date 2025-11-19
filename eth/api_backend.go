@@ -147,6 +147,33 @@ type EthAPIBackend struct {
 	pendingBlockSlot  uint64
 }
 
+// xtOutcome represents the final outcome of a cross-rollup transaction (XT) from
+// the execution client's point of view. It is used to drive centralized cleanup
+// and txpool rejection policy.
+type xtOutcome int
+
+const (
+	xtOutcomeDelivered xtOutcome = iota
+	xtOutcomeAborted
+	xtOutcomeNotIncluded
+	xtOutcomeCleared
+)
+
+func (o xtOutcome) String() string {
+	switch o {
+	case xtOutcomeDelivered:
+		return "delivered"
+	case xtOutcomeAborted:
+		return "aborted"
+	case xtOutcomeNotIncluded:
+		return "not_included"
+	case xtOutcomeCleared:
+		return "cleared"
+	default:
+		return "unknown"
+	}
+}
+
 // isXtAborted queries the sequencer coordinator (protocol layer) to determine
 // if an XT should be rejected. The coordinator is the authoritative source for
 // XT decisions made during consensus.
@@ -1999,9 +2026,14 @@ func (b *EthAPIBackend) logSequencerRemoval(record *sequencerTxRecord, reason st
 	)
 }
 
-// dropTransactionsForXtKey removes all staged transactions associated with the provided xtID.
-// When reject is true, the transactions are also marked as rejected inside the txpool.
-func (b *EthAPIBackend) dropTransactionsForXtKey(key string, reject bool) (int, int) {
+// finalizeXt removes all staged transactions associated with the provided xtID and, depending
+// on the outcome, may also mark those transactions as rejected in the txpool. This centralizes
+// XT cleanup behaviour so that higher-level callers only need to decide on the XT outcome.
+//
+// NOTE: In this initial refactor, behaviour matches the previous dropTransactionsForXtKey
+// helper when it was called with reject=true. Future refactors can adjust rejection policy
+// per outcome without changing call sites.
+func (b *EthAPIBackend) finalizeXt(key string, outcome xtOutcome) (int, int) {
 	if key == "" {
 		return 0, 0
 	}
@@ -2027,6 +2059,7 @@ func (b *EthAPIBackend) dropTransactionsForXtKey(key string, reject bool) (int, 
 			removedCommitted++
 		}
 
+		// Keep the removal reason identical to previous behaviour for now.
 		b.logSequencerRemoval(record, "drop_xt")
 		txHashesToRemove = append(txHashesToRemove, record.tx.Hash())
 	}
@@ -2037,8 +2070,12 @@ func (b *EthAPIBackend) dropTransactionsForXtKey(key string, reject bool) (int, 
 			"count", removedCommitted)
 	}
 
+	// For now, only outcomes that previously used reject=true (aborted / not-included)
+	// will trigger txpool rejection. Other outcomes can be wired up in later refactors.
+	shouldRejectOutcome := outcome == xtOutcomeAborted || outcome == xtOutcomeNotIncluded
+
 	rejectedCount := 0
-	if reject {
+	if shouldRejectOutcome {
 		for _, record := range removedRecords {
 			if record == nil || record.tx == nil {
 				continue
@@ -2244,7 +2281,11 @@ func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *roll
 
 		// XT not included in RequestSeal - drop it.
 		// If SP wants to retry, it will send a fresh StartSC in a future slot.
-		removedPut, removedOriginal := b.dropTransactionsForXtKey(key, true)
+		outcome := xtOutcomeNotIncluded
+		if isAborted {
+			outcome = xtOutcomeAborted
+		}
+		removedPut, removedOriginal := b.finalizeXt(key, outcome)
 		if removedPut+removedOriginal > 0 {
 			if isAborted {
 				droppedAborted += removedPut + removedOriginal
@@ -2389,7 +2430,7 @@ func (b *EthAPIBackend) cleanupAbortedTransactionCallback(_ context.Context, xtI
 	b.pendingBlockMutex.Unlock()
 
 	// Remove staged transactions
-	removedPut, removedOriginal := b.dropTransactionsForXtKey(key, true)
+	removedPut, removedOriginal := b.finalizeXt(key, xtOutcomeAborted)
 	if removedPut+removedOriginal > 0 {
 		log.Info("[SSV] Dropped aborted transactions via callback",
 			"xtID", key,
