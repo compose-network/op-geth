@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"sort"
 	"sync/atomic"
 	"time"
 
@@ -916,20 +915,7 @@ func (miner *Miner) fillTransactionsWithSequencerOrdering(interrupt *atomic.Int3
 		addToSkip(backend.GetPendingPutInboxTxs())
 		addToSkip(backend.GetPendingOriginalTxs())
 
-		sequencerByAccount := make(map[common.Address][]*types.Transaction)
-		signer := types.LatestSignerForChainID(miner.chainConfig.ChainID)
-		for _, tx := range orderedSequencerTxs {
-			if tx == nil {
-				continue
-			}
-			sender, err := types.Sender(signer, tx)
-			if err != nil {
-				continue
-			}
-			sequencerByAccount[sender] = append(sequencerByAccount[sender], tx)
-		}
-
-		filterAndMerge := func(m map[common.Address][]*txpool.LazyTransaction) {
+		filterSeqTxs := func(m map[common.Address][]*txpool.LazyTransaction) {
 			for addr, txs := range m {
 				out := txs[:0]
 				for _, lazy := range txs {
@@ -948,56 +934,81 @@ func (miner *Miner) fillTransactionsWithSequencerOrdering(interrupt *atomic.Int3
 				}
 			}
 		}
-		filterAndMerge(prioPlainTxs)
-		filterAndMerge(prioBlobTxs)
-		filterAndMerge(normalPlainTxs)
-		filterAndMerge(normalBlobTxs)
+		filterSeqTxs(prioPlainTxs)
+		filterSeqTxs(prioBlobTxs)
+		filterSeqTxs(normalPlainTxs)
+		filterSeqTxs(normalBlobTxs)
 
-		mergeSequencerIntoPool := func(pool map[common.Address][]*txpool.LazyTransaction) {
-			for addr, seqTxs := range sequencerByAccount {
-				poolTxs := pool[addr]
-				merged := make([]*txpool.LazyTransaction, 0, len(poolTxs)+len(seqTxs))
+		signer := types.LatestSignerForChainID(miner.chainConfig.ChainID)
+		sequencerTxCount := 0
+		committedMempool := make(map[common.Hash]struct{})
 
-				for _, tx := range seqTxs {
-					merged = append(merged, &txpool.LazyTransaction{Tx: tx, Hash: tx.Hash()})
-				}
-				merged = append(merged, poolTxs...)
-
-				sort.Slice(merged, func(i, j int) bool {
-					txI := merged[i].Resolve()
-					txJ := merged[j].Resolve()
-					if txI == nil || txJ == nil {
-						return false
-					}
-					return txI.Nonce() < txJ.Nonce()
-				})
-
-				pool[addr] = merged
-				delete(sequencerByAccount, addr)
+		for _, tx := range orderedSequencerTxs {
+			if tx == nil {
+				continue
+			}
+			if env.gasPool != nil && env.gasPool.Gas() < params.TxGas {
+				break
 			}
 
-			for addr, seqTxs := range sequencerByAccount {
-				merged := make([]*txpool.LazyTransaction, 0, len(seqTxs))
-				for _, tx := range seqTxs {
-					merged = append(merged, &txpool.LazyTransaction{Tx: tx, Hash: tx.Hash()})
-				}
-				sort.Slice(merged, func(i, j int) bool {
-					txI := merged[i].Resolve()
-					txJ := merged[j].Resolve()
-					if txI == nil || txJ == nil {
-						return false
-					}
-					return txI.Nonce() < txJ.Nonce()
-				})
-				pool[addr] = merged
+			sender, err := types.Sender(signer, tx)
+			if err != nil {
+				continue
 			}
+
+			poolTxs := normalPlainTxs[sender]
+			for _, lazy := range poolTxs {
+				poolTx := lazy.Resolve()
+				if poolTx == nil {
+					continue
+				}
+				if _, done := committedMempool[poolTx.Hash()]; done {
+					continue
+				}
+				if poolTx.Nonce() >= tx.Nonce() {
+					break
+				}
+				if env.gasPool != nil && env.gasPool.Gas() < params.TxGas {
+					break
+				}
+				env.state.SetTxContext(poolTx.Hash(), env.tcount)
+				if err := miner.commitTransaction(env, poolTx); err == nil {
+					committedMempool[poolTx.Hash()] = struct{}{}
+				}
+			}
+
+			env.state.SetTxContext(tx.Hash(), env.tcount)
+			if err := miner.commitTransaction(env, tx); err != nil {
+				log.Error("[SSV] Failed to commit sequencer transaction",
+					"txHash", tx.Hash().Hex(), "err", err)
+				continue
+			}
+			sequencerTxCount++
 		}
-		mergeSequencerIntoPool(normalPlainTxs)
 
-		log.Info("[SSV] Merged sequencer transactions into pool",
+		for addr, txs := range normalPlainTxs {
+			for _, lazy := range txs {
+				tx := lazy.Resolve()
+				if tx == nil {
+					continue
+				}
+				if _, done := committedMempool[tx.Hash()]; done {
+					continue
+				}
+				if env.gasPool != nil && env.gasPool.Gas() < params.TxGas {
+					break
+				}
+				env.state.SetTxContext(tx.Hash(), env.tcount)
+				miner.commitTransaction(env, tx)
+			}
+			delete(normalPlainTxs, addr)
+		}
+
+		log.Info("[SSV] Committed sequencer transactions",
 			"putInbox", len(backend.GetPendingPutInboxTxs()),
 			"original", len(backend.GetPendingOriginalTxs()),
-			"sequencer_txs", len(orderedSequencerTxs))
+			"committed", sequencerTxCount,
+			"attempted", len(orderedSequencerTxs))
 
 		prioCount := miner.commitAccountBasedTransactions(interrupt, env, prioPlainTxs)
 		prioCount += miner.commitAccountBasedTransactions(interrupt, env, prioBlobTxs)
@@ -1005,12 +1016,12 @@ func (miner *Miner) fillTransactionsWithSequencerOrdering(interrupt *atomic.Int3
 		normalCount := miner.commitAccountBasedTransactions(interrupt, env, normalPlainTxs)
 		normalCount += miner.commitAccountBasedTransactions(interrupt, env, normalBlobTxs)
 
-		if prioCount > 0 || normalCount > 0 {
+		if sequencerTxCount > 0 || prioCount > 0 || normalCount > 0 {
 			log.Info("[SSV] Block transactions",
-				"sequencer", len(orderedSequencerTxs),
+				"sequencer", sequencerTxCount,
 				"priority", prioCount,
 				"normal", normalCount,
-				"total", prioCount+normalCount)
+				"total", sequencerTxCount+prioCount+normalCount)
 		}
 	} else {
 		log.Info("[SSV] Backend doesn't support sequencer ordering, falling back to normal")
