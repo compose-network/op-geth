@@ -2193,10 +2193,8 @@ func (b *EthAPIBackend) finalizeXt(key string, outcome xtOutcome) (int, int) {
 		if record == nil || record.tx == nil {
 			continue
 		}
-		if b.shouldRejectRecordForOutcome(outcome, record) {
-			if b.rejectTxInPool(record.tx.Hash(), outcome.String()) {
-				rejectedCount++
-			}
+		if b.rejectTxInPool(record.tx.Hash(), outcome.String()) {
+			rejectedCount++
 		}
 	}
 
@@ -2214,25 +2212,6 @@ func (b *EthAPIBackend) finalizeXt(key string, outcome xtOutcome) (int, int) {
 	}
 
 	return removedPutInbox, removedOriginal
-}
-
-// shouldRejectRecordForOutcome determines whether a sequencer transaction record should be
-// marked as rejected in the txpool for a given XT outcome. This encodes the rejection policy
-// in one place so call sites only need to choose the XT outcome.
-func (b *EthAPIBackend) shouldRejectRecordForOutcome(outcome xtOutcome, record *sequencerTxRecord) bool {
-	if record == nil || record.tx == nil {
-		return false
-	}
-
-	switch outcome {
-	case xtOutcomeDelivered, xtOutcomeAborted, xtOutcomeNotIncluded, xtOutcomeCleared:
-		// For now, be conservative and reject all sequencer-managed records for any
-		// finalized XT outcome. This matches the previous stage behaviour where
-		// cleared/aborted flows rejected all removed transactions.
-		return true
-	default:
-		return false
-	}
 }
 
 // rejectTxInPool looks up a transaction by hash in the underlying txpool and marks it as
