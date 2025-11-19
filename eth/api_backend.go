@@ -1165,9 +1165,44 @@ func (b *EthAPIBackend) ClearSequencerTransactionsAfterBlock() {
 // clearAllSequencerTransactions performs the actual clearing of transactions
 // SSV
 func (b *EthAPIBackend) clearAllSequencerTransactions() {
+	// First, finalize all XTs that are currently tracked, so XT-specific cleanup
+	// (including txpool rejection) goes through the centralized path.
+	xtIDs := make(map[string]struct{})
+
+	b.sequencerTxMutex.RLock()
+	if b.txTracker != nil {
+		for xtID := range b.txTracker.allXTIDsLocked() {
+			if xtID != "" {
+				xtIDs[xtID] = struct{}{}
+			}
+		}
+	}
+	b.sequencerTxMutex.RUnlock()
+
+	if b.putInboxPool != nil {
+		entries := b.putInboxPool.pendingEntries()
+		for _, entry := range entries {
+			if entry.xtID != "" {
+				xtIDs[entry.xtID] = struct{}{}
+			}
+		}
+	}
+
+	totalPutRemoved := 0
+	totalOrigRemoved := 0
+	for xtID := range xtIDs {
+		removedPut, removedOrig := b.finalizeXt(xtID, xtOutcomeCleared)
+		totalPutRemoved += removedPut
+		totalOrigRemoved += removedOrig
+	}
+
+	// As a safety net, clear any remaining sequencer records that may not be
+	// associated with an xtID (should be rare). This preserves the behaviour
+	// of the previous implementation while routing XT-tagged txs through
+	// finalizeXt.
 	b.sequencerTxMutex.Lock()
 	tracker := b.ensureTrackerLocked()
-	removedPutInbox, removedOriginal, removedRecords := tracker.clearAll()
+	remainingPut, remainingOrig, remainingRecords := tracker.clearAll()
 	b.sequencerTxMutex.Unlock()
 
 	poolCleared := 0
@@ -1175,15 +1210,10 @@ func (b *EthAPIBackend) clearAllSequencerTransactions() {
 		poolCleared = b.putInboxPool.clearAll()
 	}
 
-	if len(removedRecords) > 0 {
-		for _, record := range removedRecords {
-			b.logSequencerRemoval(record, "clear_all")
-		}
-	}
-
-	txHashesToReject := make([]common.Hash, 0, len(removedRecords))
-	for _, record := range removedRecords {
+	txHashesToReject := make([]common.Hash, 0, len(remainingRecords))
+	for _, record := range remainingRecords {
 		if record != nil && record.tx != nil {
+			b.logSequencerRemoval(record, "clear_all")
 			txHashesToReject = append(txHashesToReject, record.tx.Hash())
 		}
 	}
@@ -1197,12 +1227,13 @@ func (b *EthAPIBackend) clearAllSequencerTransactions() {
 	}
 
 	log.Info("[SSV] Cleared sequencer transactions",
-		"putInbox", removedPutInbox,
-		"original", removedOriginal,
+		"xtCount", len(xtIDs),
+		"putInbox", totalPutRemoved+remainingPut,
+		"original", totalOrigRemoved+remainingOrig,
 		"poolCleared", poolCleared,
 		"rejectedInPool", len(txHashesToReject))
 
-	if miner := b.eth.miner; miner != nil && (removedPutInbox > 0 || removedOriginal > 0) {
+	if miner := b.eth.miner; miner != nil && (totalPutRemoved+remainingPut > 0 || totalOrigRemoved+remainingOrig > 0) {
 		miner.InvalidatePendingCache()
 	}
 }
@@ -1770,41 +1801,49 @@ func (b *EthAPIBackend) clearCommittedSequencerTransactions(committed map[common
 		return
 	}
 
-	b.sequencerTxMutex.Lock()
-	tracker := b.ensureTrackerLocked()
-	removedPutInbox, removedOriginal, removedRecords := tracker.markDelivered(committed)
-	b.sequencerTxMutex.Unlock()
+	// Determine which XTs are affected by the committed hashes by consulting both the
+	// sequencer tracker and the putInbox pool.
+	xtIDs := make(map[string]struct{})
 
-	poolCleared := 0
+	b.sequencerTxMutex.RLock()
+	if b.txTracker != nil {
+		for hash := range committed {
+			if rec := b.txTracker.record(hash); rec != nil && rec.xtID != "" {
+				xtIDs[rec.xtID] = struct{}{}
+			}
+		}
+	}
+	b.sequencerTxMutex.RUnlock()
+
 	if b.putInboxPool != nil {
-		poolCleared = b.putInboxPool.clearCommitted(committed)
-	}
-
-	hashes := make([]common.Hash, 0, len(removedRecords))
-	for _, record := range removedRecords {
-		if record == nil || record.tx == nil {
-			continue
-		}
-		hash := record.tx.Hash()
-		hashes = append(hashes, hash)
-		b.logSequencerRemoval(record, "delivered")
-	}
-
-	for _, hash := range hashes {
-		if tx := b.eth.txPool.Get(hash); tx != nil {
-			tx.SetRejected()
-			log.Info("[SSV] Marked committed tx as rejected in txpool to prevent re-inclusion",
-				"txHash", hash.Hex())
+		entries := b.putInboxPool.pendingEntries()
+		for _, entry := range entries {
+			if entry.xtID == "" {
+				continue
+			}
+			if committed[entry.tx.Hash()] {
+				xtIDs[entry.xtID] = struct{}{}
+			}
 		}
 	}
 
-	if removedPutInbox > 0 || removedOriginal > 0 || poolCleared > 0 {
-		log.Info("[SSV] Cleared committed cross-chain txs after delivery",
-			"putInboxRemoved", removedPutInbox,
-			"originalRemoved", removedOriginal,
-			"poolCleared", poolCleared,
-			"rejectedInPool", len(hashes))
+	if len(xtIDs) == 0 {
+		log.Warn("[SSV] clearCommittedSequencerTransactions called with committed hashes but no xtIDs found")
+		return
 	}
+
+	totalPutRemoved := 0
+	totalOrigRemoved := 0
+	for xtID := range xtIDs {
+		removedPut, removedOrig := b.finalizeXt(xtID, xtOutcomeDelivered)
+		totalPutRemoved += removedPut
+		totalOrigRemoved += removedOrig
+	}
+
+	log.Info("[SSV] Cleared committed cross-chain txs after delivery",
+		"xtCount", len(xtIDs),
+		"putInboxRemoved", totalPutRemoved,
+		"originalRemoved", totalOrigRemoved)
 }
 
 func (b *EthAPIBackend) GetPendingOriginalTxs() []*types.Transaction {
@@ -2029,10 +2068,6 @@ func (b *EthAPIBackend) logSequencerRemoval(record *sequencerTxRecord, reason st
 // finalizeXt removes all staged transactions associated with the provided xtID and, depending
 // on the outcome, may also mark those transactions as rejected in the txpool. This centralizes
 // XT cleanup behaviour so that higher-level callers only need to decide on the XT outcome.
-//
-// NOTE: In this initial refactor, behaviour matches the previous dropTransactionsForXtKey
-// helper when it was called with reject=true. Future refactors can adjust rejection policy
-// per outcome without changing call sites.
 func (b *EthAPIBackend) finalizeXt(key string, outcome xtOutcome) (int, int) {
 	if key == "" {
 		return 0, 0
@@ -2059,35 +2094,28 @@ func (b *EthAPIBackend) finalizeXt(key string, outcome xtOutcome) (int, int) {
 			removedCommitted++
 		}
 
-		// Keep the removal reason identical to previous behaviour for now.
-		b.logSequencerRemoval(record, "drop_xt")
+		// Tag removal with the XT outcome for clearer diagnostics.
+		b.logSequencerRemoval(record, outcome.String())
 		txHashesToRemove = append(txHashesToRemove, record.tx.Hash())
 	}
 
 	if removedCommitted > 0 {
-		log.Info("[SSV] Cleared committed markers for aborted XT",
+		log.Info("[SSV] Cleared committed markers for XT",
 			"xtID", key,
-			"count", removedCommitted)
+			"count", removedCommitted,
+			"outcome", outcome.String())
 	}
 
-	// For now, only outcomes that previously used reject=true (aborted / not-included)
-	// will trigger txpool rejection. Other outcomes can be wired up in later refactors.
-	shouldRejectOutcome := outcome == xtOutcomeAborted || outcome == xtOutcomeNotIncluded
-
 	rejectedCount := 0
-	if shouldRejectOutcome {
-		for _, record := range removedRecords {
-			if record == nil || record.tx == nil {
-				continue
-			}
+	for _, record := range removedRecords {
+		if record == nil || record.tx == nil {
+			continue
+		}
 
-			shouldReject := record.kind == sequencerTxPutInbox || record.status == sequencerTxStatusCommitted
-
-			if shouldReject {
-				if tx := b.eth.txPool.Get(record.tx.Hash()); tx != nil {
-					tx.SetRejected()
-					rejectedCount++
-				}
+		if b.shouldRejectRecordForOutcome(outcome, record) {
+			if tx := b.eth.txPool.Get(record.tx.Hash()); tx != nil {
+				tx.SetRejected()
+				rejectedCount++
 			}
 		}
 	}
@@ -2106,6 +2134,28 @@ func (b *EthAPIBackend) finalizeXt(key string, outcome xtOutcome) (int, int) {
 	}
 
 	return removedPutInbox, removedOriginal
+}
+
+// shouldRejectRecordForOutcome determines whether a sequencer transaction record should be
+// marked as rejected in the txpool for a given XT outcome. This encodes the rejection policy
+// in one place so call sites only need to choose the XT outcome.
+func (b *EthAPIBackend) shouldRejectRecordForOutcome(outcome xtOutcome, record *sequencerTxRecord) bool {
+	if record == nil || record.tx == nil {
+		return false
+	}
+
+	switch outcome {
+	case xtOutcomeDelivered, xtOutcomeCleared:
+		// Once an XT has been delivered or we explicitly clear all sequencer state, we never
+		// want its transactions to re-enter the pool.
+		return true
+	case xtOutcomeAborted, xtOutcomeNotIncluded:
+		// For aborted / non-included XTs, we match the previous behaviour of dropTransactionsForXtKey:
+		// reject putInbox transactions and any records that were already marked committed.
+		return record.kind == sequencerTxPutInbox || record.status == sequencerTxStatusCommitted
+	default:
+		return false
+	}
 }
 
 // SetSequencerCoordinator wires an SBCP sequencer coordinator, consensus callbacks, and SP client routing.
