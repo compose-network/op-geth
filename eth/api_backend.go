@@ -2214,7 +2214,7 @@ func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *roll
 		"pendingWithXtID", len(pendingKeys),
 		"includedXts", len(included))
 
-	keptForRequeue := 0
+	requeuedForRetry := 0
 	droppedAborted := 0
 
 	for key := range pendingKeys {
@@ -2248,18 +2248,25 @@ func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *roll
 			} else {
 				log.Warn("[SSV] RequestSeal abort cleanup: no transactions found for xtID", "xtID", key)
 			}
-		} else {
-			keptForRequeue++
-			log.Info("[SSV] Keeping non-included XT staged for re-queue in next slot",
+			continue
+		}
+
+		removedPut, removedOriginal := b.dropTransactionsForXtKey(key, true)
+		if removedPut+removedOriginal > 0 {
+			requeuedForRetry++
+			log.Info("[SSV] Dropped non-included XT for retry",
 				"xtID", key,
-				"reason", "scp_incomplete_before_seal")
+				"putInboxRemoved", removedPut,
+				"originalRemoved", removedOriginal)
+		} else {
+			log.Warn("[SSV] RequestSeal requeue: no transactions found for xtID", "xtID", key)
 		}
 	}
 
-	if keptForRequeue > 0 {
-		log.Info("[SSV] RequestSeal: kept non-included XTs for re-queue",
+	if requeuedForRetry > 0 || droppedAborted > 0 {
+		log.Info("[SSV] RequestSeal cleanup",
 			"slot", requestSeal.Slot,
-			"keptForRequeue", keptForRequeue,
+			"requeued", requeuedForRetry,
 			"droppedAborted", droppedAborted)
 	}
 
