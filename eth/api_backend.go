@@ -1250,6 +1250,7 @@ func (b *EthAPIBackend) GetOrderedTransactionsForBlock(ctx context.Context) (typ
 	}
 
 	currentState := b.coordinator.GetState()
+	signer := types.LatestSignerForChainID(b.ChainConfig().ChainID)
 
 	switch currentState {
 	case sequencer.StateBuildingLocked:
@@ -1287,6 +1288,7 @@ func (b *EthAPIBackend) GetOrderedTransactionsForBlock(ctx context.Context) (typ
 		poolTxs := make(types.Transactions, 0, len(poolEntries))
 		poolRecords := make([]sequencerBundleEntry, 0, len(poolEntries))
 		skippedNonIncluded := 0
+		skippedNonceGap := 0
 		for _, entry := range poolEntries {
 			if entry.xtID != "" && b.isXtAborted(entry.xtID) {
 				log.Info("[SSV] Skipping aborted putInbox tx in pool",
@@ -1308,6 +1310,11 @@ func (b *EthAPIBackend) GetOrderedTransactionsForBlock(ctx context.Context) (typ
 				}
 			}
 
+			if b.shouldHoldSequencerTx(entry.tx, signer) {
+				skippedNonceGap++
+				continue
+			}
+
 			poolTxs = append(poolTxs, entry.tx)
 			status := sequencerTxStatusStaged
 			if entry.committed {
@@ -1323,6 +1330,23 @@ func (b *EthAPIBackend) GetOrderedTransactionsForBlock(ctx context.Context) (typ
 
 		// After SCP completes (BuildingFree) or during submission, include ready transactions.
 		originalTxs, orderedRecords, pendingBundles := b.assembleSequencerBundle()
+		if len(originalTxs) > 0 {
+			filtered := make(types.Transactions, 0, len(originalTxs))
+			for _, tx := range originalTxs {
+				if b.shouldHoldSequencerTx(tx, signer) {
+					skippedNonceGap++
+					continue
+				}
+				filtered = append(filtered, tx)
+			}
+			originalTxs = filtered
+		}
+
+		if skippedNonceGap > 0 {
+			log.Info("[SSV] Sequencer txs held due to lower-nonce local transactions",
+				"count", skippedNonceGap,
+				"state", currentState.String())
+		}
 		combinedTxs := make(types.Transactions, 0, len(poolTxs)+len(originalTxs))
 		combinedTxs = append(combinedTxs, poolTxs...)
 		combinedTxs = append(combinedTxs, originalTxs...)
@@ -1915,6 +1939,66 @@ func (b *EthAPIBackend) countEntriesByKindLocked(kind sequencerTxKind) int {
 		return 0
 	}
 	return b.txTracker.countByKind(kind)
+}
+
+func (b *EthAPIBackend) isSequencerManagedHash(hash common.Hash) bool {
+	b.sequencerTxMutex.RLock()
+	if b.txTracker != nil {
+		if rec := b.txTracker.record(hash); rec != nil {
+			b.sequencerTxMutex.RUnlock()
+			return true
+		}
+	}
+	b.sequencerTxMutex.RUnlock()
+	if b.putInboxPool != nil {
+		if tx := b.putInboxPool.lookup(hash); tx != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *EthAPIBackend) shouldHoldSequencerTx(tx *types.Transaction, signer types.Signer) bool {
+	if tx == nil {
+		return false
+	}
+	if signer == nil {
+		signer = types.LatestSignerForChainID(b.ChainConfig().ChainID)
+	}
+	if signer == nil {
+		return false
+	}
+	sender, err := types.Sender(signer, tx)
+	if err != nil {
+		return false
+	}
+	pending, queued := b.eth.txPool.ContentFrom(sender)
+	check := func(txs []*types.Transaction) bool {
+		for _, pendingTx := range txs {
+			if pendingTx == nil {
+				continue
+			}
+			if pendingTx.Hash() == tx.Hash() {
+				continue
+			}
+			if pendingTx.Nonce() >= tx.Nonce() {
+				continue
+			}
+			if b.isSequencerManagedHash(pendingTx.Hash()) {
+				continue
+			}
+			return true
+		}
+		return false
+	}
+	if check(pending) || check(queued) {
+		log.Info("[SSV] Holding sequencer tx until lower-nonce local tx commits",
+			"hash", tx.Hash().Hex(),
+			"sender", sender.Hex(),
+			"nonce", tx.Nonce())
+		return true
+	}
+	return false
 }
 
 func (b *EthAPIBackend) pendingPutInboxCount() int {
