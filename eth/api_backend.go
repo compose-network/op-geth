@@ -1972,31 +1972,38 @@ func (b *EthAPIBackend) shouldHoldSequencerTx(tx *types.Transaction, signer type
 	if err != nil {
 		return false
 	}
-	pending, queued := b.eth.txPool.ContentFrom(sender)
-	check := func(txs []*types.Transaction) bool {
-		for _, pendingTx := range txs {
-			if pendingTx == nil {
-				continue
-			}
-			if pendingTx.Hash() == tx.Hash() {
-				continue
-			}
-			if pendingTx.Nonce() >= tx.Nonce() {
-				continue
-			}
-			if b.isSequencerManagedHash(pendingTx.Hash()) {
-				continue
-			}
-			return true
-		}
+	if tx.Nonce() == 0 {
 		return false
 	}
-	if check(pending) || check(queued) {
-		log.Info("[SSV] Holding sequencer tx until lower-nonce local tx commits",
-			"hash", tx.Hash().Hex(),
-			"sender", sender.Hex(),
-			"nonce", tx.Nonce())
-		return true
+
+	stateNonce := b.eth.txPool.Nonce(sender)
+	if tx.Nonce() <= stateNonce {
+		return false
+	}
+
+	pending, queued := b.eth.txPool.ContentFrom(sender)
+	nonceInPool := make(map[uint64]bool)
+	for _, ptx := range pending {
+		if ptx != nil {
+			nonceInPool[ptx.Nonce()] = true
+		}
+	}
+	for _, qtx := range queued {
+		if qtx != nil {
+			nonceInPool[qtx.Nonce()] = true
+		}
+	}
+
+	for n := stateNonce; n < tx.Nonce(); n++ {
+		if !nonceInPool[n] {
+			log.Info("[SSV] Holding sequencer tx due to unfillable nonce gap",
+				"hash", tx.Hash().Hex(),
+				"sender", sender.Hex(),
+				"nonce", tx.Nonce(),
+				"missing_nonce", n,
+				"state_nonce", stateNonce)
+			return true
+		}
 	}
 	return false
 }
