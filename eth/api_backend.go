@@ -2639,15 +2639,18 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 		return true, nil
 	}
 
-	mailboxProcessor := mailbox.NewProcessor(mailbox.Config{
+	mailboxProcessor, err := mailbox.NewProcessor(mailbox.Config{
 		ChainID:              b.ChainConfig().ChainID.Uint64(),
 		MailboxAddresses:     b.GetMailboxAddresses(),
 		SequencerClients:     b.sequencerClients,
 		SequencerCoordinator: b.coordinator,
 		CoordinatorKey:       b.coordinatorKey,
 		CoordinatorAddr:      b.coordinatorAddr,
-		MailboxSelector:      b.GetMailboxAddressFromChainID,
+		MailboxSelector:      mailbox.SelectorFunc(b.GetMailboxAddressFromChainID),
 	})
+	if err != nil {
+		return false, fmt.Errorf("failed to build mailbox processor: %w", err)
+	}
 
 	coordinationStates := make([]*mailbox.SimulationState, 0)
 	txDone := make(map[string]struct{})
