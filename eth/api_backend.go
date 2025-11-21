@@ -32,9 +32,10 @@ import (
 
 	rollupv1 "github.com/compose-network/publisher/proto/rollup/v1"
 	spconsensus "github.com/compose-network/publisher/x/consensus"
+	"github.com/compose-network/publisher/x/mailbox"
 	"github.com/compose-network/publisher/x/superblock/sequencer"
+	ssvtracer "github.com/compose-network/publisher/x/tracer"
 	"github.com/compose-network/publisher/x/transport"
-	"github.com/ethereum/go-ethereum/core/ssv"
 	"github.com/ethereum/go-ethereum/eth/tracers/native"
 
 	"github.com/ethereum/go-ethereum"
@@ -750,7 +751,7 @@ func (b *EthAPIBackend) HandleSPMessage(ctx context.Context, msg *rollupv1.Messa
 	return nil, nil
 }
 
-func successfulAll(coordinationStates []*SimulationState) bool {
+func successfulAll(coordinationStates []*mailbox.SimulationState) bool {
 	for _, s := range coordinationStates {
 		// checking if any transaction reverted or requires processing CIRCMessage
 		if !s.Success || len(s.Dependencies) > 0 {
@@ -824,7 +825,7 @@ func (b *EthAPIBackend) SimulateTransaction(
 	ctx context.Context,
 	tx *types.Transaction,
 	blockNrOrHash rpc.BlockNumberOrHash,
-) (*ssv.SSVTraceResult, error) {
+) (*ssvtracer.SSVTraceResult, error) {
 	timer := time.Now()
 	defer func() {
 		log.Info("[SSV] Simulated transaction with SSV trace", "txHash", tx.Hash().Hex(), "duration", time.Since(timer))
@@ -2638,17 +2639,17 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 		return true, nil
 	}
 
-	mailboxProcessor := NewMailboxProcessor(
-		b.ChainConfig().ChainID.Uint64(),
-		b.GetMailboxAddresses(),
-		b.sequencerClients,
-		b.coordinator,
-		b.coordinatorKey,
-		b.coordinatorAddr,
-		b,
-	)
+	mailboxProcessor := mailbox.NewProcessor(mailbox.Config{
+		ChainID:              b.ChainConfig().ChainID.Uint64(),
+		MailboxAddresses:     b.GetMailboxAddresses(),
+		SequencerClients:     b.sequencerClients,
+		SequencerCoordinator: b.coordinator,
+		CoordinatorKey:       b.coordinatorKey,
+		CoordinatorAddr:      b.coordinatorAddr,
+		MailboxSelector:      b.GetMailboxAddressFromChainID,
+	})
 
-	coordinationStates := make([]*SimulationState, 0)
+	coordinationStates := make([]*mailbox.SimulationState, 0)
 	txDone := make(map[string]struct{})
 
 	// Simulate each local transaction
@@ -2678,8 +2679,8 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 		}
 	}
 
-	allSentMsgs := make([]CrossRollupMessage, 0)
-	allFulfilledDeps := make([]CrossRollupDependency, 0)
+	allSentMsgs := make([]mailbox.CrossRollupMessage, 0)
+	allFulfilledDeps := make([]mailbox.CrossRollupDependency, 0)
 
 	for _, simState := range coordinationStates {
 		if !simState.RequiresCoordination() {
@@ -2691,7 +2692,7 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 			"dependencies", len(simState.Dependencies),
 			"outbound", len(simState.OutboundMessages))
 
-		sentMsgs, fulfilledDeps, err := mailboxProcessor.handleCrossRollupCoordination(ctx, simState, xtID)
+		sentMsgs, fulfilledDeps, err := mailboxProcessor.HandleCrossRollupCoordination(ctx, simState, xtID)
 		if err != nil {
 			return false, fmt.Errorf("failed to handle cross-rollup coordination: %w", err)
 		}
@@ -2720,7 +2721,7 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 		}
 
 		for _, dep := range allFulfilledDeps {
-			putInboxTx, err := mailboxProcessor.createPutInboxTx(dep, poolNonce)
+			putInboxTx, err := mailboxProcessor.CreatePutInboxTx(dep, poolNonce)
 			if err != nil {
 				return false, fmt.Errorf("failed to create putInbox transaction: %w", err)
 			}
@@ -2772,7 +2773,7 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 					"sessionId", outMsg.SessionID,
 					"label", string(outMsg.Label))
 
-				if err := mailboxProcessor.sendCIRCMessage(ctx, &outMsg, xtID); err != nil {
+				if err := mailboxProcessor.SendCIRCMessage(ctx, &outMsg, xtID); err != nil {
 					log.Error("[SSV] Failed to send CIRC message", "error", err, "xtID", xtID.Hex())
 					continue
 				}

@@ -34,6 +34,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/compose-network/publisher/x/tracer"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -605,7 +606,7 @@ func (b *testBackend) HandleSPMessage(ctx context.Context, msg *rollupv1.Message
 	panic("implement me")
 }
 
-func (b *testBackend) SimulateTransaction(ctx context.Context, tx *types.Transaction, blockNrOrHash rpc.BlockNumberOrHash) (*ssv.SSVTraceResult, error) {
+func (b *testBackend) SimulateTransaction(ctx context.Context, tx *types.Transaction, blockNrOrHash rpc.BlockNumberOrHash) (*tracer.SSVTraceResult, error) {
 	//TODO implement me
 	panic("implement me")
 }

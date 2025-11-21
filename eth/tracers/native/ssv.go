@@ -8,8 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/compose-network/publisher/x/tracer"
 	"github.com/ethereum/go-ethereum/accounts/abi"
-	"github.com/ethereum/go-ethereum/core/ssv"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/tracing"
@@ -66,10 +66,10 @@ func init() {
 
 // SSVTracer is a minimal tracer for SSV sequencer needs
 type SSVTracer struct {
-	env              *tracing.VMContext // The VM environment
-	operations       []ssv.SSVOperation // Flat list of operations
-	interrupt        atomic.Bool        // Atomic flag to signal execution interruption
-	reason           error              // Textual reason for the interruption
+	env              *tracing.VMContext    // The VM environment
+	operations       []tracer.SSVOperation // Flat list of operations
+	interrupt        atomic.Bool           // Atomic flag to signal execution interruption
+	reason           error                 // Textual reason for the interruption
 	watchedAddresses map[common.Address]bool
 	currentDepth     int
 	currentFrom      common.Address
@@ -80,7 +80,7 @@ type SSVTracer struct {
 func newSSVTracer(ctx *tracers.Context, cfg json.RawMessage, chainConfig *params.ChainConfig) (*tracers.Tracer, error) {
 
 	t := &SSVTracer{
-		operations:       make([]ssv.SSVOperation, 0),
+		operations:       make([]tracer.SSVOperation, 0),
 		watchedAddresses: make(map[common.Address]bool),
 	}
 
@@ -171,7 +171,7 @@ func (t *SSVTracer) OnEnter(depth int, typ byte, from common.Address, to common.
 	if t.watchedAddresses[to] {
 		//decodeTransactionInput(mailboxABI, input)
 
-		op := ssv.SSVOperation{
+		op := tracer.SSVOperation{
 			Type:     vm.OpCode(typ),
 			Address:  to,
 			From:     from,
@@ -233,7 +233,7 @@ func (t *SSVTracer) Stop(err error) {
 
 // GetResult returns the json-encoded flat list of operations
 func (t *SSVTracer) GetResult() (json.RawMessage, error) {
-	result := ssv.SSVTraceResult{
+	result := tracer.SSVTraceResult{
 		Operations: t.operations,
 	}
 
@@ -255,7 +255,7 @@ func NewSSVTracer(mailboxAddresses []common.Address) *SSVTracer {
 	log.Info("[SSV] Creating new SSVTracer", "mailboxes", watchedAddresses)
 
 	return &SSVTracer{
-		operations:       make([]ssv.SSVOperation, 0),
+		operations:       make([]tracer.SSVOperation, 0),
 		watchedAddresses: watchedAddresses,
 	}
 }
@@ -270,8 +270,8 @@ func (t *SSVTracer) Hooks() *tracing.Hooks {
 }
 
 // GetTraceResult returns the SSVTraceResult containing the operations
-func (t *SSVTracer) GetTraceResult() *ssv.SSVTraceResult {
-	return &ssv.SSVTraceResult{
+func (t *SSVTracer) GetTraceResult() *tracer.SSVTraceResult {
+	return &tracer.SSVTraceResult{
 		Operations:      t.operations,
 		ExecutionResult: nil, // Execution result is not used in this tracer
 	}

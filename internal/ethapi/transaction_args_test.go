@@ -21,7 +21,7 @@ import (
 	"errors"
 
 	rollupv1 "github.com/compose-network/publisher/proto/rollup/v1"
-	"github.com/ethereum/go-ethereum/core/ssv"
+	"github.com/compose-network/publisher/x/tracer"
 
 	"math/big"
 	"reflect"
@@ -265,7 +265,7 @@ type backendMock struct {
 	config  *params.ChainConfig
 }
 
-func (b *backendMock) SimulateTransaction(ctx context.Context, tx *types.Transaction, blockNrOrHash rpc.BlockNumberOrHash) (*ssv.SSVTraceResult, error) {
+func (b *backendMock) SimulateTransaction(ctx context.Context, tx *types.Transaction, blockNrOrHash rpc.BlockNumberOrHash) (*tracer.SSVTraceResult, error) {
 	//TODO implement me
 	panic("implement me")
 }

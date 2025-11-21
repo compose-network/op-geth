@@ -21,7 +21,7 @@ import (
 	"context"
 
 	rollupv1 "github.com/compose-network/publisher/proto/rollup/v1"
-	"github.com/ethereum/go-ethereum/core/ssv"
+	ssvtracer "github.com/compose-network/publisher/x/tracer"
 
 	"math/big"
 	"time"
@@ -97,7 +97,7 @@ type Backend interface {
 
 	// Shared publisher API
 	HandleSPMessage(ctx context.Context, msg *rollupv1.Message) ([]common.Hash, error)
-	SimulateTransaction(ctx context.Context, tx *types.Transaction, blockNrOrHash rpc.BlockNumberOrHash) (*ssv.SSVTraceResult, error)
+	SimulateTransaction(ctx context.Context, tx *types.Transaction, blockNrOrHash rpc.BlockNumberOrHash) (*ssvtracer.SSVTraceResult, error)
 	// GetMailboxAddresses returns the list of mailbox contract addresses to watch
 	GetMailboxAddresses() []common.Address
 	//ForwardXTxs(ctx context.Context, xTxs []*xt.TransactionRequest) error
