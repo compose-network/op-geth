@@ -30,6 +30,7 @@ import (
 	"sync"
 	"time"
 
+	applog "github.com/compose-network/publisher/log"
 	rollupv1 "github.com/compose-network/publisher/proto/rollup/v1"
 	spconsensus "github.com/compose-network/publisher/x/consensus"
 	"github.com/compose-network/publisher/x/mailbox"
@@ -2642,6 +2643,7 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 	mailboxProcessor, err := mailbox.NewProcessor(mailbox.Config{
 		ChainID:              b.ChainConfig().ChainID.Uint64(),
 		MailboxAddresses:     b.GetMailboxAddresses(),
+		Logger:               applog.New("info", true).Logger,
 		SequencerClients:     b.sequencerClients,
 		SequencerCoordinator: b.coordinator,
 		CoordinatorKey:       b.coordinatorKey,
