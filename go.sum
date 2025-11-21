@@ -78,8 +78,8 @@ github.com/cockroachdb/tokenbucket v0.0.0-20230807174530-cc333fc44b06 h1:zuQyyAK
 github.com/cockroachdb/tokenbucket v0.0.0-20230807174530-cc333fc44b06/go.mod h1:7nc4anLGjupUW/PeY5qiNYsdNXj7zopG+eqsS7To5IQ=
 github.com/compose-network/publisher v0.0.0-20251121113013-e9a2a0b93bd6 h1:Ag3+0jEwT3KKuBX9hEQ0Nocn6UtBY+9BgB61/obQeqg=
 github.com/compose-network/publisher v0.0.0-20251121113013-e9a2a0b93bd6/go.mod h1:Q5o9Gwn3JngU2YpyS2wiX794JsFxStz79CFb+mCigXA=
-github.com/compose-network/registry v0.1.0 h1:WVWmQAnq15cl7oUsoGHrAauc8Dngt3lDDYnzxr9TgYw=
-github.com/compose-network/registry v0.1.0/go.mod h1:0KvBwHpojq2/ys4k6Pnsvlrtj/uGL30/KqEKkwLuMnU=
+github.com/compose-network/registry v0.2.0 h1:caM9bDs4zszsHnH9UPyU/LIdNVTmUxz2XAuf1LayyVc=
+github.com/compose-network/registry v0.2.0/go.mod h1:0KvBwHpojq2/ys4k6Pnsvlrtj/uGL30/KqEKkwLuMnU=
 github.com/consensys/gnark-crypto v0.18.0 h1:vIye/FqI50VeAr0B3dx+YjeIvmc3LWz4yEfbWBpTUf0=
 github.com/consensys/gnark-crypto v0.18.0/go.mod h1:L3mXGFTe1ZN+RSJ+CLjUt9x7PNdx8ubaYfDROyp2Z8c=
 github.com/coreos/go-systemd/v22 v22.5.0/go.mod h1:Y58oyj3AT4RCenI/lSvhwexgC+NSVTIJ3seZv2GcEnc=
