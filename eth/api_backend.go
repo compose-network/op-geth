@@ -166,6 +166,19 @@ const (
 	sequencerTxPutInbox
 )
 
+// Nonce gap handling for sequencer-managed transactions.
+//   - sequencerMaxFutureNonceGap bounds how far ahead of the current account nonce
+//     we allow a staged transaction to be.
+//   - sequencerNonceGapExpirySlots caps how long we keep a transaction that still
+//     has an unfillable gap before it.
+//   - sequencerNonceGapExpiryMinGap requires a minimum gap size before expiry-based
+//     pruning kicks in.
+const (
+	sequencerMaxFutureNonceGap    = 1
+	sequencerNonceGapExpirySlots  = 6
+	sequencerNonceGapExpiryMinGap = 32
+)
+
 // ChainConfig returns the active chain configuration.
 func (b *EthAPIBackend) ChainConfig() *params.ChainConfig {
 	return b.eth.blockchain.Config()
@@ -957,8 +970,9 @@ func (b *EthAPIBackend) SimulateTransaction(
 // SSV
 func (b *EthAPIBackend) SubmitSequencerTransaction(ctx context.Context, tx *types.Transaction, isPutInbox bool) error {
 	// Try to add sender to the log context
+	signer := types.LatestSignerForChainID(b.ChainConfig().ChainID)
 	var sender common.Address
-	if signer := types.LatestSignerForChainID(b.ChainConfig().ChainID); signer != nil {
+	if signer != nil {
 		if s, err := types.Sender(signer, tx); err == nil {
 			sender = s
 		}
@@ -974,6 +988,18 @@ func (b *EthAPIBackend) SubmitSequencerTransaction(ctx context.Context, tx *type
 	if err := b.validateSequencerTransaction(tx); err != nil {
 		log.Error("[SSV] Sequencer transaction validation failed", "err", err, "txHash", tx.Hash().Hex())
 		return fmt.Errorf("sequencer transaction validation failed: %w", err)
+	}
+
+	if !isPutInbox && signer != nil && sender != (common.Address{}) {
+		if err := b.enforceSequencerNoncePolicy(tx, signer, sender); err != nil {
+			log.Warn("[SSV] Sequencer transaction rejected due to nonce policy",
+				"err", err,
+				"txHash", tx.Hash().Hex(),
+				"from", sender.Hex(),
+				"nonce", tx.Nonce(),
+				"xtID", xtKey)
+			return err
+		}
 	}
 
 	// Stage the transaction but defer txpool injection until block building.
@@ -1252,7 +1278,12 @@ func (b *EthAPIBackend) GetOrderedTransactionsForBlock(ctx context.Context) (typ
 	}
 
 	currentState := b.coordinator.GetState()
+	currentSlot := b.coordinator.GetCurrentSlot()
 	signer := types.LatestSignerForChainID(b.ChainConfig().ChainID)
+
+	if currentSlot > 0 {
+		b.pruneGappedSequencerTransactions(currentSlot)
+	}
 
 	switch currentState {
 	case sequencer.StateBuildingLocked:
@@ -2010,6 +2041,208 @@ func (b *EthAPIBackend) shouldHoldSequencerTx(tx *types.Transaction, signer type
 	return false
 }
 
+// collectKnownNoncesForSender builds a snapshot of the known nonces for a sender
+// from both the txpool and (optionally) the staged sequencer tracker.
+func (b *EthAPIBackend) collectKnownNoncesForSender(signer types.Signer, sender common.Address, includeStaged bool) (uint64, map[uint64]bool) {
+	stateNonce := b.eth.txPool.Nonce(sender)
+	nonceInPool := make(map[uint64]bool)
+
+	pending, queued := b.eth.txPool.ContentFrom(sender)
+	for _, ptx := range pending {
+		if ptx != nil {
+			nonceInPool[ptx.Nonce()] = true
+		}
+	}
+	for _, qtx := range queued {
+		if qtx != nil {
+			nonceInPool[qtx.Nonce()] = true
+		}
+	}
+
+	if !includeStaged || signer == nil {
+		return stateNonce, nonceInPool
+	}
+
+	b.sequencerTxMutex.RLock()
+	if b.txTracker != nil {
+		for _, rec := range b.txTracker.records {
+			if rec == nil || rec.tx == nil || rec.status != sequencerTxStatusStaged {
+				continue
+			}
+			from, err := types.Sender(signer, rec.tx)
+			if err != nil || from != sender {
+				continue
+			}
+			nonceInPool[rec.tx.Nonce()] = true
+		}
+	}
+	b.sequencerTxMutex.RUnlock()
+
+	return stateNonce, nonceInPool
+}
+
+// enforceSequencerNoncePolicy ensures we don't warehouse transactions with nonces
+// that cannot be satisfied (large future jumps or missing lower nonces).
+func (b *EthAPIBackend) enforceSequencerNoncePolicy(tx *types.Transaction, signer types.Signer, sender common.Address) error {
+	if tx == nil {
+		return fmt.Errorf("missing transaction for nonce policy check")
+	}
+	if signer == nil {
+		return nil
+	}
+
+	stateNonce, nonceInPool := b.collectKnownNoncesForSender(signer, sender, true)
+
+	maxNonce := stateNonce + sequencerMaxFutureNonceGap
+	if tx.Nonce() > maxNonce {
+		return fmt.Errorf("nonce too far in future: %d > %d (state=%d)", tx.Nonce(), maxNonce, stateNonce)
+	}
+
+	for n := stateNonce; n < tx.Nonce(); n++ {
+		if !nonceInPool[n] {
+			return fmt.Errorf("nonce gap before %d (missing %d, state=%d)", tx.Nonce(), n, stateNonce)
+		}
+	}
+	return nil
+}
+
+// pruneGappedSequencerTransactions drops staged sequencer transactions that still
+// have unresolved nonce gaps after a grace period. This prevents warehousing
+// bad sequences across slots.
+func (b *EthAPIBackend) pruneGappedSequencerTransactions(currentSlot uint64) {
+	if currentSlot == 0 {
+		return
+	}
+
+	signer := types.LatestSignerForChainID(b.ChainConfig().ChainID)
+	if signer == nil {
+		return
+	}
+
+	b.sequencerTxMutex.Lock()
+	defer b.sequencerTxMutex.Unlock()
+
+	if b.txTracker == nil || len(b.txTracker.records) == 0 {
+		return
+	}
+
+	stagedBySender := make(map[common.Address][]*sequencerTxRecord)
+	for _, rec := range b.txTracker.records {
+		if rec == nil || rec.tx == nil {
+			continue
+		}
+		if rec.status != sequencerTxStatusStaged || rec.kind == sequencerTxPutInbox {
+			continue
+		}
+		from, err := types.Sender(signer, rec.tx)
+		if err != nil {
+			continue
+		}
+		stagedBySender[from] = append(stagedBySender[from], rec)
+	}
+
+	if len(stagedBySender) == 0 {
+		return
+	}
+
+	var drop []common.Hash
+	for sender, records := range stagedBySender {
+		pending, queued := b.eth.txPool.ContentFrom(sender)
+		nonceKnown := make(map[uint64]bool, len(pending)+len(queued)+len(records))
+		for _, tx := range pending {
+			if tx != nil {
+				nonceKnown[tx.Nonce()] = true
+			}
+		}
+		for _, tx := range queued {
+			if tx != nil {
+				nonceKnown[tx.Nonce()] = true
+			}
+		}
+		for _, rec := range records {
+			if rec != nil && rec.tx != nil {
+				nonceKnown[rec.tx.Nonce()] = true
+			}
+		}
+
+		stateNonce := b.eth.txPool.Nonce(sender)
+		sort.Slice(records, func(i, j int) bool {
+			return records[i].tx.Nonce() < records[j].tx.Nonce()
+		})
+
+		for _, rec := range records {
+			if rec == nil || rec.tx == nil || rec.lastUpdatedSlot == 0 || currentSlot <= rec.lastUpdatedSlot {
+				continue
+			}
+			if currentSlot-rec.lastUpdatedSlot < sequencerNonceGapExpirySlots {
+				continue
+			}
+
+			maxNonce := stateNonce + sequencerMaxFutureNonceGap
+			missingNonce := stateNonce
+			hasGap := false
+
+			if rec.tx.Nonce() > maxNonce {
+				missingNonce = maxNonce
+				hasGap = true
+			} else {
+				for n := stateNonce; n < rec.tx.Nonce(); n++ {
+					if !nonceKnown[n] {
+						missingNonce = n
+						hasGap = true
+						break
+					}
+				}
+			}
+
+			if !hasGap {
+				continue
+			}
+
+			// Only prune if the gap is meaningfully large to avoid killing
+			// sequences waiting on a single missing nonce.
+			if rec.tx.Nonce()-stateNonce < sequencerNonceGapExpiryMinGap {
+				continue
+			}
+
+			drop = append(drop, rec.tx.Hash())
+			log.Info("[SSV] Dropping sequencer tx with stale nonce gap",
+				"hash", rec.tx.Hash().Hex(),
+				"sender", sender.Hex(),
+				"nonce", rec.tx.Nonce(),
+				"missing_nonce", missingNonce,
+				"state_nonce", stateNonce,
+				"firstSlot", rec.lastUpdatedSlot,
+				"currentSlot", currentSlot)
+		}
+	}
+
+	if len(drop) == 0 {
+		return
+	}
+
+	removedPut, removedOriginal, removedRecords := b.txTracker.dropHashes(drop)
+
+	rejected := 0
+	for _, rec := range removedRecords {
+		b.logSequencerRemoval(rec, "nonce_gap_expired")
+		if tx := b.eth.txPool.Get(rec.tx.Hash()); tx != nil {
+			tx.SetRejected()
+			rejected++
+		}
+	}
+
+	log.Info("[SSV] Pruned sequencer transactions with stale nonce gaps",
+		"currentSlot", currentSlot,
+		"removedOriginal", removedOriginal,
+		"removedPutInbox", removedPut,
+		"rejectedInPool", rejected)
+
+	if miner := b.eth.miner; miner != nil {
+		miner.InvalidatePendingCache()
+	}
+}
+
 func (b *EthAPIBackend) pendingPutInboxCount() int {
 	if b.putInboxPool == nil {
 		return 0
@@ -2229,6 +2462,9 @@ func (b *EthAPIBackend) NotifySlotStart(startSlot *rollupv1.StartSlot) error {
 	b.pendingBlocks = nil
 	b.pendingBlockSlot = startSlot.Slot
 	b.pendingBlockMutex.Unlock()
+
+	// Drop any staged transactions that are still missing prior nonces before carrying them forward.
+	b.pruneGappedSequencerTransactions(startSlot.Slot)
 
 	// Clear any lingering sequencer transactions from previous slot.
 	b.sequencerTxMutex.Lock()
