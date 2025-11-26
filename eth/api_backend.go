@@ -2545,6 +2545,9 @@ func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *roll
 
 	keptForRequeue := 0
 	droppedAborted := 0
+	droppedStaleNonce := 0
+
+	signer := types.LatestSignerForChainID(b.ChainConfig().ChainID)
 
 	for key := range pendingKeys {
 		isAborted := b.isXtAborted(key)
@@ -2578,18 +2581,79 @@ func (b *EthAPIBackend) NotifyRequestSeal(ctx context.Context, requestSeal *roll
 				log.Warn("[SSV] RequestSeal abort cleanup: no transactions found for xtID", "xtID", key)
 			}
 		} else {
-			keptForRequeue++
-			log.Info("[SSV] Keeping non-included XT staged for re-queue in next slot",
-				"xtID", key,
-				"reason", "scp_incomplete_before_seal")
+			// Before keeping for re-queue, check if any transaction in this XT
+			// has a nonce that's too low (already executed). Drop the entire XT if so.
+			shouldDrop := false
+			if signer != nil && key != "" {
+				if b.txTracker != nil {
+					for _, rec := range b.txTracker.records {
+						if rec == nil || rec.tx == nil || rec.xtID != key {
+							continue
+						}
+						sender, err := types.Sender(signer, rec.tx)
+						if err != nil {
+							continue
+						}
+						stateNonce := b.eth.txPool.Nonce(sender)
+						if rec.tx.Nonce() < stateNonce {
+							log.Warn("[SSV] Dropping XT with stale nonce during RequestSeal",
+								"xtID", key,
+								"txHash", rec.tx.Hash().Hex(),
+								"txNonce", rec.tx.Nonce(),
+								"stateNonce", stateNonce,
+								"sender", sender.Hex())
+							shouldDrop = true
+							break
+						}
+					}
+				}
+
+				if !shouldDrop && b.putInboxPool != nil {
+					for _, entry := range b.putInboxPool.pendingEntries() {
+						if entry.xtID != key || entry.tx == nil {
+							continue
+						}
+						sender, err := types.Sender(signer, entry.tx)
+						if err != nil {
+							continue
+						}
+						stateNonce := b.eth.txPool.Nonce(sender)
+						if entry.tx.Nonce() < stateNonce {
+							log.Warn("[SSV] Dropping XT with stale putInbox nonce during RequestSeal",
+								"xtID", key,
+								"txHash", entry.tx.Hash().Hex(),
+								"txNonce", entry.tx.Nonce(),
+								"stateNonce", stateNonce,
+								"sender", sender.Hex())
+							shouldDrop = true
+							break
+						}
+					}
+				}
+			}
+
+			if shouldDrop {
+				removedPut, removedOriginal := b.dropTransactionsForXtKey(key, true)
+				droppedStaleNonce += removedPut + removedOriginal
+				log.Info("[SSV] Dropped XT with stale nonce after RequestSeal",
+					"xtID", key,
+					"putInboxRemoved", removedPut,
+					"originalRemoved", removedOriginal)
+			} else {
+				keptForRequeue++
+				log.Info("[SSV] Keeping non-included XT staged for re-queue in next slot",
+					"xtID", key,
+					"reason", "scp_incomplete_before_seal")
+			}
 		}
 	}
 
-	if keptForRequeue > 0 {
+	if keptForRequeue > 0 || droppedStaleNonce > 0 {
 		log.Info("[SSV] RequestSeal: kept non-included XTs for re-queue",
 			"slot", requestSeal.Slot,
 			"keptForRequeue", keptForRequeue,
-			"droppedAborted", droppedAborted)
+			"droppedAborted", droppedAborted,
+			"droppedStaleNonce", droppedStaleNonce)
 	}
 
 	// Store RequestSeal info after cleanup
