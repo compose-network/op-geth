@@ -2149,7 +2149,11 @@ func (b *EthAPIBackend) collectKnownNoncesForSender(signer types.Signer, sender 
 	b.sequencerTxMutex.RLock()
 	if b.txTracker != nil {
 		for _, rec := range b.txTracker.records {
-			if rec == nil || rec.tx == nil || rec.status != sequencerTxStatusStaged {
+			if rec == nil || rec.tx == nil {
+				continue
+			}
+			// Include both staged AND committed txs (committed but not yet finalized)
+			if rec.status != sequencerTxStatusStaged && rec.status != sequencerTxStatusCommitted {
 				continue
 			}
 			from, err := types.Sender(signer, rec.tx)
