@@ -189,15 +189,33 @@ func (p *putInboxTxPool) add(unsignedTx *types.Transaction, xtID string, sequenc
 }
 
 func (p *putInboxTxPool) inject() error {
+	_, staleHashes, err := p.injectWithCleanup()
+	if err != nil {
+		return err
+	}
+	// Mark stale hashes as rejected in main pool
+	for _, hash := range staleHashes {
+		if tx := p.mainPool.Get(hash); tx != nil {
+			tx.SetRejected()
+			log.Info("[SSV] Marked stale realigned tx as rejected in main pool",
+				"hash", hash.Hex())
+		}
+	}
+	return nil
+}
+
+// injectWithCleanup injects pending transactions and returns hashes that became stale due to realignment
+func (p *putInboxTxPool) injectWithCleanup() (injected int, staleHashes []common.Hash, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if len(p.pending) == 0 {
-		return nil
+		return 0, nil, nil
 	}
 
-	if err := p.realignPendingNoncesLocked(); err != nil {
-		return err
+	staleHashes, err = p.realignPendingNoncesLocked()
+	if err != nil {
+		return 0, nil, err
 	}
 
 	txs := make([]*types.Transaction, len(p.pending))
@@ -263,11 +281,11 @@ func (p *putInboxTxPool) inject() error {
 			"total", len(txs))
 
 		if nonceTooHighCount > 0 || nonceTooLowCount > 0 {
-			return fmt.Errorf("nonce mismatch during injection: %d too high, %d too low",
+			return injectedCount, staleHashes, fmt.Errorf("nonce mismatch during injection: %d too high, %d too low",
 				nonceTooHighCount, nonceTooLowCount)
 		}
 		if otherFailCount > 0 {
-			return fmt.Errorf("failed to inject %d/%d putInbox transactions", otherFailCount, len(txs))
+			return injectedCount, staleHashes, fmt.Errorf("failed to inject %d/%d putInbox transactions", otherFailCount, len(txs))
 		}
 	}
 
@@ -276,14 +294,17 @@ func (p *putInboxTxPool) inject() error {
 		"alreadyKnown", alreadyKnownCount,
 		"nonceTooHigh", nonceTooHighCount,
 		"nonceTooLow", nonceTooLowCount,
-		"otherFails", otherFailCount)
+		"otherFails", otherFailCount,
+		"staleHashes", len(staleHashes))
 
-	return nil
+	return injectedCount, staleHashes, nil
 }
 
-func (p *putInboxTxPool) realignPendingNoncesLocked() error {
+// realignPendingNoncesLocked re-signs pending txs to have sequential nonces.
+// Returns hashes of old transactions that were replaced (now stale).
+func (p *putInboxTxPool) realignPendingNoncesLocked() (staleHashes []common.Hash, err error) {
 	if len(p.pending) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	poolNonce := p.mainPool.PoolNonce(p.coordinatorAddr)
@@ -291,37 +312,36 @@ func (p *putInboxTxPool) realignPendingNoncesLocked() error {
 
 	if ok, next := sequentialFrom(p.pending, poolNonce); ok {
 		p.nextNonce = next
-		return nil
+		return nil, nil
 	}
 
 	log.Warn("[SSV] PutInbox pool realigning nonces",
 		"poolNonce", poolNonce,
 		"firstPendingNonce", p.pending[0].nonce,
-		"pendingCount", len(p.pending),
-		"reason", "gap_or_mismatch")
+		"pendingCount", len(p.pending))
 
 	targetNonce := poolNonce
-	realigned := 0
 	for i := range p.pending {
 		entry := &p.pending[i]
 		if entry.nonce != targetNonce {
+			oldHash := entry.tx.Hash()
 			if err := p.resignEntryWithNonce(entry, targetNonce, signer); err != nil {
-				return err
+				return staleHashes, err
 			}
-			realigned++
+			staleHashes = append(staleHashes, oldHash)
 		}
 		targetNonce++
 	}
 
-	if realigned > 0 {
+	if len(staleHashes) > 0 {
 		log.Info("[SSV] PutInbox pool realigned nonces",
-			"updatedCount", realigned,
+			"count", len(staleHashes),
 			"startNonce", poolNonce,
 			"endNonce", targetNonce-1)
 	}
 
 	p.nextNonce = targetNonce
-	return nil
+	return staleHashes, nil
 }
 
 func (p *putInboxTxPool) resignEntryWithNonce(entry *putInboxTxEntry, nonce uint64, signer types.Signer) error {
@@ -488,22 +508,30 @@ func (p *putInboxTxPool) clearAll() int {
 	return total
 }
 
-func (p *putInboxTxPool) dropByXtID(xtID string) int {
+type dropByXtIDResult struct {
+	DroppedCount  int
+	DroppedHashes []common.Hash
+	StaleHashes   []common.Hash // from nonce realignment
+}
+
+func (p *putInboxTxPool) dropByXtID(xtID string) *dropByXtIDResult {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	result := &dropByXtIDResult{}
+
 	if xtID == "" {
-		return 0
+		return result
 	}
 
 	newPending := make([]putInboxTxEntry, 0, len(p.pending))
 	newCommitted := make([]putInboxTxEntry, 0, len(p.committed))
-	dropped := 0
 
 	for _, entry := range p.pending {
 		if entry.xtID == xtID {
 			delete(p.byHash, entry.tx.Hash())
-			dropped++
+			result.DroppedCount++
+			result.DroppedHashes = append(result.DroppedHashes, entry.tx.Hash())
 			log.Info("[SSV] PutInbox pool dropped pending tx",
 				"xtID", xtID,
 				"hash", entry.tx.Hash().Hex(),
@@ -516,7 +544,8 @@ func (p *putInboxTxPool) dropByXtID(xtID string) int {
 	for _, entry := range p.committed {
 		if entry.xtID == xtID {
 			delete(p.byHash, entry.tx.Hash())
-			dropped++
+			result.DroppedCount++
+			result.DroppedHashes = append(result.DroppedHashes, entry.tx.Hash())
 			log.Info("[SSV] PutInbox pool dropped committed tx",
 				"xtID", xtID,
 				"hash", entry.tx.Hash().Hex(),
@@ -530,14 +559,45 @@ func (p *putInboxTxPool) dropByXtID(xtID string) int {
 	p.pending = newPending
 	p.committed = newCommitted
 
-	if dropped > 0 {
-		if err := p.realignPendingNoncesLocked(); err != nil {
+	if result.DroppedCount > 0 {
+		staleHashes, err := p.realignPendingNoncesLocked()
+		if err != nil {
 			log.Warn("[SSV] PutInbox pool failed to realign after drop", "err", err)
+		} else {
+			result.StaleHashes = staleHashes
 		}
 		p.refreshNonceLocked("dropByXtID")
 	}
 
-	return dropped
+	return result
+}
+
+// dropByXtIDWithMainPoolCleanup drops transactions and marks stale ones in main pool
+func (p *putInboxTxPool) dropByXtIDWithMainPoolCleanup(xtID string) int {
+	result := p.dropByXtID(xtID)
+
+	// Mark dropped hashes as rejected in main pool
+	for _, hash := range result.DroppedHashes {
+		if tx := p.mainPool.Get(hash); tx != nil {
+			tx.SetRejected()
+			log.Info("[SSV] Marked dropped putInbox tx as rejected in main pool",
+				"hash", hash.Hex(),
+				"xtID", xtID)
+		}
+	}
+
+	// Mark stale (realigned) hashes as rejected in main pool
+	// These are the OLD hashes that were replaced with new nonces
+	for _, hash := range result.StaleHashes {
+		if tx := p.mainPool.Get(hash); tx != nil {
+			tx.SetRejected()
+			log.Info("[SSV] Marked stale realigned putInbox tx as rejected in main pool",
+				"hash", hash.Hex(),
+				"reason", "nonce_realignment")
+		}
+	}
+
+	return result.DroppedCount
 }
 
 func (p *putInboxTxPool) stats() (pending, committed int, nextNonce uint64) {

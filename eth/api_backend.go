@@ -167,16 +167,11 @@ const (
 )
 
 // Nonce gap handling for sequencer-managed transactions.
-//   - sequencerMaxFutureNonceGap bounds how far ahead of the current account nonce
-//     we allow a staged transaction to be.
-//   - sequencerNonceGapExpirySlots caps how long we keep a transaction that still
-//     has an unfillable gap before it.
-//   - sequencerNonceGapExpiryMinGap requires a minimum gap size before expiry-based
-//     pruning kicks in.
+//   - sequencerMaxFutureNonceGap: max nonce ahead for single tx policy check
+//   - sequencerNonceGapExpirySlots: slots before pruning txs with unfillable gaps
 const (
-	sequencerMaxFutureNonceGap    = 1
-	sequencerNonceGapExpirySlots  = 6
-	sequencerNonceGapExpiryMinGap = 32
+	sequencerMaxFutureNonceGap   = 1
+	sequencerNonceGapExpirySlots = 6
 )
 
 // ChainConfig returns the active chain configuration.
@@ -1991,6 +1986,94 @@ func (b *EthAPIBackend) isSequencerManagedHash(hash common.Hash) bool {
 	return false
 }
 
+// validateXTNonces validates nonces collectively, allowing parallel txs if they form a complete sequence.
+// SSV
+func (b *EthAPIBackend) validateXTNonces(
+	localTxs []*rollupv1.TransactionRequest,
+	signer types.Signer,
+	xtID *rollupv1.XtID,
+) (bool, string) {
+	// Collect all transactions grouped by sender with their nonces
+	type txInfo struct {
+		tx    *types.Transaction
+		nonce uint64
+	}
+	txsBySender := make(map[common.Address][]txInfo)
+
+	for _, txReq := range localTxs {
+		for _, txBytes := range txReq.Transaction {
+			tx := &types.Transaction{}
+			if err := tx.UnmarshalBinary(txBytes); err != nil {
+				continue
+			}
+			sender, err := types.Sender(signer, tx)
+			if err != nil {
+				continue
+			}
+			txsBySender[sender] = append(txsBySender[sender], txInfo{tx: tx, nonce: tx.Nonce()})
+		}
+	}
+
+	// Validate nonces for each sender
+	for sender, txInfos := range txsBySender {
+		stateNonce := b.eth.txPool.Nonce(sender)
+
+		// Collect nonces from: pool + staged + this XT's transactions
+		_, knownNonces := b.collectKnownNoncesForSender(signer, sender, true)
+
+		// Add this XT's nonces to the known set
+		var maxNonce uint64 = stateNonce
+		for _, info := range txInfos {
+			knownNonces[info.nonce] = true
+			if info.nonce > maxNonce {
+				maxNonce = info.nonce
+			}
+		}
+
+		// Reject stale nonces
+		for _, info := range txInfos {
+			if info.nonce < stateNonce {
+				return true, fmt.Sprintf("stale nonce %d (state=%d) for sender %s",
+					info.nonce, stateNonce, sender.Hex())
+			}
+		}
+
+		// Verify nonces form complete sequence (no gaps)
+		for n := stateNonce; n <= maxNonce; n++ {
+			if !knownNonces[n] {
+				return true, fmt.Sprintf("nonce gap at %d (state=%d, max=%d) for sender %s",
+					n, stateNonce, maxNonce, sender.Hex())
+			}
+		}
+	}
+
+	return false, ""
+}
+
+// canSatisfyNonce checks if a single transaction's nonce can be satisfied.
+// SSV
+func (b *EthAPIBackend) canSatisfyNonce(tx *types.Transaction, signer types.Signer, sender common.Address) bool {
+	if tx == nil {
+		return false
+	}
+
+	stateNonce := b.eth.txPool.Nonce(sender)
+	if tx.Nonce() == stateNonce {
+		return true
+	}
+	if tx.Nonce() < stateNonce {
+		return false
+	}
+
+	stateNonce, nonceInPool := b.collectKnownNoncesForSender(signer, sender, true)
+	for n := stateNonce; n < tx.Nonce(); n++ {
+		if !nonceInPool[n] {
+			return false
+		}
+	}
+	return true
+}
+
 func (b *EthAPIBackend) shouldHoldSequencerTx(tx *types.Transaction, signer types.Signer) bool {
 	if tx == nil {
 		return false
@@ -2199,12 +2282,6 @@ func (b *EthAPIBackend) pruneGappedSequencerTransactions(currentSlot uint64) {
 				continue
 			}
 
-			// Only prune if the gap is meaningfully large to avoid killing
-			// sequences waiting on a single missing nonce.
-			if rec.tx.Nonce()-stateNonce < sequencerNonceGapExpiryMinGap {
-				continue
-			}
-
 			drop = append(drop, rec.tx.Hash())
 			log.Info("[SSV] Dropping sequencer tx with stale nonce gap",
 				"hash", rec.tx.Hash().Hex(),
@@ -2339,7 +2416,8 @@ func (b *EthAPIBackend) dropTransactionsForXtKey(key string, reject bool) (int, 
 
 	poolDropped := 0
 	if b.putInboxPool != nil {
-		poolDropped = b.putInboxPool.dropByXtID(key)
+		// Use the method that also cleans up stale realigned txs from main pool
+		poolDropped = b.putInboxPool.dropByXtIDWithMainPoolCleanup(key)
 	}
 
 	removedCommitted := 0
@@ -2938,6 +3016,16 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 	if len(localTxs) == 0 {
 		log.Info("[SSV] No local transactions to simulate", "xtID", xtID.Hex())
 		return true, nil
+	}
+
+	// SSV: Early nonce validation - check if transaction nonces can be satisfied
+	// This validates ALL transactions in the XT collectively, allowing out-of-order parallel txs
+	signer := types.LatestSignerForChainID(b.ChainConfig().ChainID)
+	if abort, reason := b.validateXTNonces(localTxs, signer, xtID); abort {
+		log.Warn("[SSV] Voting ABORT due to nonce validation failure",
+			"xtID", xtID.Hex(),
+			"reason", reason)
+		return false, nil
 	}
 
 	mailboxProcessor, err := mailbox.NewProcessor(mailbox.Config{
