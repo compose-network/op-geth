@@ -1681,6 +1681,18 @@ func (b *EthAPIBackend) OnBlockBuildingComplete(
 		if b.putInboxPool != nil {
 			b.putInboxPool.markCommitted(slot, block.NumberU64(), inBlockHashes)
 		}
+		// Update consumedNonces immediately when txs are committed
+		signer := types.LatestSignerForChainID(b.ChainConfig().ChainID)
+		for _, hash := range inBlockHashes {
+			if rec := tracker.record(hash); rec != nil && rec.tx != nil {
+				if from, err := types.Sender(signer, rec.tx); err == nil {
+					nextNonce := rec.tx.Nonce() + 1
+					if nextNonce > b.consumedNonces[from] {
+						b.consumedNonces[from] = nextNonce
+					}
+				}
+			}
+		}
 	}
 	b.sequencerTxMutex.Unlock()
 
@@ -2286,15 +2298,37 @@ func (b *EthAPIBackend) addSequencerEntryLocked(tx *types.Transaction, kind sequ
 	tracker := b.ensureTrackerLocked()
 	signer := types.LatestSignerForChainID(b.ChainConfig().ChainID)
 
-	// Check for duplicate sender+nonce (reject if already staged)
 	from := common.Address{}
 	if signer != nil {
 		if s, err := types.Sender(signer, tx); err == nil {
 			from = s
 		}
 	}
+
+	// Check if nonce is already consumed on-chain
+	stateNonce := b.eth.txPool.Nonce(from)
+	if tx.Nonce() < stateNonce {
+		log.Debug("[SSV] Skipping stale nonce tx",
+			"from", from.Hex(),
+			"txNonce", tx.Nonce(),
+			"stateNonce", stateNonce,
+			"hash", tx.Hash().Hex())
+		return
+	}
+
+	// Check if nonce was recently consumed (committed but not yet reflected in state)
+	if consumed, ok := b.consumedNonces[from]; ok && tx.Nonce() < consumed {
+		log.Debug("[SSV] Skipping tx with recently consumed nonce",
+			"from", from.Hex(),
+			"txNonce", tx.Nonce(),
+			"consumedNonce", consumed,
+			"hash", tx.Hash().Hex())
+		return
+	}
+
+	// Check for duplicate sender+nonce in tracker (staged or committed)
 	for _, rec := range tracker.records {
-		if rec == nil || rec.tx == nil || rec.status != sequencerTxStatusStaged {
+		if rec == nil || rec.tx == nil {
 			continue
 		}
 		if rec.tx.Nonce() == tx.Nonce() {
@@ -2309,6 +2343,7 @@ func (b *EthAPIBackend) addSequencerEntryLocked(tx *types.Transaction, kind sequ
 					"from", from.Hex(),
 					"nonce", tx.Nonce(),
 					"existingHash", rec.tx.Hash().Hex(),
+					"existingStatus", rec.status,
 					"newHash", tx.Hash().Hex())
 				return
 			}
@@ -2992,8 +3027,11 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 		return true, nil
 	}
 
-	// Reject stale nonces early (nonce < current state nonce)
+	// Reject stale nonces early (nonce < current state nonce or recently consumed)
 	signer := types.LatestSignerForChainID(chainID)
+	b.sequencerTxMutex.RLock()
+	consumedNonces := b.consumedNonces
+	b.sequencerTxMutex.RUnlock()
 	for _, txReq := range localTxs {
 		for _, txBytes := range txReq.Transaction {
 			tx := &types.Transaction{}
@@ -3011,6 +3049,15 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 					"sender", sender.Hex(),
 					"txNonce", tx.Nonce(),
 					"stateNonce", stateNonce)
+				return false, nil
+			}
+			// Also check recently consumed nonces (committed but not yet in chain state)
+			if consumed, ok := consumedNonces[sender]; ok && tx.Nonce() < consumed {
+				log.Warn("[SSV] Voting ABORT due to recently consumed nonce",
+					"xtID", xtID.Hex(),
+					"sender", sender.Hex(),
+					"txNonce", tx.Nonce(),
+					"consumedNonce", consumed)
 				return false, nil
 			}
 		}
