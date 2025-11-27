@@ -2342,12 +2342,13 @@ func (b *EthAPIBackend) addSequencerEntryLocked(tx *types.Transaction, kind sequ
 				}
 			}
 			if existingFrom == from {
-				log.Debug("[SSV] Skipping duplicate nonce tx",
+				log.Info("[SSV] Skipping duplicate nonce tx",
 					"from", from.Hex(),
 					"nonce", tx.Nonce(),
 					"existingHash", rec.tx.Hash().Hex(),
 					"existingStatus", rec.status,
-					"newHash", tx.Hash().Hex())
+					"newHash", tx.Hash().Hex(),
+					"kind", kind)
 				return
 			}
 		}
