@@ -138,6 +138,10 @@ type EthAPIBackend struct {
 	txTracker        *sequencerTxTracker
 	putInboxPool     *putInboxTxPool
 
+	// SSV: Track consumed nonces per sender (committed but not finalized)
+	consumedNonces     map[common.Address]uint64
+	consumedNoncesSlot uint64
+
 	// SSV: Track last RequestSeal inclusion list for SBCP
 	rsMutex                 sync.RWMutex
 	lastRequestSealIncluded [][]byte
@@ -1795,8 +1799,25 @@ func (b *EthAPIBackend) clearCommittedSequencerTransactions(committed map[common
 		return
 	}
 
+	signer := types.LatestSignerForChainID(b.ChainConfig().ChainID)
+
 	b.sequencerTxMutex.Lock()
 	tracker := b.ensureTrackerLocked()
+
+	// Track consumed nonces BEFORE removing records
+	if b.consumedNonces == nil {
+		b.consumedNonces = make(map[common.Address]uint64)
+	}
+	for hash := range committed {
+		if rec := tracker.record(hash); rec != nil && rec.tx != nil {
+			if from, err := types.Sender(signer, rec.tx); err == nil {
+				if rec.tx.Nonce() >= b.consumedNonces[from] {
+					b.consumedNonces[from] = rec.tx.Nonce() + 1
+				}
+			}
+		}
+	}
+
 	removedPutInbox, removedOriginal, removedRecords := tracker.markDelivered(committed)
 	b.sequencerTxMutex.Unlock()
 
@@ -2147,12 +2168,20 @@ func (b *EthAPIBackend) collectKnownNoncesForSender(signer types.Signer, sender 
 	}
 
 	b.sequencerTxMutex.RLock()
+	// Include consumed nonces (committed but not yet on-chain)
+	if consumed, ok := b.consumedNonces[sender]; ok && consumed > stateNonce {
+		for n := stateNonce; n < consumed; n++ {
+			nonceInPool[n] = true
+		}
+		stateNonce = consumed
+	}
+
 	if b.txTracker != nil {
 		for _, rec := range b.txTracker.records {
 			if rec == nil || rec.tx == nil {
 				continue
 			}
-			// Include both staged AND committed txs (committed but not yet finalized)
+			// Include both staged AND committed txs
 			if rec.status != sequencerTxStatusStaged && rec.status != sequencerTxStatusCommitted {
 				continue
 			}
@@ -2544,6 +2573,14 @@ func (b *EthAPIBackend) NotifySlotStart(startSlot *rollupv1.StartSlot) error {
 	b.pendingBlocks = nil
 	b.pendingBlockSlot = startSlot.Slot
 	b.pendingBlockMutex.Unlock()
+
+	// Clear consumed nonces from previous slot
+	b.sequencerTxMutex.Lock()
+	if b.consumedNoncesSlot != startSlot.Slot && len(b.consumedNonces) > 0 {
+		b.consumedNonces = nil
+		b.consumedNoncesSlot = startSlot.Slot
+	}
+	b.sequencerTxMutex.Unlock()
 
 	// Drop any staged transactions that are still missing prior nonces before carrying them forward.
 	b.pruneGappedSequencerTransactions(startSlot.Slot)
