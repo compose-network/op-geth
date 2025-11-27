@@ -1683,6 +1683,9 @@ func (b *EthAPIBackend) OnBlockBuildingComplete(
 		}
 		// Update consumedNonces immediately when txs are committed
 		signer := types.LatestSignerForChainID(b.ChainConfig().ChainID)
+		if b.consumedNonces == nil {
+			b.consumedNonces = make(map[common.Address]uint64)
+		}
 		for _, hash := range inBlockHashes {
 			if rec := tracker.record(hash); rec != nil && rec.tx != nil {
 				if from, err := types.Sender(signer, rec.tx); err == nil {
