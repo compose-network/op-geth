@@ -2284,21 +2284,42 @@ func (b *EthAPIBackend) listTransactionsByKind(kind sequencerTxKind) []*types.Tr
 
 func (b *EthAPIBackend) addSequencerEntryLocked(tx *types.Transaction, kind sequencerTxKind) {
 	tracker := b.ensureTrackerLocked()
+	signer := types.LatestSignerForChainID(b.ChainConfig().ChainID)
+
+	// Check for duplicate sender+nonce (reject if already staged)
+	from := common.Address{}
+	if signer != nil {
+		if s, err := types.Sender(signer, tx); err == nil {
+			from = s
+		}
+	}
+	for _, rec := range tracker.records {
+		if rec == nil || rec.tx == nil || rec.status != sequencerTxStatusStaged {
+			continue
+		}
+		if rec.tx.Nonce() == tx.Nonce() {
+			existingFrom := common.Address{}
+			if signer != nil {
+				if s, err := types.Sender(signer, rec.tx); err == nil {
+					existingFrom = s
+				}
+			}
+			if existingFrom == from {
+				log.Debug("[SSV] Skipping duplicate nonce tx",
+					"from", from.Hex(),
+					"nonce", tx.Nonce(),
+					"existingHash", rec.tx.Hash().Hex(),
+					"newHash", tx.Hash().Hex())
+				return
+			}
+		}
+	}
 
 	slot := uint64(0)
 	if b.coordinator != nil {
 		slot = b.coordinator.GetCurrentSlot()
 	}
 	tracker.add(tx, kind, slot)
-	record := tracker.record(tx.Hash())
-
-	signer := types.LatestSignerForChainID(b.ChainConfig().ChainID)
-	from := common.Address{}
-	if record != nil && signer != nil {
-		if s, err := types.Sender(signer, record.tx); err == nil {
-			from = s
-		}
-	}
 	kindStr := "original"
 	if kind == sequencerTxPutInbox {
 		kindStr = "putInbox"
@@ -2969,6 +2990,30 @@ func (b *EthAPIBackend) simulateXTRequestForSBCP(
 	if len(localTxs) == 0 {
 		log.Info("[SSV] No local transactions to simulate", "xtID", xtID.Hex())
 		return true, nil
+	}
+
+	// Reject stale nonces early (nonce < current state nonce)
+	signer := types.LatestSignerForChainID(chainID)
+	for _, txReq := range localTxs {
+		for _, txBytes := range txReq.Transaction {
+			tx := &types.Transaction{}
+			if err := tx.UnmarshalBinary(txBytes); err != nil {
+				continue
+			}
+			sender, err := types.Sender(signer, tx)
+			if err != nil {
+				continue
+			}
+			stateNonce := b.eth.txPool.Nonce(sender)
+			if tx.Nonce() < stateNonce {
+				log.Warn("[SSV] Voting ABORT due to stale nonce",
+					"xtID", xtID.Hex(),
+					"sender", sender.Hex(),
+					"txNonce", tx.Nonce(),
+					"stateNonce", stateNonce)
+				return false, nil
+			}
+		}
 	}
 
 	mailboxProcessor, err := mailbox.NewProcessor(mailbox.Config{
