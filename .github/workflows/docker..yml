@@ -1,0 +1,64 @@
+name: "Docker reusable workflow"
+
+on:
+  workflow_call:
+    inputs:
+      with-push:
+        description: "determines if to push docker image to an image registry. Defaults to 'false'"
+        default: false
+        type: boolean
+        required: false
+      image-tag:
+        description: "docker image tag. Defaults to 'latest'"
+        default: "latest"
+        type: string
+        required: false
+      image-architectures:
+        description: "comma separated list of architectures. Defaults to 'linux/amd64,linux/arm64'"
+        required: false
+        type: string
+        default: linux/amd64,linux/arm64
+
+env:  
+  IMAGE_REGISTRY: ghcr.io
+  DOCKERFILE_PATH: build/Dockerfile
+  IMAGE_DESCRIPTION: |
+    This Docker image is a CLI tool for building and managing Compose Network local testnets
+
+jobs:
+  docker:
+    name: Build/Push Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      packages: write
+      contents: read
+    env:
+      IMAGE_TAG: ${{ inputs.image-tag }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+        with:
+          platforms: ${{ inputs.image-architectures }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
+        with:
+          registry: ${{ env.IMAGE_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          file: ${{ env.DOCKERFILE_PATH }}
+          push: ${{ inputs.with-push }}
+          platforms: ${{ inputs.image-architectures }}
+          tags: |
+            ${{ env.IMAGE_REGISTRY }}/${{ github.repository }}:${{ env.IMAGE_TAG }}
+            ${{ env.IMAGE_REGISTRY }}/${{ github.repository }}:latest
+          outputs: |
+            type=image,name=target,annotation-index.org.opencontainers.image.description=${{ env.IMAGE_DESCRIPTION }}
