@@ -26,7 +26,7 @@ import (
 	composeproto "github.com/compose-network/specs/compose/proto"
 	instanceproto "github.com/compose-network/specs/compose/scp"
 	spconsensus "github.com/ethereum/go-ethereum/internal/xconsensus"
-	"github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
+	rollupv1 "github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 	xsequencer "github.com/ethereum/go-ethereum/internal/xsuperblock/sequencer"
 	"github.com/ethereum/go-ethereum/internal/xtransport"
 
@@ -736,7 +736,9 @@ func (b *EthAPIBackend) handleSequencerMessage(
 // SSV
 func (b *EthAPIBackend) StartCallbackFn() spconsensus.StartFn {
 	return func(ctx context.Context, from string, instance *composeproto.StartInstance) error {
-		//b.coordinator.PeriodSequencer().OnStartInstance()
+		if err := b.coordinator.PeriodSequencer().OnStartInstance(compose.InstanceID(instance.InstanceId), compose.PeriodID(instance.PeriodId), compose.SequenceNumber(instance.SequenceNumber)); err != nil {
+			return err
+		}
 		return b.coordinator.InstanceSequencer().StartInstance(instance)
 	}
 }

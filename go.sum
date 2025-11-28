@@ -78,14 +78,8 @@ github.com/cockroachdb/tokenbucket v0.0.0-20230807174530-cc333fc44b06 h1:zuQyyAK
 github.com/cockroachdb/tokenbucket v0.0.0-20230807174530-cc333fc44b06/go.mod h1:7nc4anLGjupUW/PeY5qiNYsdNXj7zopG+eqsS7To5IQ=
 github.com/compose-network/registry v0.0.0-20251019130932-f9a7f7dd297b h1:HDtykkbjvoeQxhlQFDFTvGx0PamTlJcPs3/ACrbcAD0=
 github.com/compose-network/registry v0.0.0-20251019130932-f9a7f7dd297b/go.mod h1:0KvBwHpojq2/ys4k6Pnsvlrtj/uGL30/KqEKkwLuMnU=
-github.com/compose-network/specs/compose v0.0.0-20251027143611-6bad137833e3 h1:vp2cNMtR2J/I9GRXKUCM9oslW7kKQC8PF4pURduP1M8=
-github.com/compose-network/specs/compose v0.0.0-20251027143611-6bad137833e3/go.mod h1:IacGPdRsAUjMyFw3Pjl9RrhXK09yCx+ZpUzRxtnmdH4=
-github.com/compose-network/specs/compose v0.0.0-20251029171617-397ad852260e h1:47gV/Rp80nuHyyZ7p+rgbRTd2cot1lFVmbHbQDL1ZoE=
-github.com/compose-network/specs/compose v0.0.0-20251029171617-397ad852260e/go.mod h1:THydsfSfs5svwPoYU6+0y0JXZdIVUcXexc9Rh33Ow2g=
-github.com/compose-network/specs/compose v0.0.0-20251029173415-29572a998d0b h1:+nrY/mB57YxzKHNoTsCdrXyE0E6Xxp1lMYZW+dbJdyE=
-github.com/compose-network/specs/compose v0.0.0-20251029173415-29572a998d0b/go.mod h1:THydsfSfs5svwPoYU6+0y0JXZdIVUcXexc9Rh33Ow2g=
-github.com/compose-network/specs/compose v0.0.0-20251101113612-6318cbcb3d22 h1:j+ZmT37ZI8S24d3Vi5UAr4Q7RapNXlGciiK1h34wOus=
-github.com/compose-network/specs/compose v0.0.0-20251101113612-6318cbcb3d22/go.mod h1:THydsfSfs5svwPoYU6+0y0JXZdIVUcXexc9Rh33Ow2g=
+github.com/compose-network/specs/compose v0.0.0-20251127083014-94716a565b30 h1:yhPP8v/RTkjLOy6mzrotIt38Oc30KISiKVgC6zloChQ=
+github.com/compose-network/specs/compose v0.0.0-20251127083014-94716a565b30/go.mod h1:THydsfSfs5svwPoYU6+0y0JXZdIVUcXexc9Rh33Ow2g=
 github.com/consensys/gnark-crypto v0.18.0 h1:vIye/FqI50VeAr0B3dx+YjeIvmc3LWz4yEfbWBpTUf0=
 github.com/consensys/gnark-crypto v0.18.0/go.mod h1:L3mXGFTe1ZN+RSJ+CLjUt9x7PNdx8ubaYfDROyp2Z8c=
 github.com/coreos/go-systemd/v22 v22.5.0/go.mod h1:Y58oyj3AT4RCenI/lSvhwexgC+NSVTIJ3seZv2GcEnc=
@@ -184,8 +178,8 @@ github.com/google/go-cmp v0.3.1/go.mod h1:8QqcDgzrUqlUb/G2PQTWiueGozuR1884gddMyw
 github.com/google/go-cmp v0.4.0/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
 github.com/google/go-cmp v0.5.2/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
 github.com/google/go-cmp v0.5.8/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
-github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=
-github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
+github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
+github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
 github.com/google/go-querystring v1.1.0 h1:AnCroh3fv4ZBgVIf1Iwtovgjaw/GiKJo8M8yD/fhyJ8=
 github.com/google/go-querystring v1.1.0/go.mod h1:Kcdr2DB4koayq7X8pmAG4sNG59So17icRSOU623lUBU=
 github.com/google/gofuzz v1.2.0 h1:xRy4A+RhZaiKjJ1bPfwQ8sedCA+YS2YcCHW6ec7JMi0=
@@ -515,8 +509,6 @@ google.golang.org/protobuf v0.0.0-20200228230310-ab0ca4ff8a60/go.mod h1:cfTl7dwQ
 google.golang.org/protobuf v1.20.1-0.20200309200217-e05f789c0967/go.mod h1:A+miEFZTKqfCUM6K7xSMQL9OKL/b6hQv+e19PK+JZNE=
 google.golang.org/protobuf v1.21.0/go.mod h1:47Nbq4nVaFHyn7ilMalzfO3qCViNmqZ2kzikPIcrTAo=
 google.golang.org/protobuf v1.23.0/go.mod h1:EGpADcykh3NcUnDUJcl1+ZksZNG86OlYog2l/sGQquU=
-google.golang.org/protobuf v1.34.2 h1:6xV6lTsCfpGD21XK49h7MhtcApnLqkfYgPcdHftf6hg=
-google.golang.org/protobuf v1.34.2/go.mod h1:qYOHts0dSfpeUzUFpOMr/WGzszTmLH+DiWniOlNbLDw=
 google.golang.org/protobuf v1.36.10 h1:AYd7cD/uASjIL6Q9LiTjz8JLcrh/88q5UObnmY3aOOE=
 google.golang.org/protobuf v1.36.10/go.mod h1:HTf+CrKn2C3g5S8VImy6tdcUvCska2kB7j23XfzDpco=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
