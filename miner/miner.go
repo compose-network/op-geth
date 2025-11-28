@@ -94,9 +94,13 @@ type BackendWithSequencerTransactions interface {
 	// SSV
 	OnBlockBuildingComplete(ctx context.Context, block *types.Block, success bool, simulation bool) error
 
-	// CanIncludeLocalTx returns whether local transactions can be included in the block
+	// AcquireState acquires the state for the currently building block
 	// SSV
-	CanIncludeLocalTx() (bool, error)
+	AcquireState()
+
+	// ReleaseState releases the state after block building is complete
+	// SSV
+	ReleaseState()
 }
 
 // Config is the configuration parameters of mining.

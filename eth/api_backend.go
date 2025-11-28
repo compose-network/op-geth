@@ -1262,13 +1262,16 @@ func (b *EthAPIBackend) OnBlockBuildingComplete(
 	return b.coordinator.OnBlockBuildingComplete(ctx, block, success)
 }
 
-// CanIncludeLocalTx returns whether local transactions can be included in the block
+// AcquireState acquires the currently built block state lock for sequencer operations
 // SSV
-func (b *EthAPIBackend) CanIncludeLocalTx() (bool, error) {
-	if b.coordinator == nil || b.coordinator.PeriodSequencer() == nil {
-		return false, fmt.Errorf("instance sequencer not configured")
-	}
-	return b.coordinator.PeriodSequencer().CanIncludeLocalTx()
+func (b *EthAPIBackend) AcquireState() {
+	b.coordinator.InstanceSequencer().AcquireState()
+}
+
+// ReleaseState releases the currently built block state lock
+// SSV
+func (b *EthAPIBackend) ReleaseState() {
+	b.coordinator.InstanceSequencer().ReleaseState()
 }
 
 func (b *EthAPIBackend) GetPendingOriginalTxs() []*types.Transaction {

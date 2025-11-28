@@ -2,6 +2,7 @@ package xsimulation
 
 import (
 	"errors"
+	"sync"
 
 	"github.com/compose-network/specs/compose"
 	instanceproto "github.com/compose-network/specs/compose/scp"
@@ -12,8 +13,9 @@ import (
 type SimulatorFunc func(request instanceproto.SimulationRequest) (*instanceproto.MailboxMessageHeader, []instanceproto.MailboxMessage, error)
 
 type simulationEngine struct {
-	chainID  compose.ChainID
-	simulate SimulatorFunc
+	chainID          compose.ChainID
+	simulate         SimulatorFunc
+	blockStateLocker sync.Mutex
 }
 
 // NewSimulationEngine constructs a sequencer execution engine scoped to the provided chain.
@@ -21,6 +23,16 @@ func NewSimulationEngine(chainID compose.ChainID) *simulationEngine {
 	return &simulationEngine{
 		chainID: chainID,
 	}
+}
+
+// AcquireState locks the block state for simulation.
+func (se *simulationEngine) AcquireState() {
+	se.blockStateLocker.Lock()
+}
+
+// ReleaseState unlocks the block state after simulation.
+func (se *simulationEngine) ReleaseState() {
+	se.blockStateLocker.Unlock()
 }
 
 // SetSimulator installs the concrete simulation callback supplied by the host execution environment.

@@ -3,17 +3,20 @@ package instanceproto
 import (
 	"encoding/hex"
 	"fmt"
+	"sync"
+
 	"github.com/compose-network/specs/compose"
 	composeproto "github.com/compose-network/specs/compose/proto"
 	instanceproto "github.com/compose-network/specs/compose/scp"
 	"github.com/rs/zerolog"
-	"sync"
 )
 
 type Sequencer interface {
 	StartInstance(instance *composeproto.StartInstance) error
 	ProcessMailboxMessage(instanceID compose.InstanceID, mailboxMessage *instanceproto.MailboxMessage) error
 	Decide(instance compose.InstanceID, decision bool) error
+	AcquireState()
+	ReleaseState()
 }
 
 type sequencerNetworkFactory interface {
@@ -37,6 +40,14 @@ func NewSequencer(executionEngine instanceproto.ExecutionEngine, seqNetwork inst
 	}
 
 	return &is
+}
+
+func (s *InstanceSequencer) AcquireState() {
+	s.execEngine.AcquireState()
+}
+
+func (s *InstanceSequencer) ReleaseState() {
+	s.execEngine.ReleaseState()
 }
 
 func (s *InstanceSequencer) StartInstance(startInstance *composeproto.StartInstance) error {
