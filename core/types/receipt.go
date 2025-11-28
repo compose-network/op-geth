@@ -638,24 +638,6 @@ func EncodeBlockReceiptLists(receipts []Receipts) []rlp.RawValue {
 	return result
 }
 
-// EncodeBlockReceiptLists encodes a list of block receipt lists into RLP.
-func EncodeBlockReceiptLists(receipts []Receipts) []rlp.RawValue {
-	var storageReceipts []*ReceiptForStorage
-	result := make([]rlp.RawValue, len(receipts))
-	for i, receipt := range receipts {
-		storageReceipts = storageReceipts[:0]
-		for _, r := range receipt {
-			storageReceipts = append(storageReceipts, (*ReceiptForStorage)(r))
-		}
-		bytes, err := rlp.EncodeToBytes(storageReceipts)
-		if err != nil {
-			log.Crit("Failed to encode block receipts", "err", err)
-		}
-		result[i] = bytes
-	}
-	return result
-}
-
 func u32ptrTou64ptr(a *uint32) *uint64 {
 	if a == nil {
 		return nil

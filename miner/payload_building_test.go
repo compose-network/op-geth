@@ -25,8 +25,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/ethereum/go-ethereum/beacon/engine"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
@@ -162,7 +160,7 @@ func (b *testWorkerBackend) TxPool() *txpool.TxPool       { return b.txPool }
 func newTestWorker(t *testing.T, chainConfig *params.ChainConfig, engine consensus.Engine, db ethdb.Database, blocks int) (*Miner, *testWorkerBackend) {
 	backend := newTestWorkerBackend(t, chainConfig, engine, db, blocks)
 	backend.txPool.Add(pendingTxs, true)
-	w := New(backend, testConfig, engine)
+	w := New(backend, struct{}{}, testConfig, engine)
 	return w, backend
 }
 

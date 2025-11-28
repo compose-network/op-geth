@@ -19,7 +19,6 @@ package catalyst
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"reflect"

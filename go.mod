@@ -15,6 +15,7 @@ require (
 	github.com/cloudflare/cloudflare-go v0.114.0
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/compose-network/registry v0.0.0-20251019130932-f9a7f7dd297b
+	github.com/compose-network/specs/compose v0.0.0-20251101113612-6318cbcb3d22
 	github.com/consensys/gnark-crypto v0.18.0
 	github.com/crate-crypto/go-eth-kzg v1.3.0
 	github.com/crate-crypto/go-ipa v0.0.0-20240724233137-53bbb0ceb27a
@@ -32,7 +33,7 @@ require (
 	github.com/fsnotify/fsnotify v1.6.0
 	github.com/gballet/go-libpcsclite v0.0.0-20190607065134-2772fd86a8ff
 	github.com/gofrs/flock v0.12.1
-	github.com/golang-jwt/jwt/v4 v4.5.1
+	github.com/golang-jwt/jwt/v4 v4.5.2
 	github.com/golang/snappy v0.0.5-0.20220116011046-fa5810519dcb
 	github.com/google/gofuzz v1.2.0
 	github.com/google/uuid v1.6.0
@@ -104,7 +105,6 @@ require (
 	github.com/cockroachdb/logtags v0.0.0-20230118201751-21c54148d20b // indirect
 	github.com/cockroachdb/redact v1.1.5 // indirect
 	github.com/cockroachdb/tokenbucket v0.0.0-20230807174530-cc333fc44b06 // indirect
-	github.com/compose-network/specs/compose v0.0.0-20251101113612-6318cbcb3d22 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.5 // indirect
 	github.com/deepmap/oapi-codegen v1.6.0 // indirect
 	github.com/dlclark/regexp2 v1.7.0 // indirect

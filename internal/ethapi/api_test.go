@@ -24,7 +24,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 	"math"
 	"math/big"
 	"os"
@@ -35,6 +34,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/compose-network/specs/compose/proto"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -47,6 +47,7 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/filtermaps"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/ssv"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -601,7 +602,7 @@ type testBackend struct {
 	pendingReceipts types.Receipts
 }
 
-func (b *testBackend) HandleSPMessage(ctx context.Context, msg *rollupv1.Message) ([]common.Hash, error) {
+func (b *testBackend) HandleSPMessage(context.Context, *proto.Message) ([]common.Hash, error) {
 	//TODO implement me
 	panic("implement me")
 }
