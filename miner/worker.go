@@ -458,6 +458,19 @@ func (miner *Miner) makeEnv(
 }
 
 func (miner *Miner) commitTransaction(env *environment, tx *types.Transaction) error {
+	if backend, ok := miner.backendAPI.(BackendWithSequencerTransactions); ok {
+		for {
+			includeLocalTransaction, err := backend.CanIncludeLocalTx()
+			if err != nil {
+				return fmt.Errorf("failed to check CanIncludeTransaction: %w", err)
+			}
+			if includeLocalTransaction {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
 	// OP-Stack addition
 	interopAccessList := interoptypes.TxToInteropAccessList(tx)
 	if len(interopAccessList) > 0 {
