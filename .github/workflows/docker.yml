@@ -19,9 +19,9 @@ on:
         type: string
         default: linux/amd64,linux/arm64
 
-env:  
+env:
   IMAGE_REGISTRY: ghcr.io
-  DOCKERFILE_PATH: build/Dockerfile
+  DOCKERFILE_PATH: Dockerfile
   IMAGE_DESCRIPTION: |
     This Docker image is a CLI tool for building and managing Compose Network local testnets
 

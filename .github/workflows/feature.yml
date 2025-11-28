@@ -6,8 +6,8 @@ on:
       - main
       - stage
 
-env:  
-  GO_VERSION: 1.24
+env:
+  GO_VERSION: 1.24.5
 
 jobs:
   go-lint:
@@ -36,7 +36,9 @@ jobs:
           cache: true
 
       - name: Build
-        run: make build
+        run: |
+          make geth
+          make evm
 
   go-test:
     name: Go Test
