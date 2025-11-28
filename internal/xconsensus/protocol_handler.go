@@ -3,6 +3,7 @@ package xconsensus
 import (
 	"context"
 	"fmt"
+
 	"github.com/compose-network/specs/compose"
 	sbcpproto "github.com/compose-network/specs/compose/proto"
 	"github.com/rs/zerolog"

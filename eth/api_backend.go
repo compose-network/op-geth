@@ -770,6 +770,10 @@ func (b *EthAPIBackend) DecisionCallbackFn() spconsensus.DecisionFn {
 			return fmt.Errorf("instance sequencer not configured")
 		}
 
+		if err := b.coordinator.PeriodSequencer().OnDecidedInstance(*instanceID); err != nil {
+			return err
+		}
+
 		return b.coordinator.InstanceSequencer().Decide(*instanceID, decision)
 	}
 }
@@ -1256,6 +1260,15 @@ func (b *EthAPIBackend) OnBlockBuildingComplete(
 	success, simulation bool,
 ) error {
 	return b.coordinator.OnBlockBuildingComplete(ctx, block, success)
+}
+
+// CanIncludeLocalTx returns whether local transactions can be included in the block
+// SSV
+func (b *EthAPIBackend) CanIncludeLocalTx() (bool, error) {
+	if b.coordinator == nil || b.coordinator.PeriodSequencer() == nil {
+		return false, fmt.Errorf("instance sequencer not configured")
+	}
+	return b.coordinator.PeriodSequencer().CanIncludeLocalTx()
 }
 
 func (b *EthAPIBackend) GetPendingOriginalTxs() []*types.Transaction {

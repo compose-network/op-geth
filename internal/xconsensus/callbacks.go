@@ -3,9 +3,10 @@ package xconsensus
 import (
 	"context"
 	"encoding/hex"
+	"time"
+
 	"github.com/compose-network/specs/compose"
 	composeproto "github.com/compose-network/specs/compose/proto"
-	"time"
 
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/rs/zerolog"
@@ -68,6 +69,8 @@ func (cm *CallbackManager) InvokeStart(ctx context.Context, from string, instanc
 		defer cancel()
 
 		if err := cm.startFn(ctx, from, instance); err != nil {
+			// if we cannot start, we vote NO by default
+			cm.InvokeVote((*compose.InstanceID)(instanceID), false, 0)
 			cm.log.Error().
 				Err(err).
 				Str("xt_id", hex.EncodeToString(instanceID)).
