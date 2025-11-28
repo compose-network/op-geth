@@ -1264,14 +1264,8 @@ func (b *EthAPIBackend) OnBlockBuildingComplete(
 
 // AcquireState acquires the currently built block state lock for sequencer operations
 // SSV
-func (b *EthAPIBackend) AcquireState() {
-	b.coordinator.InstanceSequencer().AcquireState()
-}
-
-// ReleaseState releases the currently built block state lock
-// SSV
-func (b *EthAPIBackend) ReleaseState() {
-	b.coordinator.InstanceSequencer().ReleaseState()
+func (b *EthAPIBackend) AcquireState() (release func()) {
+	return b.coordinator.InstanceSequencer().AcquireState()
 }
 
 func (b *EthAPIBackend) GetPendingOriginalTxs() []*types.Transaction {

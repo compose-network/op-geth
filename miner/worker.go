@@ -463,8 +463,7 @@ func (miner *Miner) commitTransaction(env *environment, tx *types.Transaction) e
 	}
 
 	// acquire state for the currently building block
-	miner.backendAPI.(BackendWithSequencerTransactions).AcquireState()
-	defer miner.backendAPI.(BackendWithSequencerTransactions).ReleaseState()
+	defer miner.backendAPI.(BackendWithSequencerTransactions).AcquireState()
 
 	// OP-Stack addition
 	interopAccessList := interoptypes.TxToInteropAccessList(tx)

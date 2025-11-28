@@ -96,11 +96,7 @@ type BackendWithSequencerTransactions interface {
 
 	// AcquireState acquires the state for the currently building block
 	// SSV
-	AcquireState()
-
-	// ReleaseState releases the state after block building is complete
-	// SSV
-	ReleaseState()
+	AcquireState() (release func())
 }
 
 // Config is the configuration parameters of mining.

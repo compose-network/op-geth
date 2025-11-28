@@ -15,23 +15,27 @@ type Sequencer interface {
 	StartInstance(instance *composeproto.StartInstance) error
 	ProcessMailboxMessage(instanceID compose.InstanceID, mailboxMessage *instanceproto.MailboxMessage) error
 	Decide(instance compose.InstanceID, decision bool) error
-	AcquireState()
-	ReleaseState()
+	AcquireState() (release func())
 }
 
 type sequencerNetworkFactory interface {
 	ForInstance(instance compose.Instance) instanceproto.SequencerNetwork
 }
 
+type InstanceExecutionEngine interface {
+	instanceproto.ExecutionEngine
+	AcquireState() (release func())
+}
+
 type InstanceSequencer struct {
 	instanceMap map[compose.InstanceID]instanceproto.SequencerInstance
 	lock        sync.RWMutex
-	execEngine  instanceproto.ExecutionEngine
+	execEngine  InstanceExecutionEngine
 	seqNetwork  instanceproto.SequencerNetwork
 	log         zerolog.Logger
 }
 
-func NewSequencer(executionEngine instanceproto.ExecutionEngine, seqNetwork instanceproto.SequencerNetwork, log zerolog.Logger) Sequencer {
+func NewSequencer(executionEngine InstanceExecutionEngine, seqNetwork instanceproto.SequencerNetwork, log zerolog.Logger) Sequencer {
 	is := InstanceSequencer{
 		instanceMap: make(map[compose.InstanceID]instanceproto.SequencerInstance),
 		execEngine:  executionEngine,
@@ -42,12 +46,8 @@ func NewSequencer(executionEngine instanceproto.ExecutionEngine, seqNetwork inst
 	return &is
 }
 
-func (s *InstanceSequencer) AcquireState() {
-	s.execEngine.AcquireState()
-}
-
-func (s *InstanceSequencer) ReleaseState() {
-	s.execEngine.ReleaseState()
+func (s *InstanceSequencer) AcquireState() (release func()) {
+	return s.execEngine.AcquireState()
 }
 
 func (s *InstanceSequencer) StartInstance(startInstance *composeproto.StartInstance) error {

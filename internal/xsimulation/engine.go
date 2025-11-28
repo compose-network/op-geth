@@ -26,13 +26,11 @@ func NewSimulationEngine(chainID compose.ChainID) *simulationEngine {
 }
 
 // AcquireState locks the block state for simulation.
-func (se *simulationEngine) AcquireState() {
+func (se *simulationEngine) AcquireState() (release func()) {
 	se.blockStateLocker.Lock()
-}
-
-// ReleaseState unlocks the block state after simulation.
-func (se *simulationEngine) ReleaseState() {
-	se.blockStateLocker.Unlock()
+	return func() {
+		se.blockStateLocker.Unlock()
+	}
 }
 
 // SetSimulator installs the concrete simulation callback supplied by the host execution environment.
@@ -52,5 +50,9 @@ func (se *simulationEngine) Simulate(request instanceproto.SimulationRequest) (*
 	if se.simulate == nil {
 		return nil, nil, errors.New("simulation runner not configured")
 	}
+	// lock block state during simulation to prevent concurrent modifications
+	se.blockStateLocker.Lock()
+	defer se.blockStateLocker.Unlock()
+
 	return se.simulate(request)
 }
