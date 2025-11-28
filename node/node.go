@@ -1042,8 +1042,8 @@ func (n *Node) EventMux() *event.TypeMux {
 	return n.eventmux
 }
 
-// OpenDatabase opens an existing database with the given name (or creates one if no
-// previous can be found) from within the node's instanceproto directory. If the node has no
+// OpenDatabaseWithOptions opens an existing database with the given name (or creates one if no
+// previous can be found) from within the node's instance directory. If the node has no
 // data directory, an in-memory database is returned.
 func (n *Node) OpenDatabaseWithOptions(name string, opt DatabaseOptions) (ethdb.Database, error) {
 	n.lock.Lock()
@@ -1073,7 +1073,7 @@ func (n *Node) OpenDatabaseWithOptions(name string, opt DatabaseOptions) (ethdb.
 }
 
 // OpenDatabase opens an existing database with the given name (or creates one if no
-// previous can be found) from within the node's instanceproto directory.
+// previous can be found) from within the node's instance directory.
 // If the node has no data directory, an in-memory database is returned.
 // Deprecated: use OpenDatabaseWithOptions instead.
 func (n *Node) OpenDatabase(name string, cache, handles int, namespace string, readonly bool) (ethdb.Database, error) {

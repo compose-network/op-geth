@@ -384,11 +384,7 @@ func (b *EthAPIBackend) GetReceipts(ctx context.Context, hash common.Hash) (type
 	return b.eth.blockchain.GetReceiptsByHash(hash), nil
 }
 
-func (b *EthAPIBackend) GetCanonicalReceipt(
-	tx *types.Transaction,
-	blockHash common.Hash,
-	blockNumber, blockIndex uint64,
-) (*types.Receipt, error) {
+func (b *EthAPIBackend) GetCanonicalReceipt(tx *types.Transaction, blockHash common.Hash, blockNumber, blockIndex uint64) (*types.Receipt, error) {
 	return b.eth.blockchain.GetCanonicalReceipt(tx, blockHash, blockNumber, blockIndex)
 }
 
@@ -512,9 +508,7 @@ func (b *EthAPIBackend) GetPoolTransaction(hash common.Hash) *types.Transaction 
 // not being finished. The caller must explicitly check the indexer progress.
 //
 // Notably, only the transaction in the canonical chain is visible.
-func (b *EthAPIBackend) GetCanonicalTransaction(
-	txHash common.Hash,
-) (bool, *types.Transaction, common.Hash, uint64, uint64) {
+func (b *EthAPIBackend) GetCanonicalTransaction(txHash common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64) {
 	lookup, tx := b.eth.blockchain.GetCanonicalTransaction(txHash)
 	if lookup == nil || tx == nil {
 		return false, nil, common.Hash{}, 0, 0

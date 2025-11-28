@@ -156,8 +156,8 @@ type Downloader struct {
 
 	// Progress reporting metrics
 	syncStartBlock uint64    // Head snap block when Geth was started
-	syncStartTime  time.Time // Time instanceproto when chain sync started
-	syncLogTime    time.Time // Time instanceproto when status was last reported
+	syncStartTime  time.Time // Time instance when chain sync started
+	syncLogTime    time.Time // Time instance when status was last reported
 }
 
 // BlockChain encapsulates functions required to sync a (full or snap) blockchain.

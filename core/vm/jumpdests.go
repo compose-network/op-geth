@@ -29,7 +29,7 @@ type JumpDestCache interface {
 }
 
 // mapJumpDests is the default implementation of JumpDests using a map.
-// This implementation is not thread-safe and is meant to be used per EVM instanceproto.
+// This implementation is not thread-safe and is meant to be used per EVM instance.
 type mapJumpDests map[common.Hash]BitVec
 
 // newMapJumpDests creates a new map-based JumpDests implementation.
