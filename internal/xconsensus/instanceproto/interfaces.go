@@ -95,7 +95,8 @@ func (s *InstanceSequencer) Decide(instance compose.InstanceID, decision bool) e
 
 	seqInstance, ok := s.instanceMap[instance]
 	if !ok {
-		return fmt.Errorf("could not find sequencer instance by %s", hex.EncodeToString(instance[:]))
+		// it was already decided, received another decide(false) for the same instance
+		return nil
 	}
 
 	if err := seqInstance.ProcessDecidedMessage(decision); err != nil {
