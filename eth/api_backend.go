@@ -784,7 +784,7 @@ func (b *EthAPIBackend) VoteCallbackFn(chainID *big.Int) spconsensus.VoteFn {
 	return func(ctx context.Context, instanceID *compose.InstanceID, vote bool) error {
 		// if vote is false the instance is decided to be rejected
 		if !vote {
-			b.coordinator.InstanceSequencer().Decide(*instanceID, vote)
+			b.coordinator.ConsensusCoord().RecordDecision(*instanceID, vote)
 		}
 
 		msgVote := &composeproto.Message_Vote{
