@@ -3,11 +3,12 @@ package instanceproto
 import (
 	"encoding/hex"
 	"fmt"
+	"sync"
+
 	"github.com/compose-network/specs/compose"
 	composeproto "github.com/compose-network/specs/compose/proto"
 	instanceproto "github.com/compose-network/specs/compose/scp"
 	"github.com/rs/zerolog"
-	"sync"
 )
 
 type Sequencer interface {
@@ -83,7 +84,13 @@ func (s *InstanceSequencer) Decide(instance compose.InstanceID, decision bool) e
 	defer s.lock.Unlock()
 
 	seqInstance, ok := s.instanceMap[instance]
-	if !ok {
+	/*
+		Instance could have been decided "false" when we voted - false so the instance was deleted already.
+		In this case decision "false" can arrive twice, once from current sequencer and once from SP.
+		If decision is true and we can't find the instance, it's an error. Becasuse instance cannot decide
+		"true" by itself and it should be received from SP only once.
+	*/
+	if !ok && decision {
 		return fmt.Errorf("could not find sequencer instance by %s", hex.EncodeToString(instance[:]))
 	}
 
