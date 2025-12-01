@@ -15,7 +15,6 @@ type Sequencer interface {
 	StartInstance(instance *composeproto.StartInstance) error
 	ProcessMailboxMessage(instanceID compose.InstanceID, mailboxMessage *instanceproto.MailboxMessage) error
 	Decide(instance compose.InstanceID, decision bool) error
-	AcquireState() (release func())
 }
 
 type sequencerNetworkFactory interface {
@@ -24,7 +23,6 @@ type sequencerNetworkFactory interface {
 
 type InstanceExecutionEngine interface {
 	instanceproto.ExecutionEngine
-	AcquireState() (release func())
 }
 
 type InstanceSequencer struct {
@@ -44,10 +42,6 @@ func NewSequencer(executionEngine InstanceExecutionEngine, seqNetwork instancepr
 	}
 
 	return &is
-}
-
-func (s *InstanceSequencer) AcquireState() (release func()) {
-	return s.execEngine.AcquireState()
 }
 
 func (s *InstanceSequencer) StartInstance(startInstance *composeproto.StartInstance) error {

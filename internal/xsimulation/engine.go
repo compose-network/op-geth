@@ -25,14 +25,6 @@ func NewSimulationEngine(chainID compose.ChainID) *simulationEngine {
 	}
 }
 
-// AcquireState locks the block state for simulation.
-func (se *simulationEngine) AcquireState() (release func()) {
-	se.blockStateLocker.Lock()
-	return func() {
-		se.blockStateLocker.Unlock()
-	}
-}
-
 // SetSimulator installs the concrete simulation callback supplied by the host execution environment.
 func (se *simulationEngine) SetSimulator(fn SimulatorFunc) {
 	se.simulate = fn

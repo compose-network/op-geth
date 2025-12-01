@@ -93,10 +93,6 @@ type BackendWithSequencerTransactions interface {
 	// OnBlockBuildingComplete is called when block building completes
 	// SSV
 	OnBlockBuildingComplete(ctx context.Context, block *types.Block, success bool, simulation bool) error
-
-	// AcquireState acquires the state for the currently building block
-	// SSV
-	AcquireState() (release func())
 }
 
 // Config is the configuration parameters of mining.

@@ -564,20 +564,15 @@ func (miner *Miner) commitTransactions(
 	}
 	blockDABytes := new(big.Int)
 	for {
-		// acquire state for the currently building block
-		release := miner.backendAPI.(BackendWithSequencerTransactions).AcquireState()
-
 		// Check interruption signal and abort building if it's fired.
 		if interrupt != nil {
 			if signal := interrupt.Load(); signal != commitInterruptNone {
-				release()
 				return signalToErr(signal)
 			}
 		}
 		// If we don't have enough gas for any further transactions then we're done.
 		if env.gasPool.Gas() < params.TxGas {
 			log.Trace("Not enough gas for further transactions", "have", env.gasPool, "want", params.TxGas)
-			release()
 			break
 		}
 		// If we don't have enough blob space for any further blob transactions,
@@ -608,7 +603,6 @@ func (miner *Miner) commitTransactions(
 			}
 		}
 		if ltx == nil {
-			release()
 			break
 		}
 		// If we don't have enough space for the next transaction, skip the account.
@@ -623,7 +617,6 @@ func (miner *Miner) commitTransactions(
 				ltx.Gas,
 			)
 			txs.Pop()
-			release()
 			continue
 		}
 
@@ -643,7 +636,6 @@ func (miner *Miner) commitTransactions(
 					ltx.BlobGas/params.BlobTxBlobGasPerBlob,
 				)
 				txs.Pop()
-				release()
 				continue
 			}
 		}
@@ -669,10 +661,8 @@ func (miner *Miner) commitTransactions(
 				// then we can stop early.
 				daBytesRemaining := new(big.Int).Sub(miner.config.MaxDABlockSize, daBytesAfter)
 				if daBytesRemaining.Cmp(types.MinTransactionSize) < 0 {
-					release()
 					break
 				}
-				release()
 				continue
 			}
 		}
@@ -682,14 +672,12 @@ func (miner *Miner) commitTransactions(
 		if tx == nil {
 			log.Trace("Ignoring evicted transaction", "hash", ltx.Hash)
 			txs.Pop()
-			release()
 			continue
 		}
 
 		// if inclusion of the transaction would put the block size over the
 		// maximum we allow, don't add any more txs to the payload.
 		if !env.txFitsSize(tx) {
-			release()
 			break
 		}
 
@@ -701,7 +689,6 @@ func (miner *Miner) commitTransactions(
 					if err := sidecar.ToV1(); err != nil {
 						txs.Pop()
 						log.Warn("Failed to recompute cell proofs", "hash", ltx.Hash, "err", err)
-						release()
 						continue
 					}
 				}
@@ -723,7 +710,6 @@ func (miner *Miner) commitTransactions(
 				miner.chainConfig.EIP155Block,
 			)
 			txs.Pop()
-			release()
 			continue
 		}
 		// Start executing the transaction
@@ -772,9 +758,6 @@ func (miner *Miner) commitTransactions(
 			log.Debug("Transaction failed, account skipped", "hash", ltx.Hash, "err", err)
 			txs.Pop()
 		}
-
-		// give cross chain transaction simulation a chance to acquire the state
-		release()
 	}
 	return nil
 }
