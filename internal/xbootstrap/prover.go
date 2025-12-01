@@ -2,7 +2,6 @@ package xbootstrap
 
 import (
 	"fmt"
-
 	"github.com/compose-network/specs/compose"
 	"github.com/compose-network/specs/compose/sbcp"
 )
