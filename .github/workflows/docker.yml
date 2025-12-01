@@ -1,0 +1,27 @@
+name: Docker workflow
+
+on:
+  push:
+    branches-ignore:
+      - main
+      - stage
+
+jobs:
+    docker-build:
+        runs-on: public-isolated
+        permissions:
+            id-token: write
+            packages: write
+            contents: read
+        steps:
+            - name: Checkout code
+              run: |
+                git clone --depth=1 --branch="${GITHUB_REF#refs/heads/}" "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" .
+                git checkout "$GITHUB_SHA"
+
+            - name: Docker Build
+              uses: compose-network/github-actions/actions/docker@v0.7.1
+              with:
+                github-token: ${{ secrets.GITHUB_TOKEN }}
+                with-push: false
+                image-architectures: linux/amd64
