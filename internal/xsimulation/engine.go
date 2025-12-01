@@ -2,7 +2,6 @@ package xsimulation
 
 import (
 	"errors"
-	"sync"
 
 	"github.com/compose-network/specs/compose"
 	instanceproto "github.com/compose-network/specs/compose/scp"
@@ -13,9 +12,8 @@ import (
 type SimulatorFunc func(request instanceproto.SimulationRequest) (*instanceproto.MailboxMessageHeader, []instanceproto.MailboxMessage, error)
 
 type simulationEngine struct {
-	chainID          compose.ChainID
-	simulate         SimulatorFunc
-	blockStateLocker sync.Mutex
+	chainID  compose.ChainID
+	simulate SimulatorFunc
 }
 
 // NewSimulationEngine constructs a sequencer execution engine scoped to the provided chain.
@@ -42,9 +40,6 @@ func (se *simulationEngine) Simulate(request instanceproto.SimulationRequest) (*
 	if se.simulate == nil {
 		return nil, nil, errors.New("simulation runner not configured")
 	}
-	// lock block state during simulation to prevent concurrent modifications
-	se.blockStateLocker.Lock()
-	defer se.blockStateLocker.Unlock()
 
 	return se.simulate(request)
 }

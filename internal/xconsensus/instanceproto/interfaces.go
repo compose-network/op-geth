@@ -21,19 +21,15 @@ type sequencerNetworkFactory interface {
 	ForInstance(instance compose.Instance) instanceproto.SequencerNetwork
 }
 
-type InstanceExecutionEngine interface {
-	instanceproto.ExecutionEngine
-}
-
 type InstanceSequencer struct {
 	instanceMap map[compose.InstanceID]instanceproto.SequencerInstance
 	lock        sync.RWMutex
-	execEngine  InstanceExecutionEngine
+	execEngine  instanceproto.ExecutionEngine
 	seqNetwork  instanceproto.SequencerNetwork
 	log         zerolog.Logger
 }
 
-func NewSequencer(executionEngine InstanceExecutionEngine, seqNetwork instanceproto.SequencerNetwork, log zerolog.Logger) Sequencer {
+func NewSequencer(executionEngine instanceproto.ExecutionEngine, seqNetwork instanceproto.SequencerNetwork, log zerolog.Logger) Sequencer {
 	is := InstanceSequencer{
 		instanceMap: make(map[compose.InstanceID]instanceproto.SequencerInstance),
 		execEngine:  executionEngine,
