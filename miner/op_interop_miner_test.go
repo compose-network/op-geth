@@ -67,7 +67,7 @@ func createInteropMiner(t *testing.T, supervisorInFailsafe bool, queryFailsafeCb
 	// Create mock backend with interop support
 	backend := NewMockBackend(bc, txpool, supervisorInFailsafe, queryFailsafeCb)
 
-	miner := New(backend, config, engine)
+	miner := New(backend, struct{}{}, config, engine)
 	return miner, testBankKey, testBankAddress
 }
 
