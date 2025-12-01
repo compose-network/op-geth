@@ -81,7 +81,7 @@ func Setup(cfg Config) (*Runtime, error) {
 		localChainID = compose.ChainID(new(big.Int).SetBytes(cfg.ChainID).Uint64())
 	}
 
-	periodSequencer := sbcp.NewSequencer(NewSimpleProver(), NewSimpleMessanger(), 0, 1, sbcp.SettledState{}, log)
+	periodSequencer := sbcp.NewSequencer(NewSimpleProver(), 0, 1, sbcp.SettledState{}, log)
 	simulationEngine := xsimulation.NewSimulationEngine(localChainID)
 	sequencerNetwork := xnetwork.NewSequencerNetwork(context.Background(), localChainID, log)
 	instanceSequencer := instancecoord.NewSequencer(simulationEngine, sequencerNetwork, log)
