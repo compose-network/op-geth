@@ -355,7 +355,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		txPools = append(txPools, eth.blobTxPool)
 	}
 
-	// if interop is enabled, establish an Interop Filter connected to this Ethereum instanceproto's
+	// if interop is enabled, establish an Interop Filter connected to this Ethereum instance's
 	// simulated logs and message safety check functions
 	poolFilters := []txpool.IngressFilter{}
 	if config.InteropMessageRPC != "" && config.InteropMempoolFiltering {
@@ -502,7 +502,7 @@ func makeExtraData(extra []byte) []byte {
 func (s *Ethereum) APIs() []rpc.API {
 	apis := ethapi.GetAPIs(s.APIBackend)
 
-	// Append any PeriodSequencer APIs as enabled
+	// Append any Sequencer APIs as enabled
 	if s.config.RollupSequencerTxConditionalEnabled {
 		log.Info("Enabling eth_sendRawTransactionConditional endpoint support")
 		costRateLimit := rate.Limit(s.config.RollupSequencerTxConditionalCostRateLimit)

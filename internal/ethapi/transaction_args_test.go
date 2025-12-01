@@ -19,13 +19,15 @@ package ethapi
 import (
 	"context"
 	"errors"
-	"github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
 
-	"github.com/ethereum/go-ethereum/core/ssv"
+	"github.com/compose-network/specs/compose/proto"
+
 	"math/big"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/ethereum/go-ethereum/core/ssv"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts"
@@ -264,21 +266,6 @@ type backendMock struct {
 	config  *params.ChainConfig
 }
 
-func (b *backendMock) SimulateTransaction(ctx context.Context, tx *types.Transaction, blockNrOrHash rpc.BlockNumberOrHash) (*ssv.SSVTraceResult, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (b *backendMock) HandleSPMessage(ctx context.Context, msg *rollupv1.Message) ([]common.Hash, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (b *backendMock) GetMailboxAddresses() []common.Address {
-	//TODO implement me
-	panic("implement me")
-}
-
 func newBackendMock() *backendMock {
 	var cancunTime uint64 = 600
 	config := &params.ChainConfig{
@@ -311,6 +298,21 @@ func newBackendMock() *backendMock {
 		},
 		config: config,
 	}
+}
+
+func (b *backendMock) SimulateTransaction(ctx context.Context, tx *types.Transaction, blockNrOrHash rpc.BlockNumberOrHash) (*ssv.SSVTraceResult, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (b *backendMock) HandleSPMessage(context.Context, *proto.Message) ([]common.Hash, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (b *backendMock) GetMailboxAddresses() []common.Address {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (b *backendMock) setFork(fork string) error {

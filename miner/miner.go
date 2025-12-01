@@ -300,7 +300,6 @@ func (miner *Miner) getPending(ctx context.Context) *newPayloadResult {
 			return cached
 		}
 	}
-
 	var (
 		timestamp  = uint64(time.Now().Unix())
 		withdrawal types.Withdrawals
