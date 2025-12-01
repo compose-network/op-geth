@@ -15,7 +15,7 @@ require (
 	github.com/cloudflare/cloudflare-go v0.114.0
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/compose-network/registry v0.0.0-20251019130932-f9a7f7dd297b
-	github.com/compose-network/specs/compose v0.0.0-20251127083014-94716a565b30
+	github.com/compose-network/specs/compose v0.0.0-20251101113612-6318cbcb3d22
 	github.com/consensys/gnark-crypto v0.18.0
 	github.com/crate-crypto/go-eth-kzg v1.3.0
 	github.com/crate-crypto/go-ipa v0.0.0-20240724233137-53bbb0ceb27a
