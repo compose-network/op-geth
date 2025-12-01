@@ -458,10 +458,6 @@ func (miner *Miner) makeEnv(
 }
 
 func (miner *Miner) commitTransaction(env *environment, tx *types.Transaction) error {
-	if _, ok := miner.backendAPI.(BackendWithSequencerTransactions); !ok {
-		return errors.New("backend API doesnt support BackendWithSequencerTransactions")
-	}
-
 	// OP-Stack addition
 	interopAccessList := interoptypes.TxToInteropAccessList(tx)
 	if len(interopAccessList) > 0 {

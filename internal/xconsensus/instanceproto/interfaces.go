@@ -94,9 +94,13 @@ func (s *InstanceSequencer) Decide(instance compose.InstanceID, decision bool) e
 	defer s.lock.Unlock()
 
 	seqInstance, ok := s.instanceMap[instance]
-	if !ok {
-		// it was already decided, received another decide(false) for the same instance
-		return nil
+	/*
+		Instance could have been decided "false" when we voted - false so the instance was deleted already.
+		In this case decision "false" can arrive twice, once from current sequencer and once from SP.
+		If decision is true and we can't find the instance, it's an error.
+	*/
+	if !ok && decision {
+		return fmt.Errorf("could not find sequencer instance by %s", hex.EncodeToString(instance[:]))
 	}
 
 	if err := seqInstance.ProcessDecidedMessage(decision); err != nil {
