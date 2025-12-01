@@ -736,7 +736,7 @@ func (b *EthAPIBackend) handleSequencerMessage(
 // SSV
 func (b *EthAPIBackend) StartCallbackFn() spconsensus.StartFn {
 	return func(ctx context.Context, from string, instance *composeproto.StartInstance) error {
-		if err := b.coordinator.PeriodSequencer().OnStartInstance(compose.InstanceID(instance.InstanceId), compose.PeriodID(instance.PeriodId), compose.SequenceNumber(instance.SequenceNumber)); err != nil {
+		if err := b.coordinator.PeriodSequencer().OnStartInstance(compose.InstanceID(instance.InstanceId)); err != nil {
 			return err
 		}
 		return b.coordinator.InstanceSequencer().StartInstance(instance)
