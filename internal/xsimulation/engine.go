@@ -40,6 +40,5 @@ func (se *simulationEngine) Simulate(request instanceproto.SimulationRequest) (*
 	if se.simulate == nil {
 		return nil, nil, errors.New("simulation runner not configured")
 	}
-
 	return se.simulate(request)
 }

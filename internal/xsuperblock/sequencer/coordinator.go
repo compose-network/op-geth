@@ -3,8 +3,6 @@ package sequencer
 import (
 	"context"
 	"fmt"
-	"sync"
-
 	"github.com/compose-network/specs/compose"
 	sbcpproto "github.com/compose-network/specs/compose/proto"
 	periodproto "github.com/compose-network/specs/compose/sbcp"
@@ -13,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/internal/xconsensus/instanceproto"
 	"github.com/ethereum/go-ethereum/internal/xsuperblock/period"
 	"github.com/ethereum/go-ethereum/internal/xtransport"
+	"sync"
 
 	"github.com/rs/zerolog"
 )
@@ -257,11 +256,11 @@ func (sc *SequencerCoordinator) OnRollback(ctx context.Context, from string, msg
 		return fmt.Errorf("period sequencer not configured")
 	}
 
-	if len(msg.LastFinalizedSuperblockHash) != len(compose.SuperblockHash{}) {
+	if len(msg.LastFinalizedSuperblockHash) != len(compose.SuperBlockHash{}) {
 		return fmt.Errorf("invalid superblock hash length: %d", len(msg.LastFinalizedSuperblockHash))
 	}
 
-	var hash compose.SuperblockHash
+	var hash compose.SuperBlockHash
 	copy(hash[:], msg.LastFinalizedSuperblockHash)
 
 	superblockNumber := compose.SuperblockNumber(msg.GetLastFinalizedSuperblockNumber())
