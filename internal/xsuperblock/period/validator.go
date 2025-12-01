@@ -31,8 +31,8 @@ func (v *basicValidator) ValidateRollback(msg *sbcpproto.Rollback) error {
 		return fmt.Errorf("rollback message is nil")
 	}
 
-	if len(msg.LastFinalizedSuperblockHash) != len(compose.SuperblockHash{}) {
-		return fmt.Errorf("invalid superblock hash length: got %d, want %d", len(msg.LastFinalizedSuperblockHash), len(compose.SuperblockHash{}))
+	if len(msg.LastFinalizedSuperblockHash) != len(compose.SuperBlockHash{}) {
+		return fmt.Errorf("invalid superblock hash length: got %d, want %d", len(msg.LastFinalizedSuperblockHash), len(compose.SuperBlockHash{}))
 	}
 
 	return nil
