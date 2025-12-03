@@ -48,8 +48,6 @@ var FullNodeGPO = gasprice.Config{
 	MinSuggestedPriorityFee: gasprice.DefaultMinSuggestedPriorityFee,
 }
 
-var defaultOptimismJovianOverride = uint64(1894756088)
-
 // Defaults contains default settings for use on the Ethereum main net.
 var Defaults = Config{
 	HistoryMode:        history.KeepAll,
@@ -73,12 +71,11 @@ var Defaults = Config{
 	GPO:                FullNodeGPO,
 	RPCTxFeeCap:        1, // 1 ether
 
-	SPListenAddr:           ":9898",
-	SPServerAddr:           "localhost:18080",
-	SequencerAddrs:         "", // to be filled from registry
-	RollupAMailboxAddr:     "", // to be filled from registry
-	RollupBMailboxAddr:     "", // to be filled from registry
-	OverrideOptimismJovian: &defaultOptimismJovianOverride,
+	SPListenAddr:       ":9898",
+	SPServerAddr:       "localhost:18080",
+	SequencerAddrs:     "", // to be filled from registry
+	RollupAMailboxAddr: "", // to be filled from registry
+	RollupBMailboxAddr: "", // to be filled from registry
 }
 
 //go:generate go run github.com/fjl/gencodec -type Config -formats toml -out gen_config.go
