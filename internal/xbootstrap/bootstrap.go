@@ -4,6 +4,12 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"math/big"
+	"reflect"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/compose-network/specs/compose"
 	sbcpproto "github.com/compose-network/specs/compose/proto"
 	scpproto "github.com/compose-network/specs/compose/scp"
@@ -14,11 +20,6 @@ import (
 	xsequencer "github.com/ethereum/go-ethereum/internal/xsuperblock/sequencer"
 	"github.com/ethereum/go-ethereum/internal/xtransport"
 	"github.com/ethereum/go-ethereum/internal/xtransport/tcp"
-	"math/big"
-	"reflect"
-	"strconv"
-	"strings"
-	"time"
 
 	"github.com/compose-network/specs/compose/sbcp"
 	"github.com/ethereum/go-ethereum/common"
@@ -80,7 +81,7 @@ func Setup(cfg Config) (*Runtime, error) {
 		localChainID = compose.ChainID(new(big.Int).SetBytes(cfg.ChainID).Uint64())
 	}
 
-	periodSequencer := sbcp.NewSequencer(NewSimpleProver(), 0, 1, sbcp.SettledState{}, log)
+	periodSequencer := sbcp.NewSequencer(NewSimpleProver(), NewMessanger(), 0, 1, sbcp.SettledState{}, log)
 	simulationEngine := xsimulation.NewSimulationEngine(localChainID)
 	sequencerNetwork := xnetwork.NewSequencerNetwork(context.Background(), localChainID, log)
 	instanceSequencer := instancecoord.NewSequencer(simulationEngine, sequencerNetwork, log)
