@@ -9,7 +9,7 @@ import (
 
 type Messanger struct{}
 
-func NewMessanger() sbcp.Messanger {
+func NewMessanger() sbcp.SequencerMessenger {
 	return &Messanger{}
 }
 
