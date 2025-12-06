@@ -70,8 +70,7 @@ func (m *Messanger) ForwardRequest(request compose.XTRequest) {
 			Transaction: make([][]byte, len(tr.Transactions)),
 		}
 		for i, tx := range tr.Transactions {
-			// copy to avoid retaining caller buffers
-			p.Transaction[i] = append([]byte(nil), tx...)
+			p.Transaction[i] = append(p.Transaction[i], tx...)
 		}
 		protoReq.TransactionRequests = append(protoReq.TransactionRequests, p)
 	}
