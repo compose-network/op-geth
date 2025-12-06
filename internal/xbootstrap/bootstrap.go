@@ -81,12 +81,14 @@ func Setup(cfg Config) (*Runtime, error) {
 		localChainID = compose.ChainID(new(big.Int).SetBytes(cfg.ChainID).Uint64())
 	}
 
-	periodSequencer := sbcp.NewSequencer(NewSimpleProver(), NewMessanger(), 0, 1, sbcp.SettledState{}, log)
+	messenger := NewMessanger(log)
+	periodSequencer := sbcp.NewSequencer(NewSimpleProver(), messenger, 0, 1, sbcp.SettledState{}, log)
 	simulationEngine := xsimulation.NewSimulationEngine(localChainID)
 	sequencerNetwork := xnetwork.NewSequencerNetwork(context.Background(), localChainID, log)
 	instanceSequencer := instancecoord.NewSequencer(simulationEngine, sequencerNetwork, log)
 
 	seqCoord, spClient := setupSequencerCoordinator(cfg, periodSequencer, instanceSequencer, log)
+	messenger.SetClient(spClient)
 
 	p2pSrv := setupP2PServer(seqCoord, cfg, log)
 
