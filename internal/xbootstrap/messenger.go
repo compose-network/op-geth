@@ -52,9 +52,7 @@ func (m *Messanger) SendProof(periodID compose.PeriodID, superblockNumber compos
 	}
 }
 
-// ForwardRequest forwards a user XTRequest to the Shared Publisher so it can
-// kick off StartInstance/2PC. Requests are sent best-effort; failures are
-// logged but not retried here (upstream callers may retry).
+// ForwardRequest forwards a user XTRequest to the Shared Publisher.
 func (m *Messanger) ForwardRequest(request compose.XTRequest) {
 	if m.client == nil {
 		m.log.Warn().Msg("dropping XTRequest: SP client not set")
