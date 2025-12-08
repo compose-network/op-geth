@@ -80,6 +80,8 @@ github.com/compose-network/registry v0.0.0-20251019130932-f9a7f7dd297b h1:HDtykk
 github.com/compose-network/registry v0.0.0-20251019130932-f9a7f7dd297b/go.mod h1:0KvBwHpojq2/ys4k6Pnsvlrtj/uGL30/KqEKkwLuMnU=
 github.com/compose-network/specs/compose v0.0.0-20251208113502-a41d2f3acd01 h1:xadEweocOjJ6mkW6x8iKfxmGTTJXwGUC5+UV0X6lSoU=
 github.com/compose-network/specs/compose v0.0.0-20251208113502-a41d2f3acd01/go.mod h1:X7zqsI0dxr3QhttBLTSYiwcHdw/pa2rOLkNNJ647XKE=
+github.com/compose-network/specs/compose v0.0.0-20251208132907-604b8a84d87b h1:OFNK70UBFCquNrCwZAsTuOptdwFFHKMHtSlMjgNbQpM=
+github.com/compose-network/specs/compose v0.0.0-20251208132907-604b8a84d87b/go.mod h1:X7zqsI0dxr3QhttBLTSYiwcHdw/pa2rOLkNNJ647XKE=
 github.com/consensys/gnark-crypto v0.18.0 h1:vIye/FqI50VeAr0B3dx+YjeIvmc3LWz4yEfbWBpTUf0=
 github.com/consensys/gnark-crypto v0.18.0/go.mod h1:L3mXGFTe1ZN+RSJ+CLjUt9x7PNdx8ubaYfDROyp2Z8c=
 github.com/coreos/go-systemd/v22 v22.5.0/go.mod h1:Y58oyj3AT4RCenI/lSvhwexgC+NSVTIJ3seZv2GcEnc=

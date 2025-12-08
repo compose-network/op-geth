@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -71,10 +72,10 @@ type proveResponse struct {
 }
 
 // RequestProofs contacts the prover. On any error it logs and returns nil.
-func (p *HTTPProver) RequestProofs(blockHeader *sbcp.BlockHeader, superblockNumber compose.SuperblockNumber) []byte {
+func (p *HTTPProver) RequestProofs(ctx context.Context, blockHeader *sbcp.BlockHeader, superblockNumber compose.SuperblockNumber) ([]byte, error) {
 	if blockHeader == nil {
 		p.log.Warn().Msg("no block header available; cannot request proof")
-		return nil
+		return nil, nil
 	}
 
 	payload := proveRequest{
@@ -87,36 +88,36 @@ func (p *HTTPProver) RequestProofs(blockHeader *sbcp.BlockHeader, superblockNumb
 	body, err := json.Marshal(payload)
 	if err != nil {
 		p.log.Error().Err(err).Msg("failed to marshal prover request")
-		return nil
+		return nil, err
 	}
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, p.baseURL+"/prove", bytes.NewReader(body))
 	if err != nil {
 		p.log.Error().Err(err).Msg("failed to build prover request")
-		return nil
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := p.client.Do(req)
 	if err != nil {
 		p.log.Error().Err(err).Msg("prover request failed")
-		return nil
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		p.log.Error().Int("status", resp.StatusCode).Msg("prover returned non-200 status")
-		return nil
+		return nil, errors.New("prover returned non-200 status")
 	}
 
 	var pr proveResponse
 	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
 		p.log.Error().Err(err).Msg("failed to decode prover response")
-		return nil
+		return nil, err
 	}
 	if pr.Proof == "" {
 		p.log.Warn().Msg("prover response contained empty proof")
-		return nil
+		return nil, errors.New("prover returned empty proof")
 	}
 
 	// Accept 0x-prefixed hex; fall back to raw bytes if decode fails.
@@ -124,8 +125,8 @@ func (p *HTTPProver) RequestProofs(blockHeader *sbcp.BlockHeader, superblockNumb
 	proofBytes, err := hex.DecodeString(proofStr)
 	if err != nil {
 		p.log.Error().Err(err).Msg("failed to hex-decode proof")
-		return nil
+		return nil, err
 	}
 
-	return proofBytes
+	return proofBytes, nil
 }
