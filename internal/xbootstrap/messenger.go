@@ -2,7 +2,7 @@ package xbootstrap
 
 import (
 	"context"
-	"time"
+	"errors"
 
 	"github.com/compose-network/specs/compose"
 	"github.com/compose-network/specs/compose/proto"
@@ -28,10 +28,10 @@ func (m *Messanger) SetClient(c xtransport.Client) {
 }
 
 // SendProof forwards a per-rollup proof to the Shared Publisher.
-func (m *Messanger) SendProof(periodID compose.PeriodID, superblockNumber compose.SuperblockNumber, proof []byte) {
+func (m *Messanger) SendProof(ctx context.Context, periodID compose.PeriodID, superblockNumber compose.SuperblockNumber, proof []byte) error {
 	if m.client == nil {
 		m.log.Warn().Uint64("period_id", uint64(periodID)).Msg("dropping proof: SP client not set")
-		return
+		return errors.New("SP client not set")
 	}
 
 	protoReq := &proto.Proof{
@@ -40,23 +40,18 @@ func (m *Messanger) SendProof(periodID compose.PeriodID, superblockNumber compos
 		ProofData:        proof,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := m.client.Send(ctx, &proto.Message{
+	return m.client.Send(ctx, &proto.Message{
 		Payload: &proto.Message_Proof{
 			Proof: protoReq,
 		},
-	}); err != nil {
-		m.log.Error().Err(err).Msg("failed to forward XTRequest to SP")
-	}
+	})
 }
 
 // ForwardRequest forwards a user XTRequest to the Shared Publisher.
-func (m *Messanger) ForwardRequest(request compose.XTRequest) {
+func (m *Messanger) ForwardRequest(ctx context.Context, request compose.XTRequest) error {
 	if m.client == nil {
 		m.log.Warn().Msg("dropping XTRequest: SP client not set")
-		return
+		return errors.New("SP client not set")
 	}
 
 	protoReq := &proto.XTRequest{
@@ -73,14 +68,9 @@ func (m *Messanger) ForwardRequest(request compose.XTRequest) {
 		protoReq.TransactionRequests = append(protoReq.TransactionRequests, p)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := m.client.Send(ctx, &proto.Message{
+	return m.client.Send(ctx, &proto.Message{
 		Payload: &proto.Message_XtRequest{
 			XtRequest: protoReq,
 		},
-	}); err != nil {
-		m.log.Error().Err(err).Msg("failed to forward XTRequest to SP")
-	}
+	})
 }

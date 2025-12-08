@@ -172,7 +172,7 @@ func (sc *SequencerCoordinator) OnBlockBuildingComplete(ctx context.Context, blo
 		BlockHash: compose.BlockHash(block.Hash()),
 		StateRoot: compose.StateRoot(block.Header().Root),
 	}
-	return sc.periodSequencer.EndBlock(blockHeader)
+	return sc.periodSequencer.EndBlock(ctx, blockHeader)
 }
 
 // TransactionManager implementation
@@ -241,7 +241,7 @@ func (sc *SequencerCoordinator) OnStartPeriod(ctx context.Context, from string, 
 		Uint64("target_superblock", uint64(targetSuperblock)).
 		Msg("Processing StartPeriod message")
 
-	if err := sc.periodSequencer.StartPeriod(periodID, targetSuperblock); err != nil {
+	if err := sc.periodSequencer.StartPeriod(ctx, periodID, targetSuperblock); err != nil {
 		return fmt.Errorf("period sequencer start period: %w", err)
 	}
 
