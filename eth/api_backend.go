@@ -766,12 +766,16 @@ func (b *EthAPIBackend) DecisionCallbackFn() spconsensus.DecisionFn {
 			return fmt.Errorf("instance sequencer not configured")
 		}
 
-		err := b.coordinator.InstanceSequencer().Decide(*instanceID, decision)
+		err, decided := b.coordinator.InstanceSequencer().Decide(*instanceID, decision)
 		if err != nil {
 			return err
 		}
 
-		return b.coordinator.PeriodSequencer().OnDecidedInstance(*instanceID)
+		if decided {
+			return b.coordinator.PeriodSequencer().OnDecidedInstance(*instanceID)
+		}
+
+		return nil
 	}
 }
 

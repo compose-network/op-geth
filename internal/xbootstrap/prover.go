@@ -1,6 +1,7 @@
 package xbootstrap
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/compose-network/specs/compose"
@@ -13,7 +14,7 @@ func NewSimpleProver() sbcp.SequencerProver {
 	return &SimpleProver{}
 }
 
-func (p *SimpleProver) RequestProofs(blockHeader *sbcp.BlockHeader, superblockNumber compose.SuperblockNumber) []byte {
+func (p *SimpleProver) RequestProofs(ctx context.Context, blockHeader *sbcp.BlockHeader, superblockNumber compose.SuperblockNumber) ([]byte, error) {
 	if blockHeader == nil {
 		fmt.Printf("No sealed block for superblock #%d\n", superblockNumber)
 	}
@@ -21,5 +22,5 @@ func (p *SimpleProver) RequestProofs(blockHeader *sbcp.BlockHeader, superblockNu
 	fmt.Printf("Unimplemented: Requesting proofs for block #%d (hash: %s) at superblock #%d\n",
 		blockHeader.Number, blockHeader.BlockHash, superblockNumber)
 
-	return nil
+	return nil, nil
 }
