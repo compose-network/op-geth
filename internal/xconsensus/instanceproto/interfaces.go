@@ -90,8 +90,11 @@ func (s *InstanceSequencer) Decide(instance compose.InstanceID, decision bool) e
 		If decision is true and we can't find the instance, it's an error. Becasuse instance cannot decide
 		"true" by itself and it should be received from SP only once.
 	*/
-	if !ok && decision {
-		return fmt.Errorf("could not find sequencer instance by %s", hex.EncodeToString(instance[:]))
+	if !ok {
+		if decision {
+			return fmt.Errorf("could not find sequencer instance by %s", hex.EncodeToString(instance[:]))
+		}
+		return nil
 	}
 
 	if err := seqInstance.ProcessDecidedMessage(decision); err != nil {
