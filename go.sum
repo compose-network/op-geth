@@ -76,8 +76,8 @@ github.com/cockroachdb/redact v1.1.5 h1:u1PMllDkdFfPWaNGMyLD1+so+aq3uUItthCFqzwP
 github.com/cockroachdb/redact v1.1.5/go.mod h1:BVNblN9mBWFyMyqK1k3AAiSxhvhfK2oOZZ2lK+dpvRg=
 github.com/cockroachdb/tokenbucket v0.0.0-20230807174530-cc333fc44b06 h1:zuQyyAKVxetITBuuhv3BI9cMrmStnpT18zmgmTxunpo=
 github.com/cockroachdb/tokenbucket v0.0.0-20230807174530-cc333fc44b06/go.mod h1:7nc4anLGjupUW/PeY5qiNYsdNXj7zopG+eqsS7To5IQ=
-github.com/compose-network/publisher v0.0.0-20251128124641-46a8a912ac62 h1:+6buuZq6ax7ArkjJpyMoKnOlA1/NSYoBUQM6i5oSCdw=
-github.com/compose-network/publisher v0.0.0-20251128124641-46a8a912ac62/go.mod h1:dLM+m3gJSVGuUVFWjPRzHdmGEfvpEtOSbLwqxo7h4gw=
+github.com/compose-network/publisher v0.0.0-20251215092248-cb4614927d54 h1:vl/OidURiNWELmVfkm99kCRhuHFKgdBKtdVmRTx30nw=
+github.com/compose-network/publisher v0.0.0-20251215092248-cb4614927d54/go.mod h1:dLM+m3gJSVGuUVFWjPRzHdmGEfvpEtOSbLwqxo7h4gw=
 github.com/compose-network/registry v0.2.0 h1:caM9bDs4zszsHnH9UPyU/LIdNVTmUxz2XAuf1LayyVc=
 github.com/compose-network/registry v0.2.0/go.mod h1:0KvBwHpojq2/ys4k6Pnsvlrtj/uGL30/KqEKkwLuMnU=
 github.com/consensys/gnark-crypto v0.18.0 h1:vIye/FqI50VeAr0B3dx+YjeIvmc3LWz4yEfbWBpTUf0=
