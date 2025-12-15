@@ -14,7 +14,7 @@ import (
 type Sequencer interface {
 	StartInstance(instance *composeproto.StartInstance) error
 	ProcessMailboxMessage(instanceID compose.InstanceID, mailboxMessage *instanceproto.MailboxMessage) error
-	Decide(instance compose.InstanceID, decision bool) error
+	Decide(instance compose.InstanceID, decision bool) (error, bool)
 }
 
 type sequencerNetworkFactory interface {
@@ -79,7 +79,7 @@ func (s *InstanceSequencer) ProcessMailboxMessage(instanceID compose.InstanceID,
 	return seqInstance.ProcessMailboxMessage(*message)
 }
 
-func (s *InstanceSequencer) Decide(instance compose.InstanceID, decision bool) error {
+func (s *InstanceSequencer) Decide(instance compose.InstanceID, decision bool) (error, bool) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -90,17 +90,19 @@ func (s *InstanceSequencer) Decide(instance compose.InstanceID, decision bool) e
 		If decision is true and we can't find the instance, it's an error. Becasuse instance cannot decide
 		"true" by itself and it should be received from SP only once.
 	*/
-	if !ok && decision {
-		return fmt.Errorf("could not find sequencer instance by %s", hex.EncodeToString(instance[:]))
+	if !ok {
+		if decision {
+			return fmt.Errorf("could not find sequencer instance by %s", hex.EncodeToString(instance[:])), false
+		}
+		return nil, false
 	}
 
 	if err := seqInstance.ProcessDecidedMessage(decision); err != nil {
-		return fmt.Errorf("failed to process decided message: %w", err)
+		return fmt.Errorf("failed to process decided message: %w", err), false
 	}
 
 	delete(s.instanceMap, instance)
-
-	return nil
+	return nil, true
 }
 
 func convertToSpecInstance(instance *composeproto.StartInstance) compose.Instance {
