@@ -17,6 +17,7 @@ func NewSimpleProver() sbcp.SequencerProver {
 func (p *SimpleProver) RequestProofs(ctx context.Context, blockHeader *sbcp.BlockHeader, superblockNumber compose.SuperblockNumber) ([]byte, error) {
 	if blockHeader == nil {
 		fmt.Printf("No sealed block for superblock #%d\n", superblockNumber)
+		return nil, nil
 	}
 
 	fmt.Printf("Unimplemented: Requesting proofs for block #%d (hash: %s) at superblock #%d\n",
