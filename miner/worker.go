@@ -968,14 +968,6 @@ func (miner *Miner) fillTransactionsWithSequencerOrdering(interrupt *atomic.Int3
 		appendAccountTxs(normalBlobTxs)
 
 		committedCount := 0
-		// Apply any simulated bundles before processing mempool transactions.
-		miner.simStateMu.Lock()
-		if err := miner.injectSimulatedBundlesLocked(env, backend); err != nil {
-			miner.simStateMu.Unlock()
-			return err
-		}
-		miner.simStateMu.Unlock()
-
 		for _, item := range worklist {
 			if interrupt != nil {
 				if signal := interrupt.Load(); signal != commitInterruptNone {
@@ -989,10 +981,6 @@ func (miner *Miner) fillTransactionsWithSequencerOrdering(interrupt *atomic.Int3
 			}
 
 			miner.simStateMu.Lock()
-			if err := miner.injectSimulatedBundlesLocked(env, backend); err != nil {
-				miner.simStateMu.Unlock()
-				return err
-			}
 			if env.gasPool.Gas() < params.TxGas {
 				log.Trace("[SSV] Not enough gas for more transactions", "have", env.gasPool.Gas())
 				miner.simStateMu.Unlock()
@@ -1027,19 +1015,8 @@ func (miner *Miner) fillTransactionsWithSequencerOrdering(interrupt *atomic.Int3
 				"total", committedCount)
 		}
 
-		miner.simStateMu.Lock()
-		if err := miner.injectSimulatedBundlesLocked(env, backend); err != nil {
-			miner.simStateMu.Unlock()
-			return err
-		}
-		miner.simStateMu.Unlock()
-
 		// Give simulations time on the in-flight state after mempool processing.
-		if err := miner.waitForSimulationWindow(interrupt, env.header, func() error {
-			miner.simStateMu.Lock()
-			defer miner.simStateMu.Unlock()
-			return miner.injectSimulatedBundlesLocked(env, backend)
-		}); err != nil {
+		if err := miner.waitForSimulationWindow(interrupt, env.header, nil); err != nil {
 			return err
 		}
 	} else {
@@ -1158,21 +1135,6 @@ func (miner *Miner) applySequencerSimulationResults(target, simulated *environme
 			target.header.BlobGasUsed = new(uint64)
 		}
 		*target.header.BlobGasUsed = *simulated.header.BlobGasUsed
-	}
-}
-
-// injectSimulatedBundlesLocked applies any pending simulated bundles to the live environment.
-// Caller must hold miner.simStateMu.
-// SSV
-func (miner *Miner) injectSimulatedBundlesLocked(env *environment, backend BackendWithSequencerTransactions) error {
-	for {
-		txs, receipts, sidecars, stats, ok := backend.ConsumeSimulatedBundle(env.header.Number.Uint64(), env.tcount)
-		if !ok {
-			return nil
-		}
-		if err := miner.applySimulatedBundle(env, txs, receipts, sidecars, stats); err != nil {
-			return err
-		}
 	}
 }
 

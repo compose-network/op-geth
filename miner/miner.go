@@ -106,11 +106,6 @@ type BackendWithSequencerTransactions interface {
 	// OnBlockBuildingComplete is called when block building completes
 	// SSV
 	OnBlockBuildingComplete(ctx context.Context, block *types.Block, success bool, simulation bool) error
-
-	// ConsumeSimulatedBundle returns a simulated bundle ready for inclusion at the
-	// current transaction count. Returns ok=false if no bundle is ready.
-	// SSV
-	ConsumeSimulatedBundle(blockNumber uint64, txCount int) (types.Transactions, []*types.Receipt, []*types.BlobTxSidecar, SimulatedBundleStats, bool)
 }
 
 // Config is the configuration parameters of mining.
@@ -179,6 +174,7 @@ type SimulationStateGuard struct {
 	unlock  func()
 	restore func()
 	swap    func(*state.StateDB)
+	apply   func(types.Transactions, []*types.Receipt, []*types.BlobTxSidecar, SimulatedBundleStats) error
 }
 
 func (g *SimulationStateGuard) State() *state.StateDB {
@@ -225,6 +221,20 @@ func (g *SimulationStateGuard) SwapState(state *state.StateDB) {
 		return
 	}
 	g.swap(state)
+}
+
+// ApplySimulatedBundle appends a simulated bundle to the in-flight block.
+// SSV
+func (g *SimulationStateGuard) ApplySimulatedBundle(
+	txs types.Transactions,
+	receipts []*types.Receipt,
+	sidecars []*types.BlobTxSidecar,
+	stats SimulatedBundleStats,
+) error {
+	if g == nil || g.apply == nil {
+		return errors.New("simulation guard cannot apply bundle")
+	}
+	return g.apply(txs, receipts, sidecars, stats)
 }
 
 // New creates a new miner with provided config.
@@ -513,6 +523,9 @@ func (miner *Miner) SimulationStateGuard(ctx context.Context) (*SimulationStateG
 			if env.evm != nil {
 				env.evm.StateDB = state
 			}
+		},
+		apply: func(txs types.Transactions, receipts []*types.Receipt, sidecars []*types.BlobTxSidecar, stats SimulatedBundleStats) error {
+			return miner.applySimulatedBundle(env, txs, receipts, sidecars, stats)
 		},
 	}, nil
 }

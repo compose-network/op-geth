@@ -105,13 +105,12 @@ type EthAPIBackend struct {
 	committedTxsMutex sync.RWMutex
 	committedTxHashes map[common.Hash]bool // Hashes of txs that were committed in blocks during this slot
 
-	// SSV: Track simulated bundles for block inclusion
-	simBundleMu sync.Mutex
-	simBundles  []simulatedBundle
 	// SSV: Track current SCP instance and pending simulation bundle
-	scpInstanceMu           sync.Mutex
-	activeInstanceID        *compose.InstanceID
-	pendingSimBundle        *simulatedBundle
+	scpInstanceMu            sync.Mutex
+	activeInstanceID         *compose.InstanceID
+	pendingSimGuard          *simStateGuard
+	pendingSimState          *state.StateDB
+	pendingSimBundle         *simulatedBundle
 	pendingSimBundleInstance *compose.InstanceID
 
 	// Overrides for testing purposes only
@@ -132,6 +131,7 @@ type simStateGuard struct {
 	txCount     int
 	unlockState func(bool)
 	commitState func(*state.StateDB)
+	applyBundle func(types.Transactions, []*types.Receipt, []*types.BlobTxSidecar, miner.SimulatedBundleStats) error
 }
 
 type sequencerTxKind int
@@ -420,6 +420,7 @@ func (b *EthAPIBackend) simulationStateGuard(ctx context.Context) (*simStateGuar
 		txCount:     guard.TxCount(),
 		unlockState: guard.UnlockState,
 		commitState: guard.SwapState,
+		applyBundle: guard.ApplySimulatedBundle,
 	}, nil
 }
 
@@ -1371,32 +1372,6 @@ func (b *EthAPIBackend) buildSequencerOnlyList() types.Transactions {
 	return orderedTxs
 }
 
-// recordSimulatedBundle stores a successful simulation bundle for block inclusion.
-// SSV
-func (b *EthAPIBackend) recordSimulatedBundle(bundle simulatedBundle) {
-	b.simBundleMu.Lock()
-	defer b.simBundleMu.Unlock()
-
-	if len(b.simBundles) == 0 {
-		b.simBundles = append(b.simBundles, bundle)
-		return
-	}
-	if b.simBundles[0].blockNumber != bundle.blockNumber {
-		b.simBundles = b.simBundles[:0]
-	}
-	if len(b.simBundles) > 0 {
-		last := b.simBundles[len(b.simBundles)-1]
-		if bundle.baseTxCount < last.baseTxCount {
-			log.Warn("[SSV] Simulated bundle out of order, clearing queue",
-				"blockNumber", bundle.blockNumber,
-				"baseTxCount", bundle.baseTxCount,
-				"lastBaseTxCount", last.baseTxCount)
-			b.simBundles = b.simBundles[:0]
-		}
-	}
-	b.simBundles = append(b.simBundles, bundle)
-}
-
 func (b *EthAPIBackend) setActiveInstanceID(id compose.InstanceID) {
 	b.scpInstanceMu.Lock()
 	b.activeInstanceID = &id
@@ -1410,26 +1385,41 @@ func (b *EthAPIBackend) clearActiveInstanceID() {
 }
 
 // stashPendingSimBundle stores the simulation result until a commit decision is received.
-func (b *EthAPIBackend) stashPendingSimBundle(bundle simulatedBundle) {
+// Returns true if the simulation lock should be kept for a later decision.
+func (b *EthAPIBackend) stashPendingSimBundle(
+	bundle simulatedBundle,
+	guard *simStateGuard,
+	stateDB *state.StateDB,
+) bool {
 	b.scpInstanceMu.Lock()
 	active := b.activeInstanceID
-	if active == nil {
+	if active == nil || guard == nil || guard.commitState == nil || guard.applyBundle == nil || stateDB == nil {
 		b.scpInstanceMu.Unlock()
-		b.recordSimulatedBundle(bundle)
-		return
+		return false
+	}
+	if b.pendingSimGuard != nil || b.pendingSimBundle != nil {
+		log.Warn("[SSV] Pending simulation already staged, dropping new result")
+		b.scpInstanceMu.Unlock()
+		return false
 	}
 	bundleCopy := bundle
 	id := *active
+	b.pendingSimGuard = guard
+	b.pendingSimState = stateDB
 	b.pendingSimBundle = &bundleCopy
 	b.pendingSimBundleInstance = &id
 	b.scpInstanceMu.Unlock()
+	return true
 }
 
-// commitPendingSimBundle promotes a pending bundle to be included in block production.
+// commitPendingSimBundle promotes a pending bundle to be included in block production
+// and swaps the simulated state into the live environment.
 func (b *EthAPIBackend) commitPendingSimBundle(instanceID compose.InstanceID) {
 	b.scpInstanceMu.Lock()
 	pending := b.pendingSimBundle
 	pendingID := b.pendingSimBundleInstance
+	guard := b.pendingSimGuard
+	stateDB := b.pendingSimState
 	if pending == nil || pendingID == nil || *pendingID != instanceID {
 		b.scpInstanceMu.Unlock()
 		return
@@ -1437,9 +1427,30 @@ func (b *EthAPIBackend) commitPendingSimBundle(instanceID compose.InstanceID) {
 	bundle := *pending
 	b.pendingSimBundle = nil
 	b.pendingSimBundleInstance = nil
+	b.pendingSimGuard = nil
+	b.pendingSimState = nil
 	b.scpInstanceMu.Unlock()
 
-	b.recordSimulatedBundle(bundle)
+	if guard != nil && stateDB != nil && guard.commitState != nil {
+		guard.commitState(stateDB)
+	}
+	if guard != nil && guard.applyBundle != nil {
+		stats := miner.SimulatedBundleStats{
+			BaseTxCount: bundle.baseTxCount,
+			BaseGasUsed: bundle.baseGasUsed,
+			GasUsed:     bundle.gasUsed,
+			Size:        bundle.size,
+			TxCount:     bundle.tcount,
+			Blobs:       bundle.blobs,
+			BlobGasUsed: bundle.blobGasUsed,
+		}
+		if err := guard.applyBundle(bundle.txs, bundle.receipts, bundle.sidecars, stats); err != nil {
+			log.Error("[SSV] Failed to apply simulated bundle", "err", err)
+		}
+	}
+	if guard != nil {
+		guard.unlockState(true)
+	}
 	if miner := b.eth.miner; miner != nil {
 		miner.InvalidatePendingCache()
 	}
@@ -1449,70 +1460,23 @@ func (b *EthAPIBackend) commitPendingSimBundle(instanceID compose.InstanceID) {
 func (b *EthAPIBackend) dropPendingSimBundle(instanceID compose.InstanceID) {
 	b.scpInstanceMu.Lock()
 	pendingID := b.pendingSimBundleInstance
+	guard := b.pendingSimGuard
 	if pendingID == nil || *pendingID != instanceID {
 		b.scpInstanceMu.Unlock()
 		return
 	}
 	b.pendingSimBundle = nil
 	b.pendingSimBundleInstance = nil
+	b.pendingSimGuard = nil
+	b.pendingSimState = nil
 	b.scpInstanceMu.Unlock()
 
+	if guard != nil {
+		guard.unlockState(false)
+	}
 	if miner := b.eth.miner; miner != nil {
 		miner.InvalidatePendingCache()
 	}
-}
-
-// resetSimulatedBundles drops any queued bundles from a different block.
-// SSV
-func (b *EthAPIBackend) resetSimulatedBundles(blockNumber uint64) {
-	b.simBundleMu.Lock()
-	defer b.simBundleMu.Unlock()
-	if len(b.simBundles) == 0 {
-		return
-	}
-	if b.simBundles[0].blockNumber != blockNumber {
-		b.simBundles = b.simBundles[:0]
-	}
-}
-
-// ConsumeSimulatedBundle returns the next simulated bundle ready for block inclusion.
-// SSV
-func (b *EthAPIBackend) ConsumeSimulatedBundle(
-	blockNumber uint64,
-	txCount int,
-) (types.Transactions, []*types.Receipt, []*types.BlobTxSidecar, miner.SimulatedBundleStats, bool) {
-	b.simBundleMu.Lock()
-	defer b.simBundleMu.Unlock()
-
-	if len(b.simBundles) == 0 {
-		return nil, nil, nil, miner.SimulatedBundleStats{}, false
-	}
-	bundle := b.simBundles[0]
-	if bundle.blockNumber != blockNumber {
-		b.simBundles = b.simBundles[:0]
-		return nil, nil, nil, miner.SimulatedBundleStats{}, false
-	}
-	if txCount < bundle.baseTxCount {
-		return nil, nil, nil, miner.SimulatedBundleStats{}, false
-	}
-	if txCount > bundle.baseTxCount {
-		log.Warn("[SSV] Simulated bundle tx count mismatch",
-			"blockNumber", blockNumber,
-			"txCount", txCount,
-			"bundleBaseTxCount", bundle.baseTxCount)
-	}
-
-	b.simBundles = b.simBundles[1:]
-	stats := miner.SimulatedBundleStats{
-		BaseTxCount: bundle.baseTxCount,
-		BaseGasUsed: bundle.baseGasUsed,
-		GasUsed:     bundle.gasUsed,
-		Size:        bundle.size,
-		TxCount:     bundle.tcount,
-		Blobs:       bundle.blobs,
-		BlobGasUsed: bundle.blobGasUsed,
-	}
-	return bundle.txs, bundle.receipts, bundle.sidecars, stats, true
 }
 
 // validateSequencerTransaction validates that a sequencer transaction is properly formed
@@ -1564,7 +1528,6 @@ func (b *EthAPIBackend) validateSequencerTransaction(tx *types.Transaction) erro
 // OnBlockBuildingStart is called when block building starts
 // SSV
 func (b *EthAPIBackend) OnBlockBuildingStart(ctx context.Context, blockNumber uint64) error {
-	b.resetSimulatedBundles(blockNumber)
 	return b.coordinator.OnBlockBuildingStart(ctx, blockNumber)
 }
 
@@ -1921,8 +1884,9 @@ func (b *EthAPIBackend) finalizeSimulationResult(
 //     Execution stops early if a mailbox read targets this chain without an available message,
 //     returning the header that must be fulfilled before the bundle can succeed.
 //  3. Collect any outbound mailbox writes emitted during successful execution. The simulation
-//     runs directly against the pending state; on success the pending state reflects the
-//     simulated bundle, and on failure the state is reverted to its pre-simulation snapshot.
+//     runs against a copy of the pending state while holding the simulation lock; on success
+//     the updated state is staged and only swapped in after a commit decision, otherwise the
+//     lock is released and the pending state remains unchanged.
 func (b *EthAPIBackend) simulateSCPBundle(request instanceproto.SimulationRequest) (*instanceproto.MailboxMessageHeader, []instanceproto.MailboxMessage, error) {
 	if len(request.Transactions) == 0 {
 		return nil, nil, errors.New("no transactions to simulate")
@@ -1936,10 +1900,14 @@ func (b *EthAPIBackend) simulateSCPBundle(request instanceproto.SimulationReques
 	if err != nil {
 		return nil, nil, fmt.Errorf("state lookup failed: %w", err)
 	}
-	// Keep the simulation state locked for the full duration of the simulation
-	// to prevent concurrent mempool/state changes while we execute the bundle.
+	// Keep the simulation state locked for the full duration of the simulation.
+	// Unlocking is deferred until a commit/abort decision if the simulation succeeds.
+	unlockAfter := true
+	unlockSuccess := false
 	defer func() {
-		guard.unlockState(true)
+		if unlockAfter {
+			guard.unlockState(unlockSuccess)
+		}
 	}()
 	// Simulate on a copy of the pending state. On success we swap it in.
 	stateDB := guard.state.Copy()
@@ -2142,10 +2110,28 @@ func (b *EthAPIBackend) simulateSCPBundle(request instanceproto.SimulationReques
 	}
 
 	bundle.gasUsed = bundleUsedGas
-	b.stashPendingSimBundle(bundle)
+	if b.stashPendingSimBundle(bundle, guard, stateDB) {
+		unlockAfter = false
+		return nil, writeAccumulator, nil
+	}
 	if guard.commitState != nil {
 		guard.commitState(stateDB)
 	}
+	if guard.applyBundle != nil {
+		stats := miner.SimulatedBundleStats{
+			BaseTxCount: bundle.baseTxCount,
+			BaseGasUsed: bundle.baseGasUsed,
+			GasUsed:     bundle.gasUsed,
+			Size:        bundle.size,
+			TxCount:     bundle.tcount,
+			Blobs:       bundle.blobs,
+			BlobGasUsed: bundle.blobGasUsed,
+		}
+		if err := guard.applyBundle(bundle.txs, bundle.receipts, bundle.sidecars, stats); err != nil {
+			log.Error("[SSV] Failed to apply simulated bundle", "err", err)
+		}
+	}
+	unlockSuccess = true
 	return nil, writeAccumulator, nil
 }
 
