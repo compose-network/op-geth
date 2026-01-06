@@ -153,9 +153,6 @@ type Miner struct {
 	backend    Backend
 	backendAPI interface{}
 
-	// xT injection support
-	xtCh chan *types.Transaction // queue of ready-to-apply cross-chain txs
-
 	// SSV: expose in-flight state safely for simulation
 	simStateMu sync.Mutex
 	simEnv     *environment
@@ -249,7 +246,6 @@ func New(eth Backend, backendAPI interface{}, config Config, engine consensus.En
 		txpool:      eth.TxPool(),
 		chain:       eth.BlockChain(),
 		pending:     &pending{},
-		xtCh:        make(chan *types.Transaction, 1024),
 		// To interrupt background tasks that may be attached to external processes
 		lifeCtxCancel: cancel,
 		lifeCtx:       ctx,
@@ -332,20 +328,6 @@ func (miner *Miner) SetPrioAddresses(prio []common.Address) {
 	miner.confMu.Lock()
 	miner.prio = prio
 	miner.confMu.Unlock()
-}
-
-// EnqueueXT enqueues a cross-chain transaction for inclusion during block building.
-// It is best-effort; returns an error if the queue is full.
-func (miner *Miner) EnqueueXT(tx *types.Transaction) error {
-	if tx == nil {
-		return fmt.Errorf("nil xT transaction")
-	}
-	select {
-	case miner.xtCh <- tx:
-		return nil
-	default:
-		return fmt.Errorf("xT queue is full")
-	}
 }
 
 // SetGasCeil sets the gaslimit to strive for when mining blocks post 1559.
