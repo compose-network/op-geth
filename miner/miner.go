@@ -20,6 +20,7 @@ package miner
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/big"
 	"sync"
@@ -65,6 +66,18 @@ type BackendWithInterop interface {
 	QueryFailsafe(ctx context.Context) (bool, error)
 }
 
+// SimulatedBundleStats describes a simulated bundle ready for block inclusion.
+// SSV
+type SimulatedBundleStats struct {
+	BaseTxCount int
+	BaseGasUsed uint64
+	GasUsed     uint64
+	Size        uint64
+	TxCount     int
+	Blobs       int
+	BlobGasUsed uint64
+}
+
 // BackendWithSequencerTransactions defines the interface for sequencer transaction handling
 // SSV
 type BackendWithSequencerTransactions interface {
@@ -93,6 +106,11 @@ type BackendWithSequencerTransactions interface {
 	// OnBlockBuildingComplete is called when block building completes
 	// SSV
 	OnBlockBuildingComplete(ctx context.Context, block *types.Block, success bool, simulation bool) error
+
+	// ConsumeSimulatedBundle returns a simulated bundle ready for inclusion at the
+	// current transaction count. Returns ok=false if no bundle is ready.
+	// SSV
+	ConsumeSimulatedBundle(blockNumber uint64, txCount int) (types.Transactions, []*types.Receipt, []*types.BlobTxSidecar, SimulatedBundleStats, bool)
 }
 
 // Config is the configuration parameters of mining.
@@ -140,8 +158,73 @@ type Miner struct {
 	backend    Backend
 	backendAPI interface{}
 
+	// xT injection support
+	xtCh chan *types.Transaction // queue of ready-to-apply cross-chain txs
+
+	// SSV: expose in-flight state safely for simulation
+	simStateMu sync.Mutex
+	simEnv     *environment
+	simReadyCh chan struct{}
+
 	lifeCtxCancel context.CancelFunc
 	lifeCtx       context.Context
+}
+
+// SimulationStateGuard holds the current in-flight state under lock and allows
+// callers to either keep or restore it before unlocking.
+type SimulationStateGuard struct {
+	state   *state.StateDB
+	header  *types.Header
+	txCount int
+	unlock  func()
+	restore func()
+	swap    func(*state.StateDB)
+}
+
+func (g *SimulationStateGuard) State() *state.StateDB {
+	if g == nil {
+		return nil
+	}
+	return g.state
+}
+
+func (g *SimulationStateGuard) Header() *types.Header {
+	if g == nil {
+		return nil
+	}
+	return g.header
+}
+
+// TxCount returns the current in-flight transaction count.
+// SSV
+func (g *SimulationStateGuard) TxCount() int {
+	if g == nil {
+		return 0
+	}
+	return g.txCount
+}
+
+// UnlockState releases the guard. If success is false, the state is restored.
+func (g *SimulationStateGuard) UnlockState(success bool) {
+	if g == nil {
+		return
+	}
+	if !success && g.restore != nil {
+		g.restore()
+	}
+	if g.unlock != nil {
+		g.unlock()
+		g.unlock = nil
+	}
+}
+
+// SwapState replaces the in-flight state with the provided state.
+// SSV
+func (g *SimulationStateGuard) SwapState(state *state.StateDB) {
+	if g == nil || g.swap == nil || state == nil {
+		return
+	}
+	g.swap(state)
 }
 
 // New creates a new miner with provided config.
@@ -156,10 +239,12 @@ func New(eth Backend, backendAPI interface{}, config Config, engine consensus.En
 		txpool:      eth.TxPool(),
 		chain:       eth.BlockChain(),
 		pending:     &pending{},
+		xtCh:        make(chan *types.Transaction, 1024),
 		// To interrupt background tasks that may be attached to external processes
 		lifeCtxCancel: cancel,
 		lifeCtx:       ctx,
 	}
+	miner.simReadyCh = make(chan struct{})
 
 	// OP-Stack: Start background RPC polling
 	miner.startBackgroundInteropFailsafeDetection()
@@ -239,6 +324,20 @@ func (miner *Miner) SetPrioAddresses(prio []common.Address) {
 	miner.confMu.Unlock()
 }
 
+// EnqueueXT enqueues a cross-chain transaction for inclusion during block building.
+// It is best-effort; returns an error if the queue is full.
+func (miner *Miner) EnqueueXT(tx *types.Transaction) error {
+	if tx == nil {
+		return fmt.Errorf("nil xT transaction")
+	}
+	select {
+	case miner.xtCh <- tx:
+		return nil
+	default:
+		return fmt.Errorf("xT queue is full")
+	}
+}
+
 // SetGasCeil sets the gaslimit to strive for when mining blocks post 1559.
 // For pre-1559 blocks, it sets the ceiling.
 func (miner *Miner) SetGasCeil(ceil uint64) {
@@ -287,9 +386,13 @@ func (miner *Miner) BuildPayload(args *BuildPayloadArgs, witness bool) (*Payload
 // getPending retrieves the pending block based on the current head block.
 // The result might be nil if pending generation is failed.
 func (miner *Miner) getPending(ctx context.Context) *newPayloadResult {
-	header := miner.chain.CurrentHeader()
 	miner.pendingMu.Lock()
 	defer miner.pendingMu.Unlock()
+	return miner.getPendingLocked(ctx)
+}
+
+func (miner *Miner) getPendingLocked(ctx context.Context) *newPayloadResult {
+	header := miner.chain.CurrentHeader()
 
 	// Check simulation mode - for simulations, never use cache and don't update cache
 	simulation, _ := ctx.Value("simulation").(bool)
@@ -333,6 +436,85 @@ func (miner *Miner) getPending(ctx context.Context) *newPayloadResult {
 		miner.pending.update(header.Hash(), ret)
 	}
 	return ret
+}
+
+// PendingStateAndHeaderLocked returns the current pending state and header while
+// holding the pending lock. The caller must invoke the returned unlock function.
+func (miner *Miner) PendingStateAndHeaderLocked(ctx context.Context) (*state.StateDB, *types.Header, func(), error) {
+	miner.pendingMu.Lock()
+	unlock := func() {
+		miner.pendingMu.Unlock()
+	}
+
+	pending := miner.getPendingLocked(ctx)
+	if pending == nil || pending.stateDB == nil || pending.block == nil {
+		unlock()
+		return nil, nil, func() {}, errors.New("pending state unavailable")
+	}
+
+	return pending.stateDB, pending.block.Header(), unlock, nil
+}
+
+// CurrentBuildStateLocked returns a snapshot of the in-flight block-building state (if any)
+// while holding the simulation lock. The caller must invoke the returned unlock function.
+func (miner *Miner) CurrentBuildStateLocked(ctx context.Context) (*state.StateDB, *types.Header, func(), error) {
+	env, unlock, err := miner.CurrentBuildEnvLocked(ctx)
+	if err != nil {
+		return nil, nil, func() {}, err
+	}
+	return env.state, env.header, unlock, nil
+}
+
+// CurrentBuildEnvLocked returns the in-flight block-building environment while holding
+// the simulation lock. The caller must invoke the returned unlock function.
+func (miner *Miner) CurrentBuildEnvLocked(ctx context.Context) (*environment, func(), error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	for {
+		miner.simStateMu.Lock()
+		if miner.simEnv != nil && miner.simEnv.state != nil && miner.simEnv.header != nil {
+			return miner.simEnv, func() { miner.simStateMu.Unlock() }, nil
+		}
+		ch := miner.simReadyCh
+		miner.simStateMu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			return nil, func() {}, ctx.Err()
+		case <-ch:
+		}
+	}
+}
+
+// SimulationStateGuard returns a guard for the in-flight state. Call UnlockState(success)
+// when done to either keep or restore the state.
+func (miner *Miner) SimulationStateGuard(ctx context.Context) (*SimulationStateGuard, error) {
+	env, unlock, err := miner.CurrentBuildEnvLocked(ctx)
+	if err != nil {
+		return nil, err
+	}
+	snapshot := env.state.Snapshot()
+	restore := func() {
+		env.state.RevertToSnapshot(snapshot)
+		if env.evm != nil {
+			env.evm.StateDB = env.state
+		}
+	}
+	return &SimulationStateGuard{
+		state:   env.state,
+		header:  env.header,
+		txCount: env.tcount,
+		unlock:  unlock,
+		restore: restore,
+		swap: func(state *state.StateDB) {
+			env.state = state
+			if env.evm != nil {
+				env.evm.StateDB = state
+			}
+		},
+	}, nil
 }
 
 func (miner *Miner) createHoloceneEIP1559Params(parent *types.Header, timestamp uint64) []byte {
