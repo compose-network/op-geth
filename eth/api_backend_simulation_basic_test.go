@@ -303,9 +303,7 @@ func TestApplyPutInboxMessage(t *testing.T) {
 	blockCtx := core.NewEVMBlockContext(header, chainCtx, nil, backend.ChainConfig(), stateCopy)
 	vmCfg := vm.Config{}
 
-	gasPool := new(core.GasPool).AddGas(header.GasLimit)
-	usedGas := uint64(0)
-	if _, _, _, err := backend.applyPutInboxMessage(blockCtx, vmCfg, stateCopy, header, msg, gasPool, &usedGas, 0); err != nil {
+	if err := backend.applyPutInboxMessage(blockCtx, vmCfg, stateCopy, msg); err != nil {
 		t.Fatalf("applyPutInboxMessage returned error: %v", err)
 	}
 	// Confirm nonce has been updated
