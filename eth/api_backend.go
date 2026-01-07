@@ -343,23 +343,6 @@ func (b *EthAPIBackend) Pending() (*types.Block, types.Receipts, *state.StateDB)
 	return b.eth.miner.Pending(context.Background())
 }
 
-func (b *EthAPIBackend) pendingStateAndHeaderLocked(
-	ctx context.Context,
-) (*state.StateDB, *types.Header, func(), error) {
-	if b.stateByNumberOrHashOverride != nil {
-		stateDB, header, err := b.stateByNumberOrHashOverride(ctx, rpc.BlockNumberOrHashWithNumber(rpc.PendingBlockNumber))
-		return stateDB, header, func() {}, err
-	}
-	if b.stateByNumberOverride != nil {
-		stateDB, header, err := b.stateByNumberOverride(ctx, rpc.PendingBlockNumber)
-		return stateDB, header, func() {}, err
-	}
-	if b.eth == nil || b.eth.miner == nil {
-		return nil, nil, func() {}, errors.New("miner unavailable")
-	}
-	return b.eth.miner.CurrentBuildStateLocked(ctx)
-}
-
 func (b *EthAPIBackend) simulationStateGuard(ctx context.Context) (*simStateGuard, error) {
 	if b.stateByNumberOrHashOverride != nil {
 		stateDB, header, err := b.stateByNumberOrHashOverride(ctx, rpc.BlockNumberOrHashWithNumber(rpc.PendingBlockNumber))

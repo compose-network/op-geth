@@ -447,16 +447,6 @@ func (miner *Miner) PendingStateAndHeaderLocked(ctx context.Context) (*state.Sta
 	return pending.stateDB, pending.block.Header(), unlock, nil
 }
 
-// CurrentBuildStateLocked returns a snapshot of the in-flight block-building state (if any)
-// while holding the simulation lock. The caller must invoke the returned unlock function.
-func (miner *Miner) CurrentBuildStateLocked(ctx context.Context) (*state.StateDB, *types.Header, func(), error) {
-	env, unlock, err := miner.CurrentBuildEnvLocked(ctx)
-	if err != nil {
-		return nil, nil, func() {}, err
-	}
-	return env.state, env.header, unlock, nil
-}
-
 // CurrentBuildEnvLocked returns the in-flight block-building environment while holding
 // the simulation lock. The caller must invoke the returned unlock function.
 func (miner *Miner) CurrentBuildEnvLocked(ctx context.Context) (*environment, func(), error) {
