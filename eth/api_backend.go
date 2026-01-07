@@ -107,6 +107,7 @@ type EthAPIBackend struct {
 	// SSV: Track current SCP instance and pending simulation bundle
 	scpInstanceMu            sync.Mutex
 	activeInstanceID         *compose.InstanceID
+	decidedInstances         map[compose.InstanceID]bool
 	pendingSimGuard          *simStateGuard
 	pendingSimState          *state.StateDB
 	pendingSimBundle         *simulatedBundle
@@ -897,9 +898,11 @@ func (b *EthAPIBackend) MailboxMsgCallbackFn() spconsensus.MailboxMsgFn {
 
 func (b *EthAPIBackend) DecisionCallbackFn() spconsensus.DecisionFn {
 	return func(ctx context.Context, instanceID *compose.InstanceID, decision bool) error {
+		log.Info("[SSV] Decision callback invoked", "instanceID", instanceID, "decision", decision)
 		if instanceID == nil {
 			return fmt.Errorf("decision callback received nil instance ID")
 		}
+		b.recordInstanceDecision(*instanceID, decision)
 		if b.coordinator == nil || b.coordinator.InstanceSequencer() == nil {
 			return fmt.Errorf("instance sequencer not configured")
 		}
@@ -1363,16 +1366,97 @@ func (b *EthAPIBackend) clearActiveInstanceID() {
 	b.scpInstanceMu.Unlock()
 }
 
+func (b *EthAPIBackend) getActiveInstanceID() (compose.InstanceID, bool) {
+	b.scpInstanceMu.Lock()
+	defer b.scpInstanceMu.Unlock()
+	if b.activeInstanceID == nil {
+		return compose.InstanceID{}, false
+	}
+	return *b.activeInstanceID, true
+}
+
+func (b *EthAPIBackend) isActiveInstance(id compose.InstanceID) bool {
+	b.scpInstanceMu.Lock()
+	defer b.scpInstanceMu.Unlock()
+	if b.activeInstanceID == nil {
+		return false
+	}
+	return *b.activeInstanceID == id
+}
+
+func (b *EthAPIBackend) recordInstanceDecision(id compose.InstanceID, decision bool) {
+	b.scpInstanceMu.Lock()
+	if b.decidedInstances == nil {
+		b.decidedInstances = make(map[compose.InstanceID]bool)
+	}
+	b.decidedInstances[id] = decision
+	b.scpInstanceMu.Unlock()
+}
+
+func (b *EthAPIBackend) getInstanceDecision(id compose.InstanceID) (bool, bool) {
+	b.scpInstanceMu.Lock()
+	decision, ok := b.decidedInstances[id]
+	b.scpInstanceMu.Unlock()
+	return decision, ok
+}
+
+func (b *EthAPIBackend) clearInstanceDecision(id compose.InstanceID) {
+	b.scpInstanceMu.Lock()
+	delete(b.decidedInstances, id)
+	b.scpInstanceMu.Unlock()
+}
+
+// abortActiveInstanceForBlockClose forces an active SCP instance to abort when a block close
+// is requested before a decision is received.
+func (b *EthAPIBackend) abortActiveInstanceForBlockClose() {
+	if b == nil {
+		return
+	}
+
+	var instanceID compose.InstanceID
+	b.scpInstanceMu.Lock()
+	if b.activeInstanceID == nil {
+		b.scpInstanceMu.Unlock()
+		return
+	}
+	instanceID = *b.activeInstanceID
+	b.activeInstanceID = nil
+	b.scpInstanceMu.Unlock()
+
+	log.Warn("[SSV] Block close requested with active instance; forcing abort",
+		"instanceID", instanceID.String())
+	b.recordInstanceDecision(instanceID, false)
+
+	decided := false
+	if b.coordinator != nil && b.coordinator.InstanceSequencer() != nil {
+		if err, ok := b.coordinator.InstanceSequencer().Decide(instanceID, false); err != nil {
+			log.Error("[SSV] Failed to abort active instance", "instanceID", instanceID.String(), "err", err)
+		} else {
+			decided = ok
+		}
+	}
+
+	b.dropPendingSimBundle(instanceID)
+
+	if decided && b.coordinator != nil && b.coordinator.PeriodSequencer() != nil {
+		if err := b.coordinator.PeriodSequencer().OnDecidedInstance(instanceID); err != nil {
+			log.Error("[SSV] Failed to notify period sequencer of aborted instance",
+				"instanceID", instanceID.String(), "err", err)
+		}
+	}
+}
+
 // stashPendingSimBundle stores the simulation result until a commit decision is received.
 // Returns true if the simulation lock should be kept for a later decision.
 func (b *EthAPIBackend) stashPendingSimBundle(
+	instanceID compose.InstanceID,
 	bundle simulatedBundle,
 	guard *simStateGuard,
 	stateDB *state.StateDB,
 ) bool {
 	b.scpInstanceMu.Lock()
 	active := b.activeInstanceID
-	if active == nil || guard == nil || guard.commitState == nil || guard.applyBundle == nil || stateDB == nil {
+	if active == nil || *active != instanceID || guard == nil || guard.commitState == nil || guard.applyBundle == nil || stateDB == nil {
 		b.scpInstanceMu.Unlock()
 		return false
 	}
@@ -1409,6 +1493,7 @@ func (b *EthAPIBackend) commitPendingSimBundle(instanceID compose.InstanceID) {
 	b.pendingSimGuard = nil
 	b.pendingSimState = nil
 	b.scpInstanceMu.Unlock()
+	b.clearInstanceDecision(instanceID)
 
 	if guard != nil && stateDB != nil && guard.commitState != nil {
 		guard.commitState(stateDB)
@@ -1449,6 +1534,7 @@ func (b *EthAPIBackend) dropPendingSimBundle(instanceID compose.InstanceID) {
 	b.pendingSimGuard = nil
 	b.pendingSimState = nil
 	b.scpInstanceMu.Unlock()
+	b.clearInstanceDecision(instanceID)
 
 	if guard != nil {
 		guard.unlockState(false)
@@ -1519,6 +1605,9 @@ func (b *EthAPIBackend) OnBlockBuildingComplete(
 	block *types.Block,
 	success, simulation bool,
 ) error {
+	if !simulation {
+		b.abortActiveInstanceForBlockClose()
+	}
 	return b.coordinator.OnBlockBuildingComplete(ctx, block, success)
 }
 
@@ -1871,6 +1960,11 @@ func (b *EthAPIBackend) simulateSCPBundle(request instanceproto.SimulationReques
 		return nil, nil, errors.New("no transactions to simulate")
 	}
 
+	instanceID, ok := b.getActiveInstanceID()
+	if !ok {
+		return nil, nil, errors.New("no active SCP instance")
+	}
+
 	ctx := context.Background()
 	waitCtx, cancelWait := context.WithTimeout(ctx, SCPExpirationTimeout)
 	defer cancelWait()
@@ -2089,29 +2183,45 @@ func (b *EthAPIBackend) simulateSCPBundle(request instanceproto.SimulationReques
 	}
 
 	bundle.gasUsed = bundleUsedGas
-	if b.stashPendingSimBundle(bundle, guard, stateDB) {
-		unlockAfter = false
+	if decision, decided := b.getInstanceDecision(instanceID); decided {
+		b.clearInstanceDecision(instanceID)
+		if !decision {
+			return nil, writeAccumulator, fmt.Errorf("instance already decided false")
+		}
+		if guard.commitState != nil {
+			guard.commitState(stateDB)
+		}
+		if guard.applyBundle != nil {
+			stats := miner.SimulatedBundleStats{
+				BaseTxCount: bundle.baseTxCount,
+				BaseGasUsed: bundle.baseGasUsed,
+				GasUsed:     bundle.gasUsed,
+				Size:        bundle.size,
+				TxCount:     bundle.tcount,
+				Blobs:       bundle.blobs,
+				BlobGasUsed: bundle.blobGasUsed,
+			}
+			if err := guard.applyBundle(bundle.txs, bundle.receipts, bundle.sidecars, stats); err != nil {
+				log.Error("[SSV] Failed to apply simulated bundle", "err", err)
+			}
+		}
+		unlockSuccess = true
 		return nil, writeAccumulator, nil
 	}
-	if guard.commitState != nil {
-		guard.commitState(stateDB)
+
+	if !b.isActiveInstance(instanceID) {
+		return nil, writeAccumulator, fmt.Errorf("instance no longer active")
 	}
-	if guard.applyBundle != nil {
-		stats := miner.SimulatedBundleStats{
-			BaseTxCount: bundle.baseTxCount,
-			BaseGasUsed: bundle.baseGasUsed,
-			GasUsed:     bundle.gasUsed,
-			Size:        bundle.size,
-			TxCount:     bundle.tcount,
-			Blobs:       bundle.blobs,
-			BlobGasUsed: bundle.blobGasUsed,
+
+	if guard != nil && guard.commitState != nil && guard.applyBundle != nil {
+		if b.stashPendingSimBundle(instanceID, bundle, guard, stateDB) {
+			unlockAfter = false
+			return nil, writeAccumulator, nil
 		}
-		if err := guard.applyBundle(bundle.txs, bundle.receipts, bundle.sidecars, stats); err != nil {
-			log.Error("[SSV] Failed to apply simulated bundle", "err", err)
-		}
+		return nil, writeAccumulator, fmt.Errorf("failed to stash simulated bundle")
 	}
-	unlockSuccess = true
-	return nil, writeAccumulator, nil
+
+	return nil, writeAccumulator, fmt.Errorf("simulation guard unavailable for decision-gated apply")
 }
 
 func (b *EthAPIBackend) applyPutInboxMessage(
