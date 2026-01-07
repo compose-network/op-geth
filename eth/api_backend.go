@@ -121,7 +121,9 @@ type EthAPIBackend struct {
 }
 
 const defaultPutInboxGas = 500000
-const simulationStateWaitTimeout = 5 * time.Second
+
+// TODO read it from composer library
+const SCPExpirationTimeout = 2 * time.Second
 
 type simStateGuard struct {
 	state       *state.StateDB
@@ -1870,7 +1872,7 @@ func (b *EthAPIBackend) simulateSCPBundle(request instanceproto.SimulationReques
 	}
 
 	ctx := context.Background()
-	waitCtx, cancelWait := context.WithTimeout(ctx, simulationStateWaitTimeout)
+	waitCtx, cancelWait := context.WithTimeout(ctx, SCPExpirationTimeout)
 	defer cancelWait()
 
 	guard, err := b.simulationStateGuard(waitCtx)

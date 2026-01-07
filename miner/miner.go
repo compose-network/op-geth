@@ -246,11 +246,11 @@ func New(eth Backend, backendAPI interface{}, config Config, engine consensus.En
 		txpool:      eth.TxPool(),
 		chain:       eth.BlockChain(),
 		pending:     &pending{},
+		simReadyCh:  make(chan struct{}),
 		// To interrupt background tasks that may be attached to external processes
 		lifeCtxCancel: cancel,
 		lifeCtx:       ctx,
 	}
-	miner.simReadyCh = make(chan struct{})
 
 	// OP-Stack: Start background RPC polling
 	miner.startBackgroundInteropFailsafeDetection()
