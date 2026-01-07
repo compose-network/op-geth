@@ -24,7 +24,6 @@ import (
 
 	"github.com/compose-network/specs/compose"
 	composeproto "github.com/compose-network/specs/compose/proto"
-	"github.com/compose-network/specs/compose/sbcp"
 	instanceproto "github.com/compose-network/specs/compose/scp"
 	spconsensus "github.com/ethereum/go-ethereum/internal/xconsensus"
 	rollupv1 "github.com/ethereum/go-ethereum/internal/xproto/rollup/v1"
@@ -123,7 +122,6 @@ type EthAPIBackend struct {
 
 const defaultPutInboxGas = 500000
 const simulationStateWaitTimeout = 5 * time.Second
-const pendingBlockWaitInterval = 100 * time.Millisecond
 
 type simStateGuard struct {
 	state       *state.StateDB
@@ -863,22 +861,18 @@ func (b *EthAPIBackend) waitForPendingBlock(ctx context.Context) error {
 	if b.coordinator == nil || b.coordinator.PeriodSequencer() == nil {
 		return errors.New("period sequencer not configured")
 	}
-
-	ticker := time.NewTicker(pendingBlockWaitInterval)
-	defer ticker.Stop()
-
-	for {
-		_, err := b.coordinator.PeriodSequencer().CanIncludeLocalTx()
-		if err == nil || !errors.Is(err, sbcp.NoPendingBlock) {
-			return err
-		}
-
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("timed out waiting for pending block: %w", ctx.Err())
-		case <-ticker.C:
-		}
+	if b.eth == nil || b.eth.miner == nil {
+		return errors.New("miner unavailable")
 	}
+
+	_, unlock, err := b.eth.miner.CurrentBuildEnvLocked(ctx)
+	if unlock != nil {
+		unlock()
+	}
+	if err != nil {
+		return fmt.Errorf("timed out waiting for pending block: %w", err)
+	}
+	return nil
 }
 
 func (b *EthAPIBackend) MailboxMsgCallbackFn() spconsensus.MailboxMsgFn {
