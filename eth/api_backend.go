@@ -105,12 +105,12 @@ type EthAPIBackend struct {
 	committedTxHashes map[common.Hash]bool // Hashes of txs that were committed in blocks during this slot
 
 	// SSV: Track current SCP instance and pending simulation bundle
-	scpInstanceMu            sync.Mutex
-	activeInstanceID         *compose.InstanceID
-	decidedInstances         map[compose.InstanceID]bool
-	pendingSimGuard          *simStateGuard
-	pendingSimState          *state.StateDB
-	pendingSimBundle         *simulatedBundle
+	scpInstanceMu    sync.Mutex
+	activeInstanceID *compose.InstanceID
+	decidedInstances map[compose.InstanceID]bool
+	pendingSimGuard  *simStateGuard
+	pendingSimState  *state.StateDB
+	pendingSimBundle *simulatedBundle
 
 	// Overrides for testing purposes only
 	// TODO refactor dependency injection with interfaces to avoid these
@@ -344,50 +344,6 @@ func (b *EthAPIBackend) Pending() (*types.Block, types.Receipts, *state.StateDB)
 }
 
 func (b *EthAPIBackend) simulationStateGuard(ctx context.Context) (*simStateGuard, error) {
-	if b.stateByNumberOrHashOverride != nil {
-		stateDB, header, err := b.stateByNumberOrHashOverride(ctx, rpc.BlockNumberOrHashWithNumber(rpc.PendingBlockNumber))
-		if err != nil {
-			return nil, err
-		}
-		snapshot := stateDB.Snapshot()
-		txCount := 0
-		if header.GasUsed > 0 {
-			txCount = stateDB.TxIndex() + 1
-		}
-		return &simStateGuard{
-			state:   stateDB,
-			header:  header,
-			txCount: txCount,
-			unlockState: func(success bool) {
-				if !success {
-					stateDB.RevertToSnapshot(snapshot)
-				}
-			},
-			commitState: nil,
-		}, nil
-	}
-	if b.stateByNumberOverride != nil {
-		stateDB, header, err := b.stateByNumberOverride(ctx, rpc.PendingBlockNumber)
-		if err != nil {
-			return nil, err
-		}
-		snapshot := stateDB.Snapshot()
-		txCount := 0
-		if header.GasUsed > 0 {
-			txCount = stateDB.TxIndex() + 1
-		}
-		return &simStateGuard{
-			state:   stateDB,
-			header:  header,
-			txCount: txCount,
-			unlockState: func(success bool) {
-				if !success {
-					stateDB.RevertToSnapshot(snapshot)
-				}
-			},
-			commitState: nil,
-		}, nil
-	}
 	if b.eth == nil || b.eth.miner == nil {
 		return nil, errors.New("miner unavailable")
 	}
