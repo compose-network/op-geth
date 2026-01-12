@@ -111,7 +111,6 @@ type EthAPIBackend struct {
 	pendingSimGuard          *simStateGuard
 	pendingSimState          *state.StateDB
 	pendingSimBundle         *simulatedBundle
-	pendingSimBundleInstance *compose.InstanceID
 
 	// Overrides for testing purposes only
 	// TODO refactor dependency injection with interfaces to avoid these
@@ -1420,7 +1419,6 @@ func (b *EthAPIBackend) abortActiveInstanceForBlockClose() {
 		return
 	}
 	instanceID = *b.activeInstanceID
-	b.activeInstanceID = nil
 	b.scpInstanceMu.Unlock()
 
 	log.Warn("[SSV] Block close requested with active instance; forcing abort",
@@ -1437,6 +1435,8 @@ func (b *EthAPIBackend) abortActiveInstanceForBlockClose() {
 	}
 
 	b.dropPendingSimBundle(instanceID)
+
+	b.clearActiveInstanceID()
 
 	if decided && b.coordinator != nil && b.coordinator.PeriodSequencer() != nil {
 		if err := b.coordinator.PeriodSequencer().OnDecidedInstance(instanceID); err != nil {
@@ -1466,11 +1466,9 @@ func (b *EthAPIBackend) stashPendingSimBundle(
 		return false
 	}
 	bundleCopy := bundle
-	id := *active
 	b.pendingSimGuard = guard
 	b.pendingSimState = stateDB
 	b.pendingSimBundle = &bundleCopy
-	b.pendingSimBundleInstance = &id
 	b.scpInstanceMu.Unlock()
 	return true
 }
@@ -1480,16 +1478,15 @@ func (b *EthAPIBackend) stashPendingSimBundle(
 func (b *EthAPIBackend) commitPendingSimBundle(instanceID compose.InstanceID) {
 	b.scpInstanceMu.Lock()
 	pending := b.pendingSimBundle
-	pendingID := b.pendingSimBundleInstance
+	active := b.activeInstanceID
 	guard := b.pendingSimGuard
 	stateDB := b.pendingSimState
-	if pending == nil || pendingID == nil || *pendingID != instanceID {
+	if pending == nil || active == nil || *active != instanceID {
 		b.scpInstanceMu.Unlock()
 		return
 	}
 	bundle := *pending
 	b.pendingSimBundle = nil
-	b.pendingSimBundleInstance = nil
 	b.pendingSimGuard = nil
 	b.pendingSimState = nil
 	b.scpInstanceMu.Unlock()
@@ -1523,14 +1520,13 @@ func (b *EthAPIBackend) commitPendingSimBundle(instanceID compose.InstanceID) {
 // dropPendingSimBundle discards a pending bundle on abort decisions.
 func (b *EthAPIBackend) dropPendingSimBundle(instanceID compose.InstanceID) {
 	b.scpInstanceMu.Lock()
-	pendingID := b.pendingSimBundleInstance
+	active := b.activeInstanceID
 	guard := b.pendingSimGuard
-	if pendingID == nil || *pendingID != instanceID {
+	if active == nil || *active != instanceID {
 		b.scpInstanceMu.Unlock()
 		return
 	}
 	b.pendingSimBundle = nil
-	b.pendingSimBundleInstance = nil
 	b.pendingSimGuard = nil
 	b.pendingSimState = nil
 	b.scpInstanceMu.Unlock()
