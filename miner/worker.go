@@ -219,12 +219,8 @@ func (miner *Miner) generateWork(genParam *generateParams, witness bool) *newPay
 		if interrupt == nil {
 			interrupt = new(atomic.Int32)
 		}
-		timer := time.AfterFunc(max(minRecommitInterruptInterval, miner.config.Recommit), func() {
-			interrupt.Store(commitInterruptTimeout)
-		})
 
 		err := miner.fillTransactionsWithSequencerOrdering(interrupt, work)
-		timer.Stop() // don't need timeout interruption any more
 		if errors.Is(err, errBlockInterruptedByTimeout) {
 			log.Warn("Block building is interrupted", "allowance", common.PrettyDuration(miner.config.Recommit))
 		} else if errors.Is(err, errBlockInterruptedByResolve) {
@@ -861,6 +857,31 @@ func (miner *Miner) fillTransactionsWithSequencerOrdering(interrupt *atomic.Int3
 	prio := miner.prio
 	miner.confMu.RUnlock()
 
+	var simTimeoutCh <-chan time.Time
+	if interrupt != nil {
+		timeout := max(minRecommitInterruptInterval, miner.config.Recommit)
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		simTimeoutCh = timer.C
+	}
+
+	miner.simStateMu.Lock()
+	if miner.simEnv == nil {
+		miner.simEnv = env
+		close(miner.simReadyCh)
+	} else {
+		miner.simEnv = env
+	}
+	miner.simStateMu.Unlock()
+	defer func() {
+		miner.simStateMu.Lock()
+		if miner.simEnv == env {
+			miner.simEnv = nil
+			miner.simReadyCh = make(chan struct{})
+		}
+		miner.simStateMu.Unlock()
+	}()
+
 	// Retrieve the pending transactions pre-filtered by the 1559/4844 dynamic fees
 	filter := txpool.PendingFilter{
 		MinTip:      uint256.MustFromBig(tip),
@@ -895,54 +916,13 @@ func (miner *Miner) fillTransactionsWithSequencerOrdering(interrupt *atomic.Int3
 
 	// SSV: Get ordered transactions from backend if available
 	if backend, ok := miner.backendAPI.(BackendWithSequencerTransactions); ok {
-		// Ask backend for sequencer-managed txs appropriate for the current SBCP state.
-		// Backend returns sequencer txs when ready:
-		// - BuildingFree: After SCP completes, transactions are ready for inclusion
-		// - Submission: Final block with any remaining transactions
-		// - BuildingLocked: No transactions (SCP coordination in progress)
-		orderedSequencerTxs, err := backend.GetOrderedTransactionsForBlock(env.rpcCtx)
-		if err != nil {
-			log.Warn("[SSV] Failed to get backend-ordered sequencer txs", "err", err)
-		}
-
-		// Build a skip set to exclude sequencer txs from the normal tx pools
+		// Build a skip set to exclude sequencer-managed txs from the normal tx pools
 		skip := make(map[common.Hash]struct{}, 0)
-		if len(orderedSequencerTxs) > 0 {
-			// BuildingFree or Submission state: skip txs that backend is managing via sequencer path
-			for _, tx := range orderedSequencerTxs {
-				skip[tx.Hash()] = struct{}{}
-			}
-		} else {
-			// BuildingLocked state: skip ALL pending sequencer-managed txs (not yet ready for inclusion)
-			for _, tx := range backend.GetPendingPutInboxTxs() {
-				skip[tx.Hash()] = struct{}{}
-			}
-			for _, tx := range backend.GetPendingOriginalTxs() {
-				skip[tx.Hash()] = struct{}{}
-			}
+		for _, tx := range backend.GetPendingPutInboxTxs() {
+			skip[tx.Hash()] = struct{}{}
 		}
-
-		// Commit backend-ordered sequencer txs atomically
-		// This happens in BuildingFree (after SCP) or Submission (final block)
-		sequencerTxCount := 0
-		if len(orderedSequencerTxs) > 0 {
-			simEnv, err := miner.buildSequencerSimulationEnv(env)
-			if err != nil {
-				log.Error("[SSV] Failed to initialise sequencer simulation environment", "err", err)
-			} else if err := miner.applySequencerBundle(simEnv, orderedSequencerTxs); err != nil {
-				log.Error("[SSV] PeriodSequencer transaction bundle rejected during simulation",
-					"err", err, "attempted", len(orderedSequencerTxs))
-				if notifyErr := backend.OnBlockBuildingComplete(env.rpcCtx, nil, false, false); notifyErr != nil {
-					log.Warn("[SSV] Failed to notify backend about bundle failure", "err", notifyErr)
-				}
-			} else {
-				miner.applySequencerSimulationResults(env, simEnv)
-				sequencerTxCount = len(simEnv.txs)
-				log.Info("[SSV] Committed sequencer transactions atomically",
-					"putInbox", len(backend.GetPendingPutInboxTxs()),
-					"original", len(backend.GetPendingOriginalTxs()),
-					"total", sequencerTxCount)
-			}
+		for _, tx := range backend.GetPendingOriginalTxs() {
+			skip[tx.Hash()] = struct{}{}
 		}
 
 		// Filter sequencer-managed txs out of account-based pools to avoid premature or double inclusion
@@ -972,21 +952,76 @@ func (miner *Miner) fillTransactionsWithSequencerOrdering(interrupt *atomic.Int3
 			filterAccountTxs(normalBlobTxs)
 		}
 
-		// PHASE 2: Process priority transactions (maintain per-account nonce ordering)
-		prioCount := miner.commitAccountBasedTransactions(interrupt, env, prioPlainTxs)
-		prioCount += miner.commitAccountBasedTransactions(interrupt, env, prioBlobTxs)
+		type txWorkItem struct {
+			account common.Address
+			lazy    *txpool.LazyTransaction
+		}
+		worklist := make([]txWorkItem, 0,
+			len(prioPlainTxs)+len(prioBlobTxs)+len(normalPlainTxs)+len(normalBlobTxs))
 
-		// PHASE 3: Process normal transactions (maintain per-account nonce ordering)
-		normalCount := miner.commitAccountBasedTransactions(interrupt, env, normalPlainTxs)
-		normalCount += miner.commitAccountBasedTransactions(interrupt, env, normalBlobTxs)
+		appendAccountTxs := func(m map[common.Address][]*txpool.LazyTransaction) {
+			for addr, txs := range m {
+				for _, lazy := range txs {
+					worklist = append(worklist, txWorkItem{account: addr, lazy: lazy})
+				}
+			}
+		}
+		appendAccountTxs(prioPlainTxs)
+		appendAccountTxs(prioBlobTxs)
+		appendAccountTxs(normalPlainTxs)
+		appendAccountTxs(normalBlobTxs)
+
+		committedCount := 0
+		for _, item := range worklist {
+			if interrupt != nil {
+				if signal := interrupt.Load(); signal != commitInterruptNone {
+					return signalToErr(signal)
+				}
+			}
+
+			tx := item.lazy.Resolve()
+			if tx == nil {
+				continue
+			}
+
+			miner.simStateMu.Lock()
+			if env.gasPool.Gas() < params.TxGas {
+				log.Trace("[SSV] Not enough gas for more transactions", "have", env.gasPool.Gas())
+				miner.simStateMu.Unlock()
+				break
+			}
+
+			// Blob gas check mirrors commitAccountBasedTransactions
+			if tx.Type() == types.BlobTxType {
+				sc := tx.BlobTxSidecar()
+				if sc != nil && env.blobs+len(sc.Blobs) > eip4844.MaxBlobsPerBlock(miner.chainConfig, env.header.Time) {
+					log.Trace("[SSV] Not enough blob space for transaction", "hash", tx.Hash())
+					miner.simStateMu.Unlock()
+					continue
+				}
+			}
+
+			env.state.SetTxContext(tx.Hash(), env.tcount)
+			if err := miner.commitTransaction(env, tx); err != nil {
+				log.Debug("[SSV] Transaction failed, skipping", "hash", tx.Hash(), "account", item.account.Hex(), "err", err)
+				miner.simStateMu.Unlock()
+				continue
+			}
+			miner.simStateMu.Unlock()
+
+			committedCount++
+		}
 
 		// Log transaction summary
-		if sequencerTxCount > 0 || prioCount > 0 || normalCount > 0 {
+		if committedCount > 0 {
 			log.Info("[SSV] Block transactions",
-				"sequencer", sequencerTxCount,
-				"priority", prioCount,
-				"normal", normalCount,
-				"total", sequencerTxCount+prioCount+normalCount)
+				"mempool", committedCount,
+				"total", committedCount)
+		}
+
+		// Give simulations time on the in-flight state after mempool processing.
+		if err := miner.waitForSimulationWindow(interrupt, env.header, nil, simTimeoutCh); err != nil {
+			return err
 		}
 	} else {
 		log.Info("[SSV] Backend doesn't support sequencer ordering, falling back to normal")
@@ -994,6 +1029,39 @@ func (miner *Miner) fillTransactionsWithSequencerOrdering(interrupt *atomic.Int3
 	}
 
 	return nil
+}
+
+func (miner *Miner) waitForSimulationWindow(interrupt *atomic.Int32, header *types.Header, inject func() error, timeout <-chan time.Time) error {
+	if header == nil {
+		return nil
+	}
+	if interrupt != nil {
+		if signal := interrupt.Load(); signal != commitInterruptNone {
+			return signalToErr(signal)
+		}
+	}
+	if inject != nil {
+		if err := inject(); err != nil {
+			return err
+		}
+	}
+	sleep := time.Until(time.Unix(int64(header.Time), 0))
+	if sleep <= 0 {
+		return nil
+	}
+	if timeout == nil {
+		time.Sleep(sleep)
+		return nil
+	}
+	select {
+	case <-timeout:
+		if interrupt != nil {
+			interrupt.Store(commitInterruptTimeout)
+		}
+		return errBlockInterruptedByTimeout
+	case <-time.After(sleep):
+		return nil
+	}
 }
 
 // buildSequencerSimulationEnv returns an isolated environment that can be used to
@@ -1077,6 +1145,98 @@ func (miner *Miner) applySequencerSimulationResults(target, simulated *environme
 		}
 		*target.header.BlobGasUsed = *simulated.header.BlobGasUsed
 	}
+}
+
+// applySimulatedBundle appends a simulated bundle to the block without re-executing.
+// SSV
+func (miner *Miner) applySimulatedBundle(
+	env *environment,
+	txs types.Transactions,
+	receipts []*types.Receipt,
+	sidecars []*types.BlobTxSidecar,
+	stats SimulatedBundleStats,
+) error {
+	if len(txs) == 0 {
+		return nil
+	}
+	if len(receipts) != len(txs) {
+		return fmt.Errorf("simulated bundle receipt mismatch: txs=%d receipts=%d", len(txs), len(receipts))
+	}
+	if stats.BaseTxCount != 0 && stats.BaseTxCount != env.tcount {
+		log.Warn("[SSV] Simulated bundle base tx count mismatch",
+			"expected", stats.BaseTxCount,
+			"current", env.tcount)
+	}
+	if stats.BaseGasUsed != 0 && stats.BaseGasUsed != env.header.GasUsed {
+		log.Warn("[SSV] Simulated bundle base gas mismatch",
+			"expected", stats.BaseGasUsed,
+			"current", env.header.GasUsed)
+	}
+
+	bundleGasUsed := stats.GasUsed
+	if len(receipts) > 0 {
+		if last := receipts[len(receipts)-1].CumulativeGasUsed; last > 0 {
+			bundleGasUsed = last
+		}
+	}
+	bundleBlobGasUsed := stats.BlobGasUsed
+	if bundleBlobGasUsed == 0 {
+		for _, receipt := range receipts {
+			if receipt.BlobGasUsed > 0 {
+				bundleBlobGasUsed += receipt.BlobGasUsed
+			}
+		}
+	}
+	bundleBlobs := stats.Blobs
+	if bundleBlobs == 0 && len(sidecars) > 0 {
+		for _, sc := range sidecars {
+			bundleBlobs += len(sc.Blobs)
+		}
+	}
+	bundleSize := stats.Size
+	if bundleSize == 0 {
+		for _, tx := range txs {
+			bundleSize += tx.Size()
+		}
+	}
+
+	baseGasUsed := env.header.GasUsed
+	for i, receipt := range receipts {
+		receipt.CumulativeGasUsed = baseGasUsed + receipt.CumulativeGasUsed
+		receipt.TransactionIndex = uint(env.tcount + i)
+	}
+
+	env.txs = append(env.txs, txs...)
+	env.receipts = append(env.receipts, receipts...)
+	if len(sidecars) > 0 {
+		env.sidecars = append(env.sidecars, sidecars...)
+	}
+	env.size += bundleSize
+	env.tcount += len(txs)
+	env.blobs += bundleBlobs
+
+	env.header.GasUsed += bundleGasUsed
+	if bundleBlobGasUsed > 0 {
+		if env.header.BlobGasUsed == nil {
+			env.header.BlobGasUsed = new(uint64)
+		}
+		*env.header.BlobGasUsed += bundleBlobGasUsed
+	}
+	if env.gasPool == nil {
+		if env.header.GasUsed >= env.header.GasLimit {
+			env.gasPool = new(core.GasPool)
+		} else {
+			env.gasPool = new(core.GasPool).AddGas(env.header.GasLimit - env.header.GasUsed)
+		}
+	} else if err := env.gasPool.SubGas(bundleGasUsed); err != nil {
+		return err
+	}
+
+	log.Info("[SSV] Applied simulated bundle",
+		"txs", len(txs),
+		"gasUsed", bundleGasUsed,
+		"baseTxCount", stats.BaseTxCount)
+	return nil
 }
 
 // commitAccountBasedTransactions commits transactions while maintaining per-account nonce ordering

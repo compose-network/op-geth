@@ -289,13 +289,18 @@ func (r *Runtime) Stop(ctx context.Context) error {
 
 // SendMailboxMessage sends a CIRC message to the peer indicated by DestinationChain.
 func (r *Runtime) SendMailboxMessage(ctx context.Context, mailboxMessage *sbcpproto.MailboxMessage) error {
-	destKey := strconv.FormatUint(mailboxMessage.DestinationChain, 10)
+	destKey := xconsensus.ChainKeyUint64(mailboxMessage.DestinationChain)
 
-	r.log.Info().Str("dest_key", destKey).Str("xt_id", hex.EncodeToString(mailboxMessage.InstanceId)).Msg("Sending CIRC message to peer")
+	r.log.Info().
+		Uint64("dest_chain", mailboxMessage.DestinationChain).
+		Str("dest_key", destKey).
+		Str("xt_id", hex.EncodeToString(mailboxMessage.InstanceId)).
+		Msg("Sending CIRC message to peer")
 
 	peer, ok := r.Peers[destKey]
 	if !ok || peer == nil {
 		r.log.Error().
+			Uint64("dest_chain", mailboxMessage.DestinationChain).
 			Str("dest_key", destKey).
 			Str("instanceID", hex.EncodeToString(mailboxMessage.InstanceId)).
 			Interface("available_peers", getPeerKeys(r.Peers)).
@@ -308,13 +313,18 @@ func (r *Runtime) SendMailboxMessage(ctx context.Context, mailboxMessage *sbcppr
 	if err := peer.Send(ctx, msg); err != nil {
 		r.log.Error().
 			Err(err).
+			Uint64("dest_chain", mailboxMessage.DestinationChain).
 			Str("dest_key", destKey).
 			Str("instanceID", hex.EncodeToString(mailboxMessage.InstanceId)).
 			Msg("Failed to send CIRC message to peer")
 		return err
 	}
 
-	r.log.Info().Str("dest_key", destKey).Str("xt_id", hex.EncodeToString(mailboxMessage.InstanceId)).Msg("CIRC message sent successfully")
+	r.log.Info().
+		Uint64("dest_chain", mailboxMessage.DestinationChain).
+		Str("dest_key", destKey).
+		Str("xt_id", hex.EncodeToString(mailboxMessage.InstanceId)).
+		Msg("CIRC message sent successfully")
 	return nil
 }
 

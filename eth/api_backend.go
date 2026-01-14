@@ -60,6 +60,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/miner"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 )
@@ -103,6 +104,14 @@ type EthAPIBackend struct {
 	committedTxsMutex sync.RWMutex
 	committedTxHashes map[common.Hash]bool // Hashes of txs that were committed in blocks during this slot
 
+	// SSV: Track current SCP instance and pending simulation bundle
+	scpInstanceMu    sync.Mutex
+	activeInstanceID *compose.InstanceID
+	decidedInstances map[compose.InstanceID]bool
+	pendingSimGuard  *simStateGuard
+	pendingSimState  *state.StateDB
+	pendingSimBundle *simulatedBundle
+
 	// Overrides for testing purposes only
 	// TODO refactor dependency injection with interfaces to avoid these
 	chainConfigOverride         *params.ChainConfig
@@ -112,6 +121,18 @@ type EthAPIBackend struct {
 }
 
 const defaultPutInboxGas = 500000
+
+// TODO read it from composer library
+const SCPExpirationTimeout = 2 * time.Second
+
+type simStateGuard struct {
+	state       *state.StateDB
+	header      *types.Header
+	txCount     int
+	unlockState func(bool)
+	commitState func(*state.StateDB)
+	applyBundle func(types.Transactions, []*types.Receipt, []*types.BlobTxSidecar, miner.SimulatedBundleStats) error
+}
 
 type sequencerTxKind int
 
@@ -124,6 +145,23 @@ type sequencerTxEntry struct {
 	tx   *types.Transaction
 	xtID string // Cross-chain transaction ID this tx belongs to (hex-encoded)
 	kind sequencerTxKind
+}
+
+// simulatedBundle captures a successful SCP simulation for block inclusion.
+// SSV
+type simulatedBundle struct {
+	blockNumber uint64
+	baseTxCount int
+	baseGasUsed uint64
+
+	txs         types.Transactions
+	receipts    []*types.Receipt
+	sidecars    []*types.BlobTxSidecar
+	gasUsed     uint64
+	size        uint64
+	tcount      int
+	blobs       int
+	blobGasUsed uint64
 }
 
 // ChainConfig returns the active chain configuration.
@@ -303,6 +341,26 @@ func (b *EthAPIBackend) BlockByNumberOrHash(
 
 func (b *EthAPIBackend) Pending() (*types.Block, types.Receipts, *state.StateDB) {
 	return b.eth.miner.Pending(context.Background())
+}
+
+func (b *EthAPIBackend) simulationStateGuard(ctx context.Context) (*simStateGuard, error) {
+	if b.eth == nil || b.eth.miner == nil {
+		return nil, errors.New("miner unavailable")
+	}
+
+	guard, err := b.eth.miner.SimulationStateGuard(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return &simStateGuard{
+		state:       guard.State(),
+		header:      guard.Header(),
+		txCount:     guard.TxCount(),
+		unlockState: guard.UnlockState,
+		commitState: guard.SwapState,
+		applyBundle: guard.ApplySimulatedBundle,
+	}, nil
 }
 
 func (b *EthAPIBackend) StateAndHeaderByNumber(
@@ -730,13 +788,49 @@ func (b *EthAPIBackend) handleSequencerMessage(
 // SSV
 func (b *EthAPIBackend) StartCallbackFn() spconsensus.StartFn {
 	return func(ctx context.Context, from string, instance *composeproto.StartInstance) error {
-		err := b.coordinator.PeriodSequencer().OnStartInstance(compose.InstanceID(instance.GetInstanceId()), compose.PeriodID(instance.PeriodId), compose.SequenceNumber(instance.SequenceNumber))
-		if err != nil {
+		var instanceID compose.InstanceID
+		copy(instanceID[:], instance.GetInstanceId())
+		b.setActiveInstanceID(instanceID)
+
+		if err := b.waitForPendingBlock(ctx); err != nil {
+			b.clearActiveInstanceID()
 			return err
 		}
 
-		return b.coordinator.InstanceSequencer().StartInstance(instance)
+		err := b.coordinator.PeriodSequencer().OnStartInstance(
+			instanceID,
+			compose.PeriodID(instance.PeriodId),
+			compose.SequenceNumber(instance.SequenceNumber),
+		)
+		if err != nil {
+			b.clearActiveInstanceID()
+			return err
+		}
+
+		if err := b.coordinator.InstanceSequencer().StartInstance(instance); err != nil {
+			b.clearActiveInstanceID()
+			return err
+		}
+		return nil
 	}
+}
+
+func (b *EthAPIBackend) waitForPendingBlock(ctx context.Context) error {
+	if b.coordinator == nil || b.coordinator.PeriodSequencer() == nil {
+		return errors.New("period sequencer not configured")
+	}
+	if b.eth == nil || b.eth.miner == nil {
+		return errors.New("miner unavailable")
+	}
+
+	_, unlock, err := b.eth.miner.CurrentBuildEnvLocked(ctx)
+	if unlock != nil {
+		unlock()
+	}
+	if err != nil {
+		return fmt.Errorf("timed out waiting for pending block: %w", err)
+	}
+	return nil
 }
 
 func (b *EthAPIBackend) MailboxMsgCallbackFn() spconsensus.MailboxMsgFn {
@@ -759,9 +853,11 @@ func (b *EthAPIBackend) MailboxMsgCallbackFn() spconsensus.MailboxMsgFn {
 
 func (b *EthAPIBackend) DecisionCallbackFn() spconsensus.DecisionFn {
 	return func(ctx context.Context, instanceID *compose.InstanceID, decision bool) error {
+		log.Info("[SSV] Decision callback invoked", "instanceID", instanceID, "decision", decision)
 		if instanceID == nil {
 			return fmt.Errorf("decision callback received nil instance ID")
 		}
+		b.recordInstanceDecision(*instanceID, decision)
 		if b.coordinator == nil || b.coordinator.InstanceSequencer() == nil {
 			return fmt.Errorf("instance sequencer not configured")
 		}
@@ -772,9 +868,19 @@ func (b *EthAPIBackend) DecisionCallbackFn() spconsensus.DecisionFn {
 		}
 
 		if decided {
+			if decision {
+				b.commitPendingSimBundle(*instanceID)
+			} else {
+				b.dropPendingSimBundle(*instanceID)
+			}
+			b.clearActiveInstanceID()
 			return b.coordinator.PeriodSequencer().OnDecidedInstance(*instanceID)
 		}
 
+		if !decision {
+			b.dropPendingSimBundle(*instanceID)
+			b.clearActiveInstanceID()
+		}
 		return nil
 	}
 }
@@ -1203,6 +1309,191 @@ func (b *EthAPIBackend) buildSequencerOnlyList() types.Transactions {
 	return orderedTxs
 }
 
+func (b *EthAPIBackend) setActiveInstanceID(id compose.InstanceID) {
+	b.scpInstanceMu.Lock()
+	b.activeInstanceID = &id
+	b.scpInstanceMu.Unlock()
+}
+
+func (b *EthAPIBackend) clearActiveInstanceID() {
+	b.scpInstanceMu.Lock()
+	b.activeInstanceID = nil
+	b.scpInstanceMu.Unlock()
+}
+
+func (b *EthAPIBackend) getActiveInstanceID() (compose.InstanceID, bool) {
+	b.scpInstanceMu.Lock()
+	defer b.scpInstanceMu.Unlock()
+	if b.activeInstanceID == nil {
+		return compose.InstanceID{}, false
+	}
+	return *b.activeInstanceID, true
+}
+
+func (b *EthAPIBackend) isActiveInstance(id compose.InstanceID) bool {
+	b.scpInstanceMu.Lock()
+	defer b.scpInstanceMu.Unlock()
+	if b.activeInstanceID == nil {
+		return false
+	}
+	return *b.activeInstanceID == id
+}
+
+func (b *EthAPIBackend) recordInstanceDecision(id compose.InstanceID, decision bool) {
+	b.scpInstanceMu.Lock()
+	if b.decidedInstances == nil {
+		b.decidedInstances = make(map[compose.InstanceID]bool)
+	}
+	b.decidedInstances[id] = decision
+	b.scpInstanceMu.Unlock()
+}
+
+func (b *EthAPIBackend) getInstanceDecision(id compose.InstanceID) (bool, bool) {
+	b.scpInstanceMu.Lock()
+	decision, ok := b.decidedInstances[id]
+	b.scpInstanceMu.Unlock()
+	return decision, ok
+}
+
+func (b *EthAPIBackend) clearInstanceDecision(id compose.InstanceID) {
+	b.scpInstanceMu.Lock()
+	delete(b.decidedInstances, id)
+	b.scpInstanceMu.Unlock()
+}
+
+// abortActiveInstanceForBlockClose forces an active SCP instance to abort when a block close
+// is requested before a decision is received.
+func (b *EthAPIBackend) abortActiveInstanceForBlockClose() {
+	if b == nil {
+		return
+	}
+
+	var instanceID compose.InstanceID
+	b.scpInstanceMu.Lock()
+	if b.activeInstanceID == nil {
+		b.scpInstanceMu.Unlock()
+		return
+	}
+	instanceID = *b.activeInstanceID
+	b.scpInstanceMu.Unlock()
+
+	log.Warn("[SSV] Block close requested with active instance; forcing abort",
+		"instanceID", instanceID.String())
+	b.recordInstanceDecision(instanceID, false)
+
+	decided := false
+	if b.coordinator != nil && b.coordinator.InstanceSequencer() != nil {
+		if err, ok := b.coordinator.InstanceSequencer().Decide(instanceID, false); err != nil {
+			log.Error("[SSV] Failed to abort active instance", "instanceID", instanceID.String(), "err", err)
+		} else {
+			decided = ok
+		}
+	}
+
+	b.dropPendingSimBundle(instanceID)
+
+	b.clearActiveInstanceID()
+
+	if decided && b.coordinator != nil && b.coordinator.PeriodSequencer() != nil {
+		if err := b.coordinator.PeriodSequencer().OnDecidedInstance(instanceID); err != nil {
+			log.Error("[SSV] Failed to notify period sequencer of aborted instance",
+				"instanceID", instanceID.String(), "err", err)
+		}
+	}
+}
+
+// stashPendingSimBundle stores the simulation result until a commit decision is received.
+// Returns true if the simulation lock should be kept for a later decision.
+func (b *EthAPIBackend) stashPendingSimBundle(
+	instanceID compose.InstanceID,
+	bundle simulatedBundle,
+	guard *simStateGuard,
+	stateDB *state.StateDB,
+) bool {
+	b.scpInstanceMu.Lock()
+	defer b.scpInstanceMu.Unlock()
+	active := b.activeInstanceID
+	if active == nil || *active != instanceID || guard == nil || guard.commitState == nil || guard.applyBundle == nil || stateDB == nil {
+		return false
+	}
+	if b.pendingSimGuard != nil || b.pendingSimBundle != nil {
+		log.Warn("[SSV] Pending simulation already staged, dropping new result")
+		return false
+	}
+	bundleCopy := bundle
+	b.pendingSimGuard = guard
+	b.pendingSimState = stateDB
+	b.pendingSimBundle = &bundleCopy
+	return true
+}
+
+// commitPendingSimBundle promotes a pending bundle to be included in block production
+// and swaps the simulated state into the live environment.
+func (b *EthAPIBackend) commitPendingSimBundle(instanceID compose.InstanceID) {
+	b.scpInstanceMu.Lock()
+	pending := b.pendingSimBundle
+	active := b.activeInstanceID
+	guard := b.pendingSimGuard
+	stateDB := b.pendingSimState
+	if pending == nil || active == nil || *active != instanceID {
+		b.scpInstanceMu.Unlock()
+		return
+	}
+	bundle := *pending
+	b.pendingSimBundle = nil
+	b.pendingSimGuard = nil
+	b.pendingSimState = nil
+	b.scpInstanceMu.Unlock()
+	b.clearInstanceDecision(instanceID)
+
+	if guard != nil && stateDB != nil && guard.commitState != nil {
+		guard.commitState(stateDB)
+	}
+	if guard != nil && guard.applyBundle != nil {
+		stats := miner.SimulatedBundleStats{
+			BaseTxCount: bundle.baseTxCount,
+			BaseGasUsed: bundle.baseGasUsed,
+			GasUsed:     bundle.gasUsed,
+			Size:        bundle.size,
+			TxCount:     bundle.tcount,
+			Blobs:       bundle.blobs,
+			BlobGasUsed: bundle.blobGasUsed,
+		}
+		if err := guard.applyBundle(bundle.txs, bundle.receipts, bundle.sidecars, stats); err != nil {
+			log.Error("[SSV] Failed to apply simulated bundle", "err", err)
+		}
+	}
+	if guard != nil {
+		guard.unlockState(true)
+	}
+	if miner := b.eth.miner; miner != nil {
+		miner.InvalidatePendingCache()
+	}
+}
+
+// dropPendingSimBundle discards a pending bundle on abort decisions.
+func (b *EthAPIBackend) dropPendingSimBundle(instanceID compose.InstanceID) {
+	b.scpInstanceMu.Lock()
+	active := b.activeInstanceID
+	guard := b.pendingSimGuard
+	if active == nil || *active != instanceID {
+		b.scpInstanceMu.Unlock()
+		return
+	}
+	b.pendingSimBundle = nil
+	b.pendingSimGuard = nil
+	b.pendingSimState = nil
+	b.scpInstanceMu.Unlock()
+	b.clearInstanceDecision(instanceID)
+
+	if guard != nil {
+		guard.unlockState(false)
+	}
+	if miner := b.eth.miner; miner != nil {
+		miner.InvalidatePendingCache()
+	}
+}
+
 // validateSequencerTransaction validates that a sequencer transaction is properly formed
 // SSV
 func (b *EthAPIBackend) validateSequencerTransaction(tx *types.Transaction) error {
@@ -1264,6 +1555,9 @@ func (b *EthAPIBackend) OnBlockBuildingComplete(
 	block *types.Block,
 	success, simulation bool,
 ) error {
+	if !simulation {
+		b.abortActiveInstanceForBlockClose()
+	}
 	return b.coordinator.OnBlockBuildingComplete(ctx, block, success)
 }
 
@@ -1537,6 +1831,68 @@ func (b *EthAPIBackend) SetSequencerCoordinator(coord xsequencer.Coordinator, sp
 	}
 }
 
+// applyMessageForSimulation runs ApplyMessage without finalizing, returning the execution result.
+// SSV
+func (b *EthAPIBackend) applyMessageForSimulation(
+	evm *vm.EVM,
+	gasPool *core.GasPool,
+	stateDB *state.StateDB,
+	header *types.Header,
+	signer types.Signer,
+	tx *types.Transaction,
+) (*core.ExecutionResult, uint64, error) {
+	msg, err := core.TransactionToMessage(tx, signer, header.BaseFee)
+	if err != nil {
+		return nil, 0, err
+	}
+	nonce := tx.Nonce()
+	if msg.IsDepositTx && b.ChainConfig().IsOptimismRegolith(header.Time) {
+		nonce = stateDB.GetNonce(msg.From)
+	}
+	execResult, err := core.ApplyMessage(evm, msg, gasPool)
+	if err != nil {
+		return nil, nonce, err
+	}
+	return execResult, nonce, nil
+}
+
+// finalizeSimulationResult finalizes a successful transaction and returns its receipt.
+// SSV
+func (b *EthAPIBackend) finalizeSimulationResult(
+	evm *vm.EVM,
+	stateDB *state.StateDB,
+	header *types.Header,
+	tx *types.Transaction,
+	result *core.ExecutionResult,
+	usedGas *uint64,
+	nonce uint64,
+) (*types.Receipt, error) {
+	if usedGas == nil {
+		return nil, errors.New("usedGas pointer is nil")
+	}
+	var root []byte
+	if b.ChainConfig().IsByzantium(header.Number) {
+		stateDB.Finalise(true)
+	} else {
+		root = stateDB.IntermediateRoot(b.ChainConfig().IsEIP158(header.Number)).Bytes()
+	}
+	*usedGas += result.UsedGas
+	receipt := core.MakeReceipt(
+		evm,
+		result,
+		stateDB,
+		header.Number,
+		header.Hash(),
+		header.Time,
+		tx,
+		*usedGas,
+		root,
+		b.ChainConfig(),
+		nonce,
+	)
+	return receipt, nil
+}
+
 // simulateSCPBundle performs the mailbox-aware EVM simulation required by the SCP instance
 // sequencer. The simulation proceeds in three phases:
 //  1. Apply all provided mailbox messages by invoking the local mailbox contract's putInbox
@@ -1546,35 +1902,88 @@ func (b *EthAPIBackend) SetSequencerCoordinator(coord xsequencer.Coordinator, sp
 //     Execution stops early if a mailbox read targets this chain without an available message,
 //     returning the header that must be fulfilled before the bundle can succeed.
 //  3. Collect any outbound mailbox writes emitted during successful execution. The simulation
-//     operates on a copy of the state so it never mutates the underlying chain data.
+//     runs against a copy of the pending state while holding the simulation lock; on success
+//     the updated state is staged and only swapped in after a commit decision, otherwise the
+//     lock is released and the pending state remains unchanged.
 func (b *EthAPIBackend) simulateSCPBundle(request instanceproto.SimulationRequest) (*instanceproto.MailboxMessageHeader, []instanceproto.MailboxMessage, error) {
 	if len(request.Transactions) == 0 {
 		return nil, nil, errors.New("no transactions to simulate")
 	}
 
-	ctx := context.Background()
+	instanceID, ok := b.getActiveInstanceID()
+	if !ok {
+		return nil, nil, errors.New("no active SCP instance")
+	}
 
-	// Gets state DB and header of current pending block
-	stateDBBase, header, err := b.StateAndHeaderByNumberOrHash(ctx, rpc.BlockNumberOrHashWithNumber(rpc.PendingBlockNumber))
+	ctx := context.Background()
+	waitCtx, cancelWait := context.WithTimeout(ctx, SCPExpirationTimeout)
+	defer cancelWait()
+
+	guard, err := b.simulationStateGuard(waitCtx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("state lookup failed: %w", err)
 	}
-
-	// Finalize any prior state changes (removing dirty state)
-	stateDBBase.Finalise(true)
+	// Keep the simulation state locked for the full duration of the simulation.
+	// Unlocking is deferred until a commit/abort decision if the simulation succeeds.
+	unlockAfter := true
+	unlockSuccess := false
+	defer func() {
+		if unlockAfter {
+			guard.unlockState(unlockSuccess)
+		}
+	}()
+	// Simulate on a copy of the pending state. On success we swap it in.
+	stateDB := guard.state.Copy()
+	header := types.CopyHeader(guard.header)
+	baseTxCount := guard.txCount
+	baseGasUsed := header.GasUsed
+	if baseGasUsed > header.GasLimit {
+		return nil, nil, fmt.Errorf("pending gas used exceeds limit: %d > %d", baseGasUsed, header.GasLimit)
+	}
+	remainingGas := header.GasLimit - baseGasUsed
+	gasPool := new(core.GasPool).AddGas(remainingGas)
+	bundleUsedGas := uint64(0)
+	txIndex := baseTxCount
+	bundle := simulatedBundle{
+		blockNumber: header.Number.Uint64(),
+		baseTxCount: baseTxCount,
+		baseGasUsed: baseGasUsed,
+	}
+	appendBundleTx := func(tx *types.Transaction, receipt *types.Receipt) error {
+		if tx == nil || receipt == nil {
+			return errors.New("simulated bundle missing tx or receipt")
+		}
+		if tx.Type() == types.BlobTxType {
+			sidecar := tx.BlobTxSidecar()
+			if sidecar == nil {
+				return fmt.Errorf("blob transaction missing sidecar: %s", tx.Hash())
+			}
+			txNoBlob := tx.WithoutBlobTxSidecar()
+			bundle.txs = append(bundle.txs, txNoBlob)
+			bundle.sidecars = append(bundle.sidecars, sidecar)
+			bundle.blobs += len(sidecar.Blobs)
+			bundle.size += txNoBlob.Size()
+			if receipt.BlobGasUsed > 0 {
+				bundle.blobGasUsed += receipt.BlobGasUsed
+			}
+		} else {
+			bundle.txs = append(bundle.txs, tx)
+			bundle.size += tx.Size()
+		}
+		bundle.receipts = append(bundle.receipts, receipt)
+		bundle.tcount++
+		return nil
+	}
 
 	// The simulation request is made with a requirement on the state root it should be executed on top.
 	// If there is a mismatch, abort early.
 	if request.Snapshot != (compose.StateRoot{}) {
 		expected := composeRootToHash(request.Snapshot)
-		current := stateDBBase.IntermediateRoot(false)
+		current := stateDB.IntermediateRoot(false)
 		if current != expected {
 			return nil, nil, fmt.Errorf("state root mismatch: pending=%s expected=%s", current.Hex(), expected.Hex())
 		}
 	}
-
-	// Work on a copy so simulation does not disturb the original state
-	stateDB := stateDBBase.Copy()
 
 	// Retrieve mailbox addresses
 	mailboxAddresses := b.GetMailboxAddresses()
@@ -1593,9 +2002,23 @@ func (b *EthAPIBackend) simulateSCPBundle(request instanceproto.SimulationReques
 	// Run putInbox transactions
 	fulfilled := make(map[string]struct{}, len(request.PutInboxMessages))
 	for _, msg := range request.PutInboxMessages {
-		if err := b.applyPutInboxMessage(blockContext, vmBaseConfig, stateDB, msg); err != nil {
+		putTx, receipt, _, err := b.applyPutInboxMessage(
+			blockContext,
+			vmBaseConfig,
+			stateDB,
+			header,
+			msg,
+			gasPool,
+			&bundleUsedGas,
+			txIndex,
+		)
+		if err != nil {
 			return nil, nil, fmt.Errorf("apply putInbox message: %w", err)
 		}
+		if err := appendBundleTx(putTx, receipt); err != nil {
+			return nil, nil, fmt.Errorf("record putInbox tx: %w", err)
+		}
+		txIndex++
 		fulfilled[mailboxHeaderKey(msg.MailboxMessageHeader)] = struct{}{}
 	}
 
@@ -1618,25 +2041,21 @@ func (b *EthAPIBackend) simulateSCPBundle(request instanceproto.SimulationReques
 			return nil, nil, fmt.Errorf("decode transaction %d: %w", idx, err)
 		}
 
-		txSnapshot := stateDB.Snapshot()
-
 		tracer := native.NewSSVTracer(mailboxAddresses)
 		vmConfig := vmBaseConfig
 		vmConfig.Tracer = tracer.Hooks()
 
 		evm := vm.NewEVM(blockContext, stateDB, b.ChainConfig(), vmConfig)
 
-		msg, err := core.TransactionToMessage(tx, signer, header.BaseFee)
-		if err != nil {
-			stateDB.RevertToSnapshot(txSnapshot)
-			return nil, nil, fmt.Errorf("build message for tx %d: %w", idx, err)
-		}
-
-		stateDB.SetTxContext(tx.Hash(), stateDB.TxIndex()+1)
-		gasPool := new(core.GasPool)
-		gasPool.AddGas(header.GasLimit)
-
-		execResult, execErr := core.ApplyMessage(evm, msg, gasPool)
+		stateDB.SetTxContext(tx.Hash(), txIndex)
+		execResult, nonce, execErr := b.applyMessageForSimulation(
+			evm,
+			gasPool,
+			stateDB,
+			header,
+			signer,
+			tx,
+		)
 		traceResult := tracer.GetTraceResult()
 		if execResult != nil {
 			traceResult.ExecutionResult = execResult
@@ -1646,46 +2065,128 @@ func (b *EthAPIBackend) simulateSCPBundle(request instanceproto.SimulationReques
 
 		missing, writes, analyzeErr := b.analyzeMailboxTrace(processor, traceResult, fulfilled)
 		if analyzeErr != nil {
-			stateDB.RevertToSnapshot(txSnapshot)
 			return nil, nil, fmt.Errorf("analyze tx %d: %w", idx, analyzeErr)
 		}
 
 		if missing != nil {
-			stateDB.RevertToSnapshot(txSnapshot)
 			accumulated := append(append([]instanceproto.MailboxMessage(nil), writeAccumulator...), writes...)
 			return missing, accumulated, nil
 		}
 
 		if execErr != nil {
-			stateDB.RevertToSnapshot(txSnapshot)
+			log.Warn("[SSV] Simulation tx failed",
+				"txIndex", idx,
+				"txHash", tx.Hash().Hex(),
+				"err", execErr,
+			)
 			return nil, nil, fmt.Errorf("transaction %d failed: %w", idx, execErr)
 		}
 		if execResult != nil && execResult.Failed() {
-			stateDB.RevertToSnapshot(txSnapshot)
+			revertData := execResult.Revert()
+			revertReason := ""
+			if len(revertData) > 0 {
+				if unpacked, err := abi.UnpackRevert(revertData); err == nil {
+					revertReason = unpacked
+				}
+			}
+			if revertReason != "" {
+				log.Warn("[SSV] Simulation tx reverted",
+					"txIndex", idx,
+					"txHash", tx.Hash().Hex(),
+					"reason", revertReason,
+					"revertData", hexutil.Bytes(revertData),
+				)
+			} else if len(revertData) > 0 {
+				log.Warn("[SSV] Simulation tx reverted",
+					"txIndex", idx,
+					"txHash", tx.Hash().Hex(),
+					"revertData", hexutil.Bytes(revertData),
+				)
+			} else {
+				log.Warn("[SSV] Simulation tx reverted",
+					"txIndex", idx,
+					"txHash", tx.Hash().Hex(),
+					"err", execResult.Err,
+				)
+			}
 			if err := execResult.Unwrap(); err != nil {
 				return nil, nil, fmt.Errorf("transaction %d reverted: %w", idx, err)
 			}
 			return nil, nil, fmt.Errorf("transaction %d reverted", idx)
 		}
-
-		stateDB.Finalise(true)
+		receipt, err := b.finalizeSimulationResult(evm, stateDB, header, tx, execResult, &bundleUsedGas, nonce)
+		if err != nil {
+			return nil, nil, fmt.Errorf("finalize tx %d: %w", idx, err)
+		}
+		if err := appendBundleTx(tx, receipt); err != nil {
+			return nil, nil, fmt.Errorf("record tx %d: %w", idx, err)
+		}
+		txIndex++
 		writeAccumulator = append(writeAccumulator, writes...)
 	}
 
-	return nil, writeAccumulator, nil
+	bundle.gasUsed = bundleUsedGas
+	if decision, decided := b.getInstanceDecision(instanceID); decided {
+		b.clearInstanceDecision(instanceID)
+		if !decision {
+			return nil, writeAccumulator, fmt.Errorf("instance already decided false")
+		}
+		if guard.commitState != nil {
+			guard.commitState(stateDB)
+		}
+		if guard.applyBundle != nil {
+			stats := miner.SimulatedBundleStats{
+				BaseTxCount: bundle.baseTxCount,
+				BaseGasUsed: bundle.baseGasUsed,
+				GasUsed:     bundle.gasUsed,
+				Size:        bundle.size,
+				TxCount:     bundle.tcount,
+				Blobs:       bundle.blobs,
+				BlobGasUsed: bundle.blobGasUsed,
+			}
+			if err := guard.applyBundle(bundle.txs, bundle.receipts, bundle.sidecars, stats); err != nil {
+				log.Error("[SSV] Failed to apply simulated bundle", "err", err)
+			}
+		}
+		unlockSuccess = true
+		return nil, writeAccumulator, nil
+	}
+
+	if !b.isActiveInstance(instanceID) {
+		return nil, writeAccumulator, fmt.Errorf("instance no longer active")
+	}
+
+	if guard != nil && guard.commitState != nil && guard.applyBundle != nil {
+		if b.stashPendingSimBundle(instanceID, bundle, guard, stateDB) {
+			unlockAfter = false
+			return nil, writeAccumulator, nil
+		}
+		return nil, writeAccumulator, fmt.Errorf("failed to stash simulated bundle")
+	}
+
+	return nil, writeAccumulator, fmt.Errorf("simulation guard unavailable for decision-gated apply")
 }
 
-func (b *EthAPIBackend) applyPutInboxMessage(blockCtx vm.BlockContext, baseVMConfig vm.Config, stateDB *state.StateDB, msg instanceproto.MailboxMessage) error {
+func (b *EthAPIBackend) applyPutInboxMessage(
+	blockCtx vm.BlockContext,
+	baseVMConfig vm.Config,
+	stateDB *state.StateDB,
+	header *types.Header,
+	msg instanceproto.MailboxMessage,
+	gasPool *core.GasPool,
+	usedGas *uint64,
+	txIndex int,
+) (*types.Transaction, *types.Receipt, *core.ExecutionResult, error) {
 	// Get mailbox address from local chain
 	mailboxAddr := b.GetMailboxAddressFromChainID(b.ChainConfig().ChainID.Uint64())
 	if (mailboxAddr == common.Address{}) {
-		return errors.New("mailbox address not configured for local chain")
+		return nil, nil, nil, errors.New("mailbox address not configured for local chain")
 	}
 
 	// Produce call data for putInbox invocation
 	callData, err := buildPutInboxCalldata(msg)
 	if err != nil {
-		return fmt.Errorf("encode putInbox call: %w", err)
+		return nil, nil, nil, fmt.Errorf("encode putInbox call: %w", err)
 	}
 
 	// Prepare EVM to execute putInbox
@@ -1693,14 +2194,19 @@ func (b *EthAPIBackend) applyPutInboxMessage(blockCtx vm.BlockContext, baseVMCon
 	vmConfig.Tracer = nil
 	evm := vm.NewEVM(blockCtx, stateDB, b.ChainConfig(), vmConfig)
 
-	gasPool := new(core.GasPool)
-	gasPool.AddGas(blockCtx.GasLimit)
+	if gasPool == nil {
+		gasPool = new(core.GasPool).AddGas(blockCtx.GasLimit)
+	}
+	if usedGas == nil {
+		localUsedGas := uint64(0)
+		usedGas = &localUsedGas
+	}
 
 	if (b.coordinatorAddr == common.Address{}) {
-		return errors.New("coordinator address not configured")
+		return nil, nil, nil, errors.New("coordinator address not configured")
 	}
 	if b.coordinatorKey == nil {
-		return errors.New("coordinator key not configured")
+		return nil, nil, nil, errors.New("coordinator key not configured")
 	}
 
 	nonce := stateDB.GetNonce(b.coordinatorAddr)
@@ -1719,30 +2225,34 @@ func (b *EthAPIBackend) applyPutInboxMessage(blockCtx vm.BlockContext, baseVMCon
 	tx := types.NewTx(txData)
 	signedTx, err := types.SignTx(tx, types.NewLondonSigner(b.ChainConfig().ChainID), b.coordinatorKey)
 	if err != nil {
-		return fmt.Errorf("sign putInbox tx: %w", err)
+		return nil, nil, nil, fmt.Errorf("sign putInbox tx: %w", err)
 	}
 
 	signer := types.MakeSigner(b.ChainConfig(), blockCtx.BlockNumber, blockCtx.Time)
-	message, err := core.TransactionToMessage(signedTx, signer, blockCtx.BaseFee)
+	stateDB.SetTxContext(signedTx.Hash(), txIndex)
+	execResult, nonce, err := b.applyMessageForSimulation(
+		evm,
+		gasPool,
+		stateDB,
+		header,
+		signer,
+		signedTx,
+	)
 	if err != nil {
-		return fmt.Errorf("convert putInbox tx to message: %w", err)
+		return signedTx, nil, execResult, fmt.Errorf("putInbox execution failed: %w", err)
 	}
-
-	stateDB.SetTxContext(signedTx.Hash(), stateDB.TxIndex()+1)
-
-	result, err := core.ApplyMessage(evm, message, gasPool)
-	if err != nil {
-		return fmt.Errorf("putInbox execution failed: %w", err)
-	}
-	if result != nil && result.Failed() {
-		if reason := result.Revert(); len(reason) > 0 {
-			return fmt.Errorf("putInbox execution reverted: %x", reason)
+	if execResult != nil && execResult.Failed() {
+		if reason := execResult.Revert(); len(reason) > 0 {
+			return signedTx, nil, execResult, fmt.Errorf("putInbox execution reverted: %x", reason)
 		}
-		return fmt.Errorf("putInbox execution reverted: %w", result.Err)
+		return signedTx, nil, execResult, fmt.Errorf("putInbox execution reverted: %w", execResult.Err)
+	}
+	receipt, err := b.finalizeSimulationResult(evm, stateDB, header, signedTx, execResult, usedGas, nonce)
+	if err != nil {
+		return signedTx, nil, execResult, err
 	}
 
-	stateDB.Finalise(true)
-	return nil
+	return signedTx, receipt, execResult, nil
 }
 
 func (b *EthAPIBackend) analyzeMailboxTrace(mp *MailboxProcessor, trace *ssv.SSVTraceResult, fulfilled map[string]struct{}) (*instanceproto.MailboxMessageHeader, []instanceproto.MailboxMessage, error) {

@@ -20,6 +20,7 @@ package miner
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/big"
 	"sync"
@@ -63,6 +64,18 @@ type BackendWithInterop interface {
 	// QueryFailsafe queries the supervisor over RPC for the failsafe status,
 	// caches it in the backend, and returns the status.
 	QueryFailsafe(ctx context.Context) (bool, error)
+}
+
+// SimulatedBundleStats describes a simulated bundle ready for block inclusion.
+// SSV
+type SimulatedBundleStats struct {
+	BaseTxCount int
+	BaseGasUsed uint64
+	GasUsed     uint64
+	Size        uint64
+	TxCount     int
+	Blobs       int
+	BlobGasUsed uint64
 }
 
 // BackendWithSequencerTransactions defines the interface for sequencer transaction handling
@@ -140,8 +153,85 @@ type Miner struct {
 	backend    Backend
 	backendAPI interface{}
 
+	// SSV: expose in-flight state safely for simulation
+	simStateMu sync.Mutex
+	simEnv     *environment
+	simReadyCh chan struct{}
+
 	lifeCtxCancel context.CancelFunc
 	lifeCtx       context.Context
+}
+
+// SimulationStateGuard holds the current in-flight state under lock and allows
+// callers to either keep or restore it before unlocking.
+type SimulationStateGuard struct {
+	state     *state.StateDB
+	header    *types.Header
+	txCount   int
+	unlock    func()
+	restore   func()
+	swapState func(*state.StateDB)
+	apply     func(types.Transactions, []*types.Receipt, []*types.BlobTxSidecar, SimulatedBundleStats) error
+}
+
+func (g *SimulationStateGuard) State() *state.StateDB {
+	if g == nil {
+		return nil
+	}
+	return g.state
+}
+
+func (g *SimulationStateGuard) Header() *types.Header {
+	if g == nil {
+		return nil
+	}
+	return g.header
+}
+
+// TxCount returns the current in-flight transaction count.
+// SSV
+func (g *SimulationStateGuard) TxCount() int {
+	if g == nil {
+		return 0
+	}
+	return g.txCount
+}
+
+// UnlockState releases the guard. If success is false, the state is restored.
+func (g *SimulationStateGuard) UnlockState(success bool) {
+	if g == nil {
+		return
+	}
+	if !success && g.restore != nil {
+		g.restore()
+	}
+	if g.unlock != nil {
+		g.unlock()
+		g.unlock = nil
+	}
+}
+
+// SwapState replaces the in-flight state with the provided state.
+// SSV
+func (g *SimulationStateGuard) SwapState(state *state.StateDB) {
+	if g == nil || g.swapState == nil || state == nil {
+		return
+	}
+	g.swapState(state)
+}
+
+// ApplySimulatedBundle appends a simulated bundle to the in-flight block.
+// SSV
+func (g *SimulationStateGuard) ApplySimulatedBundle(
+	txs types.Transactions,
+	receipts []*types.Receipt,
+	sidecars []*types.BlobTxSidecar,
+	stats SimulatedBundleStats,
+) error {
+	if g == nil || g.apply == nil {
+		return errors.New("simulation guard cannot apply bundle")
+	}
+	return g.apply(txs, receipts, sidecars, stats)
 }
 
 // New creates a new miner with provided config.
@@ -156,6 +246,7 @@ func New(eth Backend, backendAPI interface{}, config Config, engine consensus.En
 		txpool:      eth.TxPool(),
 		chain:       eth.BlockChain(),
 		pending:     &pending{},
+		simReadyCh:  make(chan struct{}),
 		// To interrupt background tasks that may be attached to external processes
 		lifeCtxCancel: cancel,
 		lifeCtx:       ctx,
@@ -333,6 +424,61 @@ func (miner *Miner) getPending(ctx context.Context) *newPayloadResult {
 		miner.pending.update(header.Hash(), ret)
 	}
 	return ret
+}
+
+// CurrentBuildEnvLocked returns the in-flight block-building environment while holding
+// the simulation lock. The caller must invoke the returned unlock function.
+func (miner *Miner) CurrentBuildEnvLocked(ctx context.Context) (*environment, func(), error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	for {
+		miner.simStateMu.Lock()
+		if miner.simEnv != nil && miner.simEnv.state != nil && miner.simEnv.header != nil {
+			return miner.simEnv, func() { miner.simStateMu.Unlock() }, nil
+		}
+		ch := miner.simReadyCh
+		miner.simStateMu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			return nil, func() {}, ctx.Err()
+		case <-ch:
+		}
+	}
+}
+
+// SimulationStateGuard returns a guard for the in-flight state. Call UnlockState(success)
+// when done to either keep or restore the state.
+func (miner *Miner) SimulationStateGuard(ctx context.Context) (*SimulationStateGuard, error) {
+	env, unlock, err := miner.CurrentBuildEnvLocked(ctx)
+	if err != nil {
+		return nil, err
+	}
+	snapshot := env.state.Snapshot()
+	restore := func() {
+		env.state.RevertToSnapshot(snapshot)
+		if env.evm != nil {
+			env.evm.StateDB = env.state
+		}
+	}
+	return &SimulationStateGuard{
+		state:   env.state,
+		header:  env.header,
+		txCount: env.tcount,
+		unlock:  unlock,
+		restore: restore,
+		swapState: func(state *state.StateDB) {
+			env.state = state
+			if env.evm != nil {
+				env.evm.StateDB = state
+			}
+		},
+		apply: func(txs types.Transactions, receipts []*types.Receipt, sidecars []*types.BlobTxSidecar, stats SimulatedBundleStats) error {
+			return miner.applySimulatedBundle(env, txs, receipts, sidecars, stats)
+		},
+	}, nil
 }
 
 func (miner *Miner) createHoloceneEIP1559Params(parent *types.Header, timestamp uint64) []byte {
