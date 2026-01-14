@@ -219,12 +219,8 @@ func (miner *Miner) generateWork(genParam *generateParams, witness bool) *newPay
 		if interrupt == nil {
 			interrupt = new(atomic.Int32)
 		}
-		timer := time.AfterFunc(max(minRecommitInterruptInterval, miner.config.Recommit), func() {
-			interrupt.Store(commitInterruptTimeout)
-		})
 
 		err := miner.fillTransactionsWithSequencerOrdering(interrupt, work)
-		timer.Stop() // don't need timeout interruption any more
 		if errors.Is(err, errBlockInterruptedByTimeout) {
 			log.Warn("Block building is interrupted", "allowance", common.PrettyDuration(miner.config.Recommit))
 		} else if errors.Is(err, errBlockInterruptedByResolve) {
@@ -861,6 +857,14 @@ func (miner *Miner) fillTransactionsWithSequencerOrdering(interrupt *atomic.Int3
 	prio := miner.prio
 	miner.confMu.RUnlock()
 
+	var simTimeoutCh <-chan time.Time
+	if interrupt != nil {
+		timeout := max(minRecommitInterruptInterval, miner.config.Recommit)
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		simTimeoutCh = timer.C
+	}
+
 	miner.simStateMu.Lock()
 	if miner.simEnv == nil {
 		miner.simEnv = env
@@ -1016,7 +1020,7 @@ func (miner *Miner) fillTransactionsWithSequencerOrdering(interrupt *atomic.Int3
 		}
 
 		// Give simulations time on the in-flight state after mempool processing.
-		if err := miner.waitForSimulationWindow(interrupt, env.header, nil); err != nil {
+		if err := miner.waitForSimulationWindow(interrupt, env.header, nil, simTimeoutCh); err != nil {
 			return err
 		}
 	} else {
@@ -1027,31 +1031,36 @@ func (miner *Miner) fillTransactionsWithSequencerOrdering(interrupt *atomic.Int3
 	return nil
 }
 
-func (miner *Miner) waitForSimulationWindow(interrupt *atomic.Int32, header *types.Header, inject func() error) error {
+func (miner *Miner) waitForSimulationWindow(interrupt *atomic.Int32, header *types.Header, inject func() error, timeout <-chan time.Time) error {
 	if header == nil {
 		return nil
 	}
-	deadline := time.Unix(int64(header.Time), 0)
-	for {
-		if interrupt != nil {
-			if signal := interrupt.Load(); signal != commitInterruptNone {
-				return signalToErr(signal)
-			}
+	if interrupt != nil {
+		if signal := interrupt.Load(); signal != commitInterruptNone {
+			return signalToErr(signal)
 		}
-		if inject != nil {
-			if err := inject(); err != nil {
-				return err
-			}
+	}
+	if inject != nil {
+		if err := inject(); err != nil {
+			return err
 		}
-		now := time.Now()
-		if !deadline.After(now) {
-			return nil
-		}
-		sleep := deadline.Sub(now)
-		if sleep > 50*time.Millisecond {
-			sleep = 50 * time.Millisecond
-		}
+	}
+	sleep := time.Until(time.Unix(int64(header.Time), 0))
+	if sleep <= 0 {
+		return nil
+	}
+	if timeout == nil {
 		time.Sleep(sleep)
+		return nil
+	}
+	select {
+	case <-timeout:
+		if interrupt != nil {
+			interrupt.Store(commitInterruptTimeout)
+		}
+		return errBlockInterruptedByTimeout
+	case <-time.After(sleep):
+		return nil
 	}
 }
 
