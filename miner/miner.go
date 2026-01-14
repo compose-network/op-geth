@@ -378,13 +378,9 @@ func (miner *Miner) BuildPayload(args *BuildPayloadArgs, witness bool) (*Payload
 // getPending retrieves the pending block based on the current head block.
 // The result might be nil if pending generation is failed.
 func (miner *Miner) getPending(ctx context.Context) *newPayloadResult {
+	header := miner.chain.CurrentHeader()
 	miner.pendingMu.Lock()
 	defer miner.pendingMu.Unlock()
-	return miner.getPendingLocked(ctx)
-}
-
-func (miner *Miner) getPendingLocked(ctx context.Context) *newPayloadResult {
-	header := miner.chain.CurrentHeader()
 
 	// Check simulation mode - for simulations, never use cache and don't update cache
 	simulation, _ := ctx.Value("simulation").(bool)
