@@ -165,13 +165,13 @@ type Miner struct {
 // SimulationStateGuard holds the current in-flight state under lock and allows
 // callers to either keep or restore it before unlocking.
 type SimulationStateGuard struct {
-	state   *state.StateDB
-	header  *types.Header
-	txCount int
-	unlock  func()
-	restore func()
-	swap    func(*state.StateDB)
-	apply   func(types.Transactions, []*types.Receipt, []*types.BlobTxSidecar, SimulatedBundleStats) error
+	state     *state.StateDB
+	header    *types.Header
+	txCount   int
+	unlock    func()
+	restore   func()
+	swapState func(*state.StateDB)
+	apply     func(types.Transactions, []*types.Receipt, []*types.BlobTxSidecar, SimulatedBundleStats) error
 }
 
 func (g *SimulationStateGuard) State() *state.StateDB {
@@ -214,10 +214,10 @@ func (g *SimulationStateGuard) UnlockState(success bool) {
 // SwapState replaces the in-flight state with the provided state.
 // SSV
 func (g *SimulationStateGuard) SwapState(state *state.StateDB) {
-	if g == nil || g.swap == nil || state == nil {
+	if g == nil || g.swapState == nil || state == nil {
 		return
 	}
-	g.swap(state)
+	g.swapState(state)
 }
 
 // ApplySimulatedBundle appends a simulated bundle to the in-flight block.
@@ -469,7 +469,7 @@ func (miner *Miner) SimulationStateGuard(ctx context.Context) (*SimulationStateG
 		txCount: env.tcount,
 		unlock:  unlock,
 		restore: restore,
-		swap: func(state *state.StateDB) {
+		swapState: func(state *state.StateDB) {
 			env.state = state
 			if env.evm != nil {
 				env.evm.StateDB = state

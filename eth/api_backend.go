@@ -1411,21 +1411,19 @@ func (b *EthAPIBackend) stashPendingSimBundle(
 	stateDB *state.StateDB,
 ) bool {
 	b.scpInstanceMu.Lock()
+	defer b.scpInstanceMu.Unlock()
 	active := b.activeInstanceID
 	if active == nil || *active != instanceID || guard == nil || guard.commitState == nil || guard.applyBundle == nil || stateDB == nil {
-		b.scpInstanceMu.Unlock()
 		return false
 	}
 	if b.pendingSimGuard != nil || b.pendingSimBundle != nil {
 		log.Warn("[SSV] Pending simulation already staged, dropping new result")
-		b.scpInstanceMu.Unlock()
 		return false
 	}
 	bundleCopy := bundle
 	b.pendingSimGuard = guard
 	b.pendingSimState = stateDB
 	b.pendingSimBundle = &bundleCopy
-	b.scpInstanceMu.Unlock()
 	return true
 }
 
@@ -2049,7 +2047,6 @@ func (b *EthAPIBackend) simulateSCPBundle(request instanceproto.SimulationReques
 
 		evm := vm.NewEVM(blockContext, stateDB, b.ChainConfig(), vmConfig)
 
-		txSnapshot := stateDB.Snapshot()
 		stateDB.SetTxContext(tx.Hash(), txIndex)
 		execResult, nonce, execErr := b.applyMessageForSimulation(
 			evm,
@@ -2068,18 +2065,15 @@ func (b *EthAPIBackend) simulateSCPBundle(request instanceproto.SimulationReques
 
 		missing, writes, analyzeErr := b.analyzeMailboxTrace(processor, traceResult, fulfilled)
 		if analyzeErr != nil {
-			stateDB.RevertToSnapshot(txSnapshot)
 			return nil, nil, fmt.Errorf("analyze tx %d: %w", idx, analyzeErr)
 		}
 
 		if missing != nil {
-			stateDB.RevertToSnapshot(txSnapshot)
 			accumulated := append(append([]instanceproto.MailboxMessage(nil), writeAccumulator...), writes...)
 			return missing, accumulated, nil
 		}
 
 		if execErr != nil {
-			stateDB.RevertToSnapshot(txSnapshot)
 			log.Warn("[SSV] Simulation tx failed",
 				"txIndex", idx,
 				"txHash", tx.Hash().Hex(),
@@ -2088,7 +2082,6 @@ func (b *EthAPIBackend) simulateSCPBundle(request instanceproto.SimulationReques
 			return nil, nil, fmt.Errorf("transaction %d failed: %w", idx, execErr)
 		}
 		if execResult != nil && execResult.Failed() {
-			stateDB.RevertToSnapshot(txSnapshot)
 			revertData := execResult.Revert()
 			revertReason := ""
 			if len(revertData) > 0 {
@@ -2123,11 +2116,9 @@ func (b *EthAPIBackend) simulateSCPBundle(request instanceproto.SimulationReques
 		}
 		receipt, err := b.finalizeSimulationResult(evm, stateDB, header, tx, execResult, &bundleUsedGas, nonce)
 		if err != nil {
-			stateDB.RevertToSnapshot(txSnapshot)
 			return nil, nil, fmt.Errorf("finalize tx %d: %w", idx, err)
 		}
 		if err := appendBundleTx(tx, receipt); err != nil {
-			stateDB.RevertToSnapshot(txSnapshot)
 			return nil, nil, fmt.Errorf("record tx %d: %w", idx, err)
 		}
 		txIndex++
@@ -2238,7 +2229,6 @@ func (b *EthAPIBackend) applyPutInboxMessage(
 	}
 
 	signer := types.MakeSigner(b.ChainConfig(), blockCtx.BlockNumber, blockCtx.Time)
-	txSnapshot := stateDB.Snapshot()
 	stateDB.SetTxContext(signedTx.Hash(), txIndex)
 	execResult, nonce, err := b.applyMessageForSimulation(
 		evm,
@@ -2249,11 +2239,9 @@ func (b *EthAPIBackend) applyPutInboxMessage(
 		signedTx,
 	)
 	if err != nil {
-		stateDB.RevertToSnapshot(txSnapshot)
 		return signedTx, nil, execResult, fmt.Errorf("putInbox execution failed: %w", err)
 	}
 	if execResult != nil && execResult.Failed() {
-		stateDB.RevertToSnapshot(txSnapshot)
 		if reason := execResult.Revert(); len(reason) > 0 {
 			return signedTx, nil, execResult, fmt.Errorf("putInbox execution reverted: %x", reason)
 		}
@@ -2261,7 +2249,6 @@ func (b *EthAPIBackend) applyPutInboxMessage(
 	}
 	receipt, err := b.finalizeSimulationResult(evm, stateDB, header, signedTx, execResult, usedGas, nonce)
 	if err != nil {
-		stateDB.RevertToSnapshot(txSnapshot)
 		return signedTx, nil, execResult, err
 	}
 
