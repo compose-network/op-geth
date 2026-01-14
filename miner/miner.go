@@ -430,23 +430,6 @@ func (miner *Miner) getPendingLocked(ctx context.Context) *newPayloadResult {
 	return ret
 }
 
-// PendingStateAndHeaderLocked returns the current pending state and header while
-// holding the pending lock. The caller must invoke the returned unlock function.
-func (miner *Miner) PendingStateAndHeaderLocked(ctx context.Context) (*state.StateDB, *types.Header, func(), error) {
-	miner.pendingMu.Lock()
-	unlock := func() {
-		miner.pendingMu.Unlock()
-	}
-
-	pending := miner.getPendingLocked(ctx)
-	if pending == nil || pending.stateDB == nil || pending.block == nil {
-		unlock()
-		return nil, nil, func() {}, errors.New("pending state unavailable")
-	}
-
-	return pending.stateDB, pending.block.Header(), unlock, nil
-}
-
 // CurrentBuildEnvLocked returns the in-flight block-building environment while holding
 // the simulation lock. The caller must invoke the returned unlock function.
 func (miner *Miner) CurrentBuildEnvLocked(ctx context.Context) (*environment, func(), error) {

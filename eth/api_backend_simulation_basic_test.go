@@ -302,8 +302,8 @@ func TestApplyPutInboxMessage(t *testing.T) {
 	stateCopy := stateFactory()
 	blockCtx := core.NewEVMBlockContext(header, chainCtx, nil, backend.ChainConfig(), stateCopy)
 	vmCfg := vm.Config{}
-
-	if err := backend.applyPutInboxMessage(blockCtx, vmCfg, stateCopy, msg); err != nil {
+	usedGas := uint64(0)
+	if _, _, _, err := backend.applyPutInboxMessage(blockCtx, vmCfg, stateCopy, header, msg, nil, &usedGas, 0); err != nil {
 		t.Fatalf("applyPutInboxMessage returned error: %v", err)
 	}
 	// Confirm nonce has been updated
